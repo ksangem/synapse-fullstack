@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Environment (contains secrets)
+.env
+packages/backend/.env
+packages/frontend/.env
+
+# Build output
+dist/
+build/
+.next/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Docker volumes
+synapse_pgdata/
+
+# Claude internal
+.claude/
+CLAUDE.md
+CLAUDE_v2_1.md

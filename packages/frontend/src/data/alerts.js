@@ -1,0 +1,9 @@
+export const alerts = [
+  { severity: 'critical', icon: '\u26D4', title: 'SAP ERP Connector - Authentication Failure', adapter: 'SAP Data Warehouse Sync', time: '12 min ago', resolved: false, msg: 'OAuth2 refresh token expired. 23 messages queued.', stack: 'Error: OAuth2TokenExpiredError\n  at SAPConnector.authenticate\n  HTTP 401 Unauthorized' },
+  { severity: 'warning', icon: '\u26A0', title: 'Dynamics 365 API Rate Limit at 85%', adapter: 'CRM Data Export', time: '34 min ago', resolved: false, msg: 'Approaching Dynamics 365 API call limit for current 24h window.', stack: 'Warning: RateLimitApproaching\n  Current: 85% of 10,000 daily limit' },
+  { severity: 'warning', icon: '\u26A0', title: 'Excel Credential Expiring', adapter: 'Ad Spend Report Export', time: '1 hr ago', resolved: false, msg: 'IAM access key expires in 3 days. Rotation required.', stack: 'Warning: CredentialExpirySoon\n  Expiry: 2026-04-05' },
+  { severity: 'info', icon: '\u2139', title: 'Jira-to-SharePoint migration completed', adapter: 'Project Task Sync', time: '2 hrs ago', resolved: true, msg: 'Batch migration of 4,200 issues completed successfully.', stack: '' },
+  { severity: 'info', icon: '\u2139', title: 'New connector published: TARA Recruitment Platform', adapter: 'Connector Studio', time: '4 hrs ago', resolved: true, msg: 'Marcus Chen published TARA Recruitment connector v1.1.0 for candidate pipeline sync.', stack: '' },
+  { severity: 'warning', icon: '\u26A0', title: 'PostgreSQL connection pool at 90%', adapter: 'Search Index Pipeline', time: '5 hrs ago', resolved: true, msg: 'Connection pool nearing maximum. Consider scaling.', stack: 'Warning: ConnectionPoolHigh\n  Active: 45/50 connections' },
+  { severity: 'info', icon: '\u2139', title: 'Scheduled maintenance window approaching', adapter: 'Platform', time: '6 hrs ago', resolved: true, msg: 'System maintenance scheduled for 2026-04-03 02:00-04:00 UTC.', stack: '' },
+];

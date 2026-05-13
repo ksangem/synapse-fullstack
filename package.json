@@ -1,0 +1,16 @@
+{
+  "name": "synapse-fullstack",
+  "version": "2.4.1",
+  "private": true,
+  "description": "Synapse Integration Platform - React Frontend + Express Backend",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:frontend": "cd packages/frontend && npm run dev",
+    "dev:backend": "cd packages/backend && npm run dev",
+    "build:frontend": "cd packages/frontend && npm run build",
+    "install:all": "cd packages/frontend && npm install && cd ../backend && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

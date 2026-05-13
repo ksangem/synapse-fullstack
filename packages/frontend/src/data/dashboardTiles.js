@@ -1,0 +1,17 @@
+export const dashboardTiles = [
+  { name: 'CRM Data Export', src: 'Dynamics 365', dest: 'Excel', status: 'green', srcIcon: '\uD83C\uDFE2', destIcon: '\uD83D\uDCCA', msgs: 342, lastRun: '2 min ago', meta: 'Last run: 2 min ago | 342 msgs' },
+  { name: 'Project Task Sync', src: 'Jira', dest: 'SharePoint', status: 'green', srcIcon: '\uD83D\uDCCB', destIcon: '\uD83D\uDCC1', msgs: 89, lastRun: '5 min ago', meta: 'Last run: 5 min ago | 89 msgs' },
+  { name: 'SAP Data Warehouse Sync', src: 'SAP ERP', dest: 'TFS', status: 'red', srcIcon: '\uD83D\uDCCA', destIcon: '\u2699', msgs: 0, lastRun: '42 min ago', meta: 'Auth failure | 23 queued', metaError: true },
+  { name: 'Recruitment Pipeline Sync', src: 'TARA', dest: 'Dynamics 365', status: 'green', srcIcon: '\uD83D\uDCDD', destIcon: '\uD83C\uDFE2', msgs: 156, lastRun: '8 min ago', meta: 'Last run: 8 min ago | 156 msgs' },
+  { name: 'eCommerce Order Sync', src: 'Shopify', dest: 'NetSuite', status: 'green', srcIcon: '\uD83D\uDED2', destIcon: '', msgs: 1204, lastRun: '3 min ago', meta: 'Last run: 3 min ago | 1,204 msgs' },
+  { name: 'DevOps Notification Relay', src: 'GitHub', dest: 'Slack', status: 'green', srcIcon: '\uD83D\uDCAC', destIcon: '', msgs: 47, lastRun: '1 min ago', meta: 'Last run: 1 min ago | 47 msgs' },
+  { name: 'Identity Federation Sync', src: 'Azure AD', dest: 'Okta', status: 'green', srcIcon: '\uD83D\uDC64', destIcon: '', msgs: 28, lastRun: '15 min ago', meta: 'Last run: 15 min ago | 28 msgs' },
+  { name: 'Ad Spend Report Export', src: 'Google Adwords', dest: 'Excel', status: 'amber', srcIcon: '\uD83D\uDCE2', destIcon: '\uD83D\uDCCA', msgs: 0, lastRun: '2 hrs ago', meta: 'Paused | Cred expiring', metaError: true },
+  { name: 'ITSM Ticket Bridge', src: 'Zendesk', dest: 'ServiceNow', status: 'green', srcIcon: '\uD83C\uDFAB', destIcon: '', msgs: 63, lastRun: '7 min ago', meta: 'Last run: 7 min ago | 63 msgs' },
+  { name: 'Leave Balance Sync', src: 'Keka', dest: 'Holiday Tracker', status: 'green', srcIcon: '\uD83D\uDC65', destIcon: '\uD83D\uDCC5', msgs: 412, lastRun: '30 min ago', meta: 'Last run: 30 min ago | 412 msgs' },
+  { name: 'Comms Analytics Pipeline', src: 'Twilio', dest: 'Segment', status: 'green', srcIcon: '\uD83D\uDCF1', destIcon: '', msgs: 891, lastRun: '4 min ago', meta: 'Last run: 4 min ago | 891 msgs' },
+  { name: 'Search Index Pipeline', src: 'PostgreSQL', dest: 'GSC', status: 'green', srcIcon: '\uD83D\uDDC3', destIcon: '\uD83D\uDD0D', msgs: 2340, lastRun: '10 min ago', meta: 'Last run: 10 min ago | 2,340 msgs' },
+  { name: 'SEO Performance Pipeline', src: 'Ahrefs', dest: 'GSC', status: 'amber', srcIcon: '\uD83D\uDD17', destIcon: '\uD83D\uDD0D', msgs: 0, lastRun: '', meta: 'Paused | Maintenance', metaError: true },
+  { name: 'Marketing Lead Sync', src: 'Mailchimp', dest: 'Dynamics 365', status: 'green', srcIcon: '\u2709', destIcon: '', msgs: 178, lastRun: '20 min ago', meta: 'Last run: 20 min ago | 178 msgs' },
+  { name: 'TFS Build Pipeline Sync', src: 'TFS', dest: 'Excel', status: 'green', srcIcon: '\u2699', destIcon: '\uD83D\uDCCA', msgs: 5670, lastRun: '1 min ago', meta: 'Last run: 1 min ago | 5,670 msgs' },
+];

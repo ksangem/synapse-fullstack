@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en" class="light-theme">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Synapse - Integration Platform</title>
+<link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<!-- CRITICAL ALERT BANNER -->
+<div class="critical-banner" id="criticalBanner">
+  <span class="pulse-dot"></span>
+  <strong>CRITICAL:</strong> SAP ERP Connector authentication failure - 23 messages queued.
+  <span style="margin-left:auto;display:flex;gap:8px">
+    <button class="btn btn-sm btn-danger" onclick="navigateTo('alerts')">View Alerts</button>
+    <button class="btn btn-sm btn-ghost" onclick="document.getElementById('criticalBanner').style.display='none'">Dismiss</button>
+  </span>
+</div>
+
+<!-- TOPBAR -->
+<div class="topbar">
+  <div class="topbar-brand">
+    <svg viewBox="0 0 32 32" fill="none">
+      <circle cx="6" cy="6" r="4" fill="#6366f1"/>
+      <circle cx="26" cy="6" r="4" fill="#818cf8"/>
+      <circle cx="16" cy="16" r="5" fill="#6366f1"/>
+      <circle cx="6" cy="26" r="4" fill="#818cf8"/>
+      <circle cx="26" cy="26" r="4" fill="#6366f1"/>
+      <line x1="9" y1="8" x2="12" y2="13" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round" opacity=".7"/>
+      <line x1="23" y1="8" x2="20" y2="13" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round" opacity=".7"/>
+      <line x1="9" y1="24" x2="12" y2="19" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round" opacity=".7"/>
+      <line x1="23" y1="24" x2="20" y2="19" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round" opacity=".7"/>
+      <circle cx="11" cy="11" r="1.5" fill="#a5b4fc" opacity=".8"/>
+      <circle cx="21" cy="11" r="1.5" fill="#a5b4fc" opacity=".8"/>
+      <circle cx="11" cy="21" r="1.5" fill="#a5b4fc" opacity=".8"/>
+      <circle cx="21" cy="21" r="1.5" fill="#a5b4fc" opacity=".8"/>
+    </svg>
+    Synapse
+    <span style="font-size:.65rem;font-weight:400;color:var(--text-dim);background:var(--primary-dim);padding:2px 6px;border-radius:3px">v2.4.1</span>
+  </div>
+  <div class="topbar-center">
+    <div class="universal-search" id="universalSearch">
+      <span class="search-icon-u">&#128269;</span>
+      <input type="text" placeholder="Search connectors, adapters, entities, help..." id="universalSearchInput" oninput="handleUniversalSearch(this.value)" onfocus="if(this.value.length>0)document.getElementById('searchDropdown').classList.add('show')" />
+      <div class="search-results-dropdown" id="searchDropdown"></div>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark theme" id="themeToggleBtn">&#9788;</button>
+    <button class="icon-btn" onclick="toggleNotifications()" title="Notifications">
+      <span>&#128276;</span>
+      <span class="badge-count" id="alertBadgeCount" onclick="event.stopPropagation();navigateTo('alerts')" style="cursor:pointer">3</span>
+    </button>
+    <button class="icon-btn" onclick="toggleHelp()" title="Help">
+      <span>?</span>
+    </button>
+    <div class="user-menu">
+      <div class="user-avatar">AK</div>
+      <span class="user-name">Anita Kumar</span>
+      <span style="color:var(--text-dim);font-size:.7rem">&#9660;</span>
+    </div>
+  </div>
+</div>
+
+<!-- CONTEXTUAL TOOLBAR -->
+<div class="toolbar" id="contextToolbar">
+  <div class="toolbar-left" id="toolbarLeft">
+    <!-- Populated per-screen -->
+  </div>
+  <div class="toolbar-right" id="toolbarRight">
+    <button class="toolbar-btn" onclick="location.reload()" title="Refresh"><span class="tb-icon">&#128260;</span> Refresh</button>
+    <button class="toolbar-btn" onclick="showToast('Cloned to clipboard')" title="Clone"><span class="tb-icon">&#128203;</span> Clone</button>
+    <button class="toolbar-btn" onclick="showToast('Export started...')" title="Export CSV"><span class="tb-icon">&#128228;</span> Export</button>
+    <button class="toolbar-btn" onclick="toggleFullscreen()" title="Fullscreen"><span class="tb-icon">&#9974;</span></button>
+  </div>
+</div>
+
+<!-- NOTIFICATION DROPDOWN -->
+<div class="notification-dropdown" id="notifDropdown">
+  <div class="notif-header">Notifications <span class="badge badge-error">3 unresolved</span></div>
+  <div class="notif-item critical" onclick="navigateTo('alerts')">
+    <div class="notif-title">&#9888; SAP ERP Connector - Auth Failure</div>
+    <div class="notif-meta">Adapter: SAP Data Warehouse Sync | 12 min ago | <span class="badge badge-error" style="font-size:.65rem">Critical</span></div>
+  </div>
+  <div class="notif-item warning">
+    <div class="notif-title">&#9888; Dynamics 365 API Rate Limit at 85%</div>
+    <div class="notif-meta">Adapter: CRM-to-SEO Pipeline | 34 min ago | <span class="badge badge-warning" style="font-size:.65rem">Warning</span></div>
+  </div>
+  <div class="notif-item warning">
+    <div class="notif-title">&#9888; Excel Credential Expiring in 3 days</div>
+    <div class="notif-meta">Credential Vault | 1 hr ago | <span class="badge badge-warning" style="font-size:.65rem">Warning</span></div>
+  </div>
+  <div class="notif-item" style="border-left:3px solid var(--success)">
+    <div class="notif-title">&#10003; Jira-to-SharePoint migration completed</div>
+    <div class="notif-meta">Adapter: Project Task Sync | 2 hrs ago | <span class="badge badge-success" style="font-size:.65rem">Resolved</span></div>
+  </div>
+  <div class="notif-item" style="border-left:3px solid var(--info)">
+    <div class="notif-title">&#8505; New connector published: TARA Recruitment Platform</div>
+    <div class="notif-meta">Connector Studio | 4 hrs ago | <span class="badge badge-info" style="font-size:.65rem">Info</span></div>
+  </div>
+</div>
+
+<!-- HELP PANEL -->
+<div class="help-panel" id="helpPanel">
+  <div class="help-panel-header">
+    <span style="font-weight:700;font-size:1rem">Help Center</span>
+    <button class="btn-ghost" onclick="toggleHelp()" style="font-size:1.2rem">&times;</button>
+  </div>
+  <div class="help-tabs">
+    <button class="help-tab-btn active" onclick="switchHelpTab('articles',this)">Articles</button>
+    <button class="help-tab-btn" onclick="switchHelpTab('ai',this)">AI Assistant</button>
+  </div>
+  <!-- Articles Tab -->
+  <div id="helpTabArticles" class="help-panel-body">
+    <div style="padding:0 0 12px"><input type="text" placeholder="Search help articles..." style="width:100%"></div>
+    <div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin-bottom:8px;font-weight:600">Getting Started</div>
+    <div class="help-article"><div class="help-title">Creating Your First Connector</div><div class="help-desc">Learn how to create and configure a new connector template in the Connector Studio.</div></div>
+    <div class="help-article"><div class="help-title">Building an Integration</div><div class="help-desc">Step-by-step guide to connecting two systems using the Connection Wizard.</div></div>
+    <div class="help-article"><div class="help-title">Understanding the Mapping Canvas</div><div class="help-desc">How to use visual field mapping with AI auto-map suggestions.</div></div>
+    <div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin:16px 0 8px;font-weight:600">Administration</div>
+    <div class="help-article"><div class="help-title">Managing Credentials</div><div class="help-desc">Securely store and rotate API keys, OAuth tokens, and database credentials.</div></div>
+    <div class="help-article"><div class="help-title">User Roles & Permissions</div><div class="help-desc">Configure role-based access for Designer, Operator, Admin, and Viewer personas.</div></div>
+    <div class="help-article"><div class="help-title">Monitoring & Alerting</div><div class="help-desc">Set up alert rules, notification channels, and escalation policies.</div></div>
+    <div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim);margin:16px 0 8px;font-weight:600">Troubleshooting</div>
+    <div class="help-article"><div class="help-title">Common Error Codes</div><div class="help-desc">Reference guide for Synapse error codes and resolution steps.</div></div>
+    <div class="help-article"><div class="help-title">Performance Tuning</div><div class="help-desc">Optimize adapter throughput, batch sizes, and retry policies.</div></div>
+  </div>
+  <!-- AI Assistant Tab -->
+  <div id="helpTabAI" style="display:none;flex:1;flex-direction:column;height:calc(100% - 90px)">
+    <div class="ai-chat-container">
+      <div class="ai-chat-messages" id="aiChatMessages">
+        <div class="ai-chat-msg bot">
+          <div style="width:28px;height:28px;border-radius:50%;background:var(--primary);display:flex;align-items:center;justify-content:center;color:#fff;font-size:.7rem;font-weight:700;flex-shrink:0">S</div>
+          <div class="ai-msg-bubble">
+            Hi! I'm your Synapse AI assistant. Ask me anything about connectors, mappings, or troubleshooting.
+            <div style="margin-top:10px">
+              <span class="ai-chip" onclick="askAI('How do I fix an OAuth token expiry?')">How do I fix an OAuth token expiry?</span>
+              <span class="ai-chip" onclick="askAI('Explain AI auto-mapping')">Explain AI auto-mapping</span>
+              <span class="ai-chip" onclick="askAI('How to set up retry policies?')">How to set up retry policies?</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="ai-chat-input-area">
+        <input type="text" id="aiChatInput" placeholder="Ask Synapse AI..." onkeydown="if(event.key==='Enter')sendAIChat()"/>
+        <button class="btn btn-primary btn-sm" onclick="sendAIChat()">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="app-body">
+<!-- SIDEBAR -->
+<div class="sidebar" id="sidebar">
+  <div class="sidebar-toggle" onclick="toggleSidebar()">
+    <span>&#9776;</span> <span class="nav-label" style="font-size:.8rem">Menu</span>
+  </div>
+  <div class="sidebar-nav">
+    <div class="nav-section"><span>Operations</span></div>
+    <div class="nav-item active" data-page="dashboard" onclick="navigateTo('dashboard')">
+      <span class="nav-icon">&#9673;</span><span class="nav-label">Health Dashboard</span>
+    </div>
+    <div class="nav-item" data-page="registry" onclick="navigateTo('registry')">
+      <span class="nav-icon">&#9881;</span><span class="nav-label">Integration Registry</span>
+    </div>
+    <div class="nav-item" data-page="monitor" onclick="navigateTo('monitor')">
+      <span class="nav-icon">&#8644;</span><span class="nav-label">Message Monitor</span>
+    </div>
+    <div class="nav-item" data-page="alerts" onclick="navigateTo('alerts')">
+      <span class="nav-icon">&#9888;</span><span class="nav-label">Alerts</span>
+    </div>
+    <div class="nav-section"><span>Design</span></div>
+    <div class="nav-item" data-page="studio" onclick="navigateTo('studio')">
+      <span class="nav-icon">&#9998;</span><span class="nav-label">Connector Studio</span>
+    </div>
+    <div class="nav-item" data-page="wizard" onclick="navigateTo('wizard')">
+      <span class="nav-icon">&#10697;</span><span class="nav-label">Connection Wizard</span>
+    </div>
+    <div class="nav-item" data-page="canvas" onclick="navigateTo('canvas')">
+      <span class="nav-icon">&#8621;</span><span class="nav-label">Mapping Canvas</span>
+    </div>
+    <div class="nav-item" data-page="catalog" onclick="navigateTo('catalog')">
+      <span class="nav-icon">&#9871;</span><span class="nav-label">Entity Catalog</span>
+    </div>
+    <div class="nav-section"><span>Platform</span></div>
+    <div class="nav-item" data-page="vault" onclick="navigateTo('vault')">
+      <span class="nav-icon">&#128274;</span><span class="nav-label">Credential Vault</span>
+    </div>
+    <div class="nav-item" data-page="admin" onclick="navigateTo('admin')">
+      <span class="nav-icon">&#128101;</span><span class="nav-label">Administration</span>
+    </div>
+  </div>
+  <!-- Branding -->
+  <div class="sidebar-branding" style="flex-direction:column;align-items:flex-start;gap:6px">
+    <div style="display:flex;align-items:center;gap:6px;opacity:.6">
+      <div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#6366f1,#a78bfa);display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:800;color:#fff;flex-shrink:0">N</div>
+      <span style="font-size:.8rem;font-weight:600;color:var(--sidebar-text-dim)">Nalashaa</span>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN CONTENT WRAPPER with DETAIL PANE -->
+<div class="main-content-wrapper">
+<div class="main-content" id="mainContent">
+
+<!-- ==================== PAGE: DASHBOARD ==================== -->
+<div class="page active" id="page-dashboard">
+  <div class="page-header">
+    <div><div class="page-title">Health Dashboard</div><div class="page-subtitle">Real-time platform overview</div></div>
+    <div class="flex gap-8">
+      <select style="padding:4px 8px;font-size:.8rem"><option>Last 24 hours</option><option>Last 7 days</option><option>Last 30 days</option></select>
+    </div>
+  </div>
+
+  <!-- KPI Row -->
+  <div class="grid-4 mb-20">
+    <div class="card kpi-card">
+      <div class="kpi-icon">&#9881;</div>
+      <div class="kpi-value" onclick="navigateTo('registry')">15</div>
+      <div class="kpi-label">Total Adapters</div>
+      <div class="kpi-sub">
+        <span onclick="navigateTo('registry')"><span class="status-dot green"></span> 12 active</span>
+        <span onclick="navigateTo('registry')"><span class="status-dot amber"></span> 2 paused</span>
+        <span onclick="navigateTo('registry')"><span class="status-dot red"></span> 1 error</span>
+      </div>
+    </div>
+    <div class="card kpi-card">
+      <div class="kpi-icon">&#9993;</div>
+      <div class="kpi-value" onclick="navigateTo('monitor')">5,561</div>
+      <div class="kpi-label">Messages Today</div>
+      <div class="kpi-sub">
+        <span onclick="navigateTo('monitor')" style="color:var(--success)">&#9650; 2,847 sent</span>
+        <span onclick="navigateTo('monitor')" style="color:var(--info)">&#9660; 2,691 received</span>
+        <span onclick="navigateTo('monitor')" style="color:var(--error)">&#9888; 23 failed</span>
+      </div>
+    </div>
+    <div class="card kpi-card">
+      <div class="kpi-icon">&#9201;</div>
+      <div class="kpi-value">99.7%</div>
+      <div class="kpi-label">System Uptime</div>
+      <div class="kpi-sub"><span style="color:var(--success)">&#9650; 0.2% vs last month</span></div>
+    </div>
+    <div class="card kpi-card">
+      <div class="kpi-icon">&#9888;</div>
+      <div class="kpi-value" style="color:var(--warning)" onclick="navigateTo('alerts')">3</div>
+      <div class="kpi-label">Active Alerts</div>
+      <div class="kpi-sub">
+        <span onclick="navigateTo('alerts')" style="color:var(--error)">1 critical</span>
+        <span onclick="navigateTo('alerts')" style="color:var(--warning)">2 warnings</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Adapter Health Grid -->
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div style="font-weight:700;font-size:.95rem">Adapter Health</div>
+    <a class="clickable" style="font-size:.78rem" onclick="navigateTo('registry')">View All &#8594;</a>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px" class="mb-20" id="dashboardTiles">
+    <div class="card adapter-tile" onclick="showAdapterDetail('CRM Data Export','Dynamics 365','Excel','green',342)"><div class="tile-header"><div class="tile-name">CRM Data Export</div><span class="status-dot green" onclick="event.stopPropagation();showAdapterDetail('CRM Data Export','Dynamics 365','Excel','green',342)"></span></div><div class="tile-route">&#127970; Dynamics 365 &rarr; &#128202; Excel</div><div class="tile-meta">Last run: 2 min ago | 342 msgs</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('Project Task Sync','Jira','SharePoint','green',89)"><div class="tile-header"><div class="tile-name">Project Task Sync</div><span class="status-dot green" onclick="event.stopPropagation();showAdapterDetail('Project Task Sync','Jira','SharePoint','green',89)"></span></div><div class="tile-route">&#128203; Jira &rarr; &#128193; SharePoint</div><div class="tile-meta">Last run: 5 min ago | 89 msgs</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('SAP Data Warehouse Sync','SAP ERP','TFS','red',0)"><div class="tile-header"><div class="tile-name">SAP Data Warehouse Sync</div><span class="status-dot red" onclick="event.stopPropagation();showAdapterDetail('SAP Data Warehouse Sync','SAP ERP','TFS','red',0)"></span></div><div class="tile-route">&#128202; SAP ERP &rarr; &#9881; TFS</div><div class="tile-meta" style="color:var(--error)">Auth failure | 23 queued</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('Recruitment Pipeline Sync','TARA','Dynamics 365','green',156)"><div class="tile-header"><div class="tile-name">Recruitment Pipeline Sync</div><span class="status-dot green"></span></div><div class="tile-route">&#128221; TARA &rarr; &#127970; Dynamics 365</div><div class="tile-meta">Last run: 8 min ago | 156 msgs</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('eCommerce Order Sync','Shopify','NetSuite','green',1204)"><div class="tile-header"><div class="tile-name">eCommerce Order Sync</div><span class="status-dot green"></span></div><div class="tile-route">&#128722; Shopify &rarr; NetSuite</div><div class="tile-meta">Last run: 3 min ago | 1,204 msgs</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('DevOps Notification Relay','GitHub','Slack','green',47)"><div class="tile-header"><div class="tile-name">DevOps Notification Relay</div><span class="status-dot green"></span></div><div class="tile-route">&#128172; GitHub &rarr; Slack</div><div class="tile-meta">Last run: 1 min ago | 47 msgs</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('Identity Federation Sync','Azure AD','Okta','green',28)"><div class="tile-header"><div class="tile-name">Identity Federation Sync</div><span class="status-dot green"></span></div><div class="tile-route">&#128100; Azure AD &rarr; Okta</div><div class="tile-meta">Last run: 15 min ago | 28 msgs</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('Ad Spend Report Export','Google Adwords','Excel','amber',0)"><div class="tile-header"><div class="tile-name">Ad Spend Report Export</div><span class="status-dot amber"></span></div><div class="tile-route">&#128226; Google Adwords &rarr; &#128202; Excel</div><div class="tile-meta" style="color:var(--warning)">Paused | Cred expiring</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('ITSM Ticket Bridge','Zendesk','ServiceNow','green',63)"><div class="tile-header"><div class="tile-name">ITSM Ticket Bridge</div><span class="status-dot green"></span></div><div class="tile-route">&#127915; Zendesk &rarr; ServiceNow</div><div class="tile-meta">Last run: 7 min ago | 63 msgs</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('Leave Balance Sync','Keka','Holiday Tracker','green',412)"><div class="tile-header"><div class="tile-name">Leave Balance Sync</div><span class="status-dot green"></span></div><div class="tile-route">&#128101; Keka &rarr; &#128197; Holiday Tracker</div><div class="tile-meta">Last run: 30 min ago | 412 msgs</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('Comms Analytics Pipeline','Twilio','Segment','green',891)"><div class="tile-header"><div class="tile-name">Comms Analytics Pipeline</div><span class="status-dot green"></span></div><div class="tile-route">&#128241; Twilio &rarr; Segment</div><div class="tile-meta">Last run: 4 min ago | 891 msgs</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('Search Index Pipeline','PostgreSQL','GSC','green',2340)"><div class="tile-header"><div class="tile-name">Search Index Pipeline</div><span class="status-dot green"></span></div><div class="tile-route">&#128451; PostgreSQL &rarr; &#128269; GSC</div><div class="tile-meta">Last run: 10 min ago | 2,340 msgs</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('SEO Performance Pipeline','Ahrefs','GSC','amber',0)"><div class="tile-header"><div class="tile-name">SEO Performance Pipeline</div><span class="status-dot amber"></span></div><div class="tile-route">&#128279; Ahrefs &rarr; &#128269; GSC</div><div class="tile-meta" style="color:var(--warning)">Paused | Maintenance</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('Marketing Lead Sync','Mailchimp','Dynamics 365','green',178)"><div class="tile-header"><div class="tile-name">Marketing Lead Sync</div><span class="status-dot green"></span></div><div class="tile-route">&#9993; Mailchimp &rarr; Dynamics 365</div><div class="tile-meta">Last run: 20 min ago | 178 msgs</div></div>
+    <div class="card adapter-tile" onclick="showAdapterDetail('TFS Build Pipeline Sync','TFS','Excel','green',5670)"><div class="tile-header"><div class="tile-name">TFS Build Pipeline Sync</div><span class="status-dot green"></span></div><div class="tile-route">&#9881; TFS &rarr; &#128202; Excel</div><div class="tile-meta">Last run: 1 min ago | 5,670 msgs</div></div>
+  </div>
+
+  <!-- Charts Row -->
+  <div class="grid-2 mb-20">
+    <div class="card">
+      <div style="font-weight:600;font-size:.9rem;margin-bottom:12px">Message Volume (24h)</div>
+      <svg width="100%" height="120" viewBox="0 0 500 120" preserveAspectRatio="none">
+        <defs><linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#6366f1" stop-opacity=".3"/><stop offset="100%" stop-color="#6366f1" stop-opacity="0"/></linearGradient></defs>
+        <path d="M0,100 L20,95 40,85 60,90 80,70 100,60 120,65 140,50 160,55 180,40 200,45 220,35 240,30 260,40 280,25 300,30 320,20 340,25 360,15 380,20 400,18 420,22 440,15 460,10 480,12 500,8" fill="none" stroke="#6366f1" stroke-width="2"/>
+        <path d="M0,100 L20,95 40,85 60,90 80,70 100,60 120,65 140,50 160,55 180,40 200,45 220,35 240,30 260,40 280,25 300,30 320,20 340,25 360,15 380,20 400,18 420,22 440,15 460,10 480,12 500,8 L500,120 L0,120 Z" fill="url(#sparkGrad)"/>
+        <path d="M0,110 L20,108 40,105 60,106 80,100 100,95 120,98 140,90 160,92 180,85 200,88 220,82 240,80 260,84 280,78 300,80 320,75 340,77 360,72 380,74 400,73 420,75 440,72 460,70 480,71 500,68" fill="none" stroke="#22c55e" stroke-width="1.5" opacity=".6"/>
+      </svg>
+      <div style="display:flex;gap:16px;font-size:.72rem;color:var(--text-dim);margin-top:8px">
+        <span><span style="color:#6366f1">&#9644;</span> Sent</span>
+        <span><span style="color:#22c55e">&#9644;</span> Received</span>
+      </div>
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div style="font-weight:600;font-size:.9rem">Error Trend (7 days)</div>
+        <a class="clickable" style="font-size:.75rem" onclick="navigateTo('alerts')">View All Alerts &#8594;</a>
+      </div>
+      <svg width="100%" height="120" viewBox="0 0 500 120" preserveAspectRatio="none">
+        <rect x="20" y="80" width="50" height="40" rx="3" fill="#ef4444" opacity=".3"/><text x="45" y="75" fill="#ef4444" font-size="10" text-anchor="middle">12</text>
+        <rect x="90" y="70" width="50" height="50" rx="3" fill="#ef4444" opacity=".3"/><text x="115" y="65" fill="#ef4444" font-size="10" text-anchor="middle">18</text>
+        <rect x="160" y="90" width="50" height="30" rx="3" fill="#ef4444" opacity=".3"/><text x="185" y="85" fill="#ef4444" font-size="10" text-anchor="middle">8</text>
+        <rect x="230" y="60" width="50" height="60" rx="3" fill="#ef4444" opacity=".4"/><text x="255" y="55" fill="#ef4444" font-size="10" text-anchor="middle">23</text>
+        <rect x="300" y="85" width="50" height="35" rx="3" fill="#ef4444" opacity=".3"/><text x="325" y="80" fill="#ef4444" font-size="10" text-anchor="middle">11</text>
+        <rect x="370" y="75" width="50" height="45" rx="3" fill="#ef4444" opacity=".3"/><text x="395" y="70" fill="#ef4444" font-size="10" text-anchor="middle">15</text>
+        <rect x="440" y="55" width="50" height="65" rx="3" fill="#ef4444" opacity=".5"/><text x="465" y="50" fill="#ef4444" font-size="10" text-anchor="middle">23</text>
+        <text x="45" y="118" fill="currentColor" font-size="9" text-anchor="middle" opacity=".5">Mon</text>
+        <text x="115" y="118" fill="currentColor" font-size="9" text-anchor="middle" opacity=".5">Tue</text>
+        <text x="185" y="118" fill="currentColor" font-size="9" text-anchor="middle" opacity=".5">Wed</text>
+        <text x="255" y="118" fill="currentColor" font-size="9" text-anchor="middle" opacity=".5">Thu</text>
+        <text x="325" y="118" fill="currentColor" font-size="9" text-anchor="middle" opacity=".5">Fri</text>
+        <text x="395" y="118" fill="currentColor" font-size="9" text-anchor="middle" opacity=".5">Sat</text>
+        <text x="465" y="118" fill="#ef4444" font-size="9" text-anchor="middle" font-weight="700">Today</text>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: CONNECTOR STUDIO ==================== -->
+<div class="page" id="page-studio">
+  <div class="page-header">
+    <div><div class="page-title">Connector Studio</div><div class="page-subtitle">Design and publish connector templates</div></div>
+    <button class="btn btn-outline btn-sm" onclick="showPublishedConnectors()">&#128065; View Published</button>
+  </div>
+
+  <div style="font-weight:600;font-size:.9rem;margin-bottom:12px">System Category</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px" class="mb-16">
+    <div class="card connector-card" onclick="toggleConnectorCategory('rest',this)" id="cat-rest"><div class="conn-icon">&#127760;</div><div class="conn-label">REST API</div></div>
+    <div class="card connector-card" onclick="toggleConnectorCategory('db',this)" id="cat-db"><div class="conn-icon">&#128451;</div><div class="conn-label">Database</div></div>
+    <div class="card connector-card" onclick="toggleConnectorCategory('file',this)" id="cat-file"><div class="conn-icon">&#128193;</div><div class="conn-label">File Share</div></div>
+    <div class="card connector-card" onclick="toggleConnectorCategory('saas',this)" id="cat-saas"><div class="conn-icon">&#9729;</div><div class="conn-label">SaaS Application</div></div>
+    <div class="card connector-card" onclick="toggleConnectorCategory('mq',this)" id="cat-mq"><div class="conn-icon">&#128233;</div><div class="conn-label">Message Queue</div></div>
+    <div class="card connector-card" onclick="toggleConnectorCategory('webhook',this)" id="cat-webhook"><div class="conn-icon">&#128268;</div><div class="conn-label">Webhook</div></div>
+    <div class="card connector-card" onclick="toggleConnectorCategory('scrape',this)" id="cat-scrape"><div class="conn-icon">&#128375;</div><div class="conn-label">Web Scraping</div></div>
+  </div>
+
+  <!-- Category expansion panel -->
+  <div class="card mb-24" id="connectorCategoryPanel" style="display:none">
+    <div style="font-weight:600;font-size:.9rem;margin-bottom:8px" id="connectorCategoryTitle">Connectors</div>
+    <div id="connectorCategoryItems"></div>
+  </div>
+
+  <div class="card" style="max-width:900px" id="connectorFormPanel">
+    <div style="font-weight:700;font-size:1rem;margin-bottom:16px;display:flex;align-items:center;gap:8px" id="connectorFormTitle">&#127760; New REST API Connector <span class="badge badge-info">Draft</span></div>
+
+    <div class="form-row">
+      <div class="form-group"><label>Connector Name</label><input type="text" value="Dynamics 365 CRM" id="connectorNameInput"/></div>
+      <div class="form-group"><label>Version</label><input type="text" value="1.0.0" style="max-width:120px"/></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Base URL</label><input type="text" value="https://org.api.crm.dynamics.com/api/data/v9.2" /></div>
+      <div class="form-group" style="max-width:200px"><label>API Spec</label><button class="btn btn-outline btn-sm" style="width:100%;margin-top:2px">&#128206; Upload OpenAPI</button></div>
+    </div>
+
+    <div style="font-weight:600;font-size:.85rem;margin:16px 0 8px">Discovered Endpoints</div>
+    <div style="max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      <table>
+        <thead><tr><th></th><th>Endpoint</th><th>Method</th><th>Access</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><input type="checkbox" checked></td><td style="font-family:monospace;font-size:.78rem">/contacts</td><td><span class="badge badge-info">GET</span></td><td><span class="tag tag-both">R/W</span></td><td style="color:var(--text-dim)">List and create contacts</td></tr>
+          <tr><td><input type="checkbox" checked></td><td style="font-family:monospace;font-size:.78rem">/accounts</td><td><span class="badge badge-info">GET</span></td><td><span class="tag tag-read">Read</span></td><td style="color:var(--text-dim)">List accounts</td></tr>
+          <tr><td><input type="checkbox" checked></td><td style="font-family:monospace;font-size:.78rem">/opportunities</td><td><span class="badge badge-success">POST</span></td><td><span class="tag tag-both">R/W</span></td><td style="color:var(--text-dim)">Create and manage opportunities</td></tr>
+          <tr><td><input type="checkbox"></td><td style="font-family:monospace;font-size:.78rem">/leads</td><td><span class="badge badge-info">GET</span></td><td><span class="tag tag-both">R/W</span></td><td style="color:var(--text-dim)">Lead management</td></tr>
+          <tr><td><input type="checkbox" checked></td><td style="font-family:monospace;font-size:.78rem">/cases</td><td><span class="badge badge-info">GET</span></td><td><span class="tag tag-both">R/W</span></td><td style="color:var(--text-dim)">Case lifecycle</td></tr>
+          <tr><td><input type="checkbox"></td><td style="font-family:monospace;font-size:.78rem">/quotes</td><td><span class="badge badge-warning">POST</span></td><td><span class="tag tag-write">Write</span></td><td style="color:var(--text-dim)">Issue quotes</td></tr>
+          <tr><td><input type="checkbox"></td><td style="font-family:monospace;font-size:.78rem">/products</td><td><span class="badge badge-info">GET</span></td><td><span class="tag tag-both">R/W</span></td><td style="color:var(--text-dim)">Product catalog</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="form-group mt-16">
+      <label>Authentication Type</label>
+      <select>
+        <option>API Key (Bearer Token)</option>
+        <option selected>OAuth 2.0 - Authorization Code</option>
+        <option>OAuth 2.0 - Client Credentials</option>
+        <option>Basic Authentication</option>
+        <option>Custom Header</option>
+      </select>
+    </div>
+
+    <div style="font-weight:600;font-size:.85rem;margin:16px 0 8px">Entity Modeller</div>
+    <div class="card" style="background:var(--bg-main);margin-bottom:16px">
+      <div style="display:flex;gap:20px">
+        <div style="flex:1">
+          <div style="font-size:.78rem;color:var(--text-dim);margin-bottom:6px;font-weight:600">Raw Fields</div>
+          <div style="font-family:monospace;font-size:.75rem;color:var(--text-secondary);line-height:1.6">
+            contactid, fullname, emailaddress1,<br>
+            telephone1, jobtitle, company,<br>
+            address1_city, address1_country,<br>
+            createdon, modifiedon, statecode,<br>
+            ownerid, parentcustomerid,<br>
+            description, revenue
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;font-size:1.5rem;color:var(--primary)">&rarr;</div>
+        <div style="flex:1">
+          <div style="font-size:.78rem;color:var(--text-dim);margin-bottom:6px;font-weight:600">Grouped Entities</div>
+          <div style="font-size:.8rem">
+            <div style="padding:4px 0;font-weight:600;color:var(--primary);cursor:pointer" onclick="navigateTo('catalog')">&#9654; Contact <span class="badge badge-neutral" style="font-size:.6rem">8 fields</span></div>
+            <div style="padding:4px 0;font-weight:600;color:var(--primary);cursor:pointer" onclick="navigateTo('catalog')">&#9654; Account <span class="badge badge-neutral" style="font-size:.6rem">5 fields</span></div>
+            <div style="padding:4px 0;font-weight:600;color:var(--primary);cursor:pointer" onclick="navigateTo('catalog')">&#9654; Address <span class="badge badge-neutral" style="font-size:.6rem">3 fields</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;justify-content:flex-end">
+      <button class="btn btn-outline">Save Draft</button>
+      <button class="btn btn-success" disabled title="Run test first">&#9654; Test Connection</button>
+      <button class="btn btn-primary" disabled title="Test must pass before publish">Publish Connector</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: CONNECTION WIZARD ==================== -->
+<div class="page" id="page-wizard">
+  <div class="page-header">
+    <div><div class="page-title">Connection Wizard</div><div class="page-subtitle">Build a new integration in 6 steps</div></div>
+  </div>
+
+  <div class="stepper" id="wizardStepper">
+    <div class="step active" data-step="1"><div class="step-circle">1<div class="step-label">Select Systems</div></div></div>
+    <div class="step" data-step="2"><div class="step-line"></div><div class="step-circle">2<div class="step-label">Credentials</div></div></div>
+    <div class="step" data-step="3"><div class="step-line"></div><div class="step-circle">3<div class="step-label">Entities</div></div></div>
+    <div class="step" data-step="4"><div class="step-line"></div><div class="step-circle">4<div class="step-label">Mapping</div></div></div>
+    <div class="step" data-step="5"><div class="step-line"></div><div class="step-circle">5<div class="step-label">Schedule</div></div></div>
+    <div class="step" data-step="6"><div class="step-line"></div><div class="step-circle">6<div class="step-label">Test & Deploy</div></div></div>
+  </div>
+
+  <div class="wizard-content" style="margin-top:36px">
+    <div class="wizard-step active" id="wiz-step-1">
+      <div class="grid-2" style="gap:24px">
+        <div>
+          <div style="font-weight:600;margin-bottom:12px;font-size:.95rem">&#9664; Source System</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+            <div class="card connector-card" style="padding:14px" onclick="selectWizCard(this,'source')"><div class="conn-icon" style="font-size:1.6rem">&#127970;</div><div class="conn-label" style="font-size:.78rem">Dynamics 365</div></div>
+            <div class="card connector-card" style="padding:14px" onclick="selectWizCard(this,'source')"><div class="conn-icon" style="font-size:1.6rem">&#128203;</div><div class="conn-label" style="font-size:.78rem">Jira</div></div>
+            <div class="card connector-card" style="padding:14px" onclick="selectWizCard(this,'source')"><div class="conn-icon" style="font-size:1.6rem">&#128221;</div><div class="conn-label" style="font-size:.78rem">TARA</div></div>
+            <div class="card connector-card" style="padding:14px" onclick="selectWizCard(this,'source')"><div class="conn-icon" style="font-size:1.6rem">&#128451;</div><div class="conn-label" style="font-size:.78rem">PostgreSQL</div></div>
+            <div class="card connector-card" style="padding:14px" onclick="selectWizCard(this,'source')"><div class="conn-icon" style="font-size:1.6rem">&#128202;</div><div class="conn-label" style="font-size:.78rem">Excel</div></div>
+            <div class="card connector-card" style="padding:14px" onclick="selectWizCard(this,'source')"><div class="conn-icon" style="font-size:1.6rem">&#128101;</div><div class="conn-label" style="font-size:.78rem">Keka</div></div>
+          </div>
+        </div>
+        <div>
+          <div style="font-weight:600;margin-bottom:12px;font-size:.95rem">Destination System &#9654;</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+            <div class="card connector-card" style="padding:14px" onclick="selectWizCard(this,'dest')"><div class="conn-icon" style="font-size:1.6rem">&#9881;</div><div class="conn-label" style="font-size:.78rem">TFS</div></div>
+            <div class="card connector-card" style="padding:14px" onclick="selectWizCard(this,'dest')"><div class="conn-icon" style="font-size:1.6rem">&#128193;</div><div class="conn-label" style="font-size:.78rem">SharePoint</div></div>
+            <div class="card connector-card" style="padding:14px" onclick="selectWizCard(this,'dest')"><div class="conn-icon" style="font-size:1.6rem">&#128197;</div><div class="conn-label" style="font-size:.78rem">Holiday Tracker</div></div>
+            <div class="card connector-card" style="padding:14px" onclick="selectWizCard(this,'dest')"><div class="conn-icon" style="font-size:1.6rem">&#128279;</div><div class="conn-label" style="font-size:.78rem">Ahrefs</div></div>
+            <div class="card connector-card" style="padding:14px" onclick="selectWizCard(this,'dest')"><div class="conn-icon" style="font-size:1.6rem">&#128269;</div><div class="conn-label" style="font-size:.78rem">GSC</div></div>
+            <div class="card connector-card" style="padding:14px" onclick="selectWizCard(this,'dest')"><div class="conn-icon" style="font-size:1.6rem">&#128226;</div><div class="conn-label" style="font-size:.78rem">Google Adwords</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="wizard-step" id="wiz-step-2" style="display:none">
+      <div class="grid-2" style="gap:24px">
+        <div class="card">
+          <div style="font-weight:600;margin-bottom:12px">Source Credentials</div>
+          <div class="form-group"><label>Connection Name</label><input type="text" value="Jira Production" /></div>
+          <div class="form-group"><label>API Base URL</label><input type="text" value="https://myorg.atlassian.net" /></div>
+          <div class="form-group"><label>API Token</label><div class="password-wrap"><input type="password" value="xxxxxxxxxxxxxxxxxxx" id="srcToken" /><button class="eye-btn" onclick="togglePassword('srcToken')">&#128065;</button></div></div>
+          <div class="form-group"><label>Username</label><input type="text" value="admin@myorg.com" /></div>
+          <button class="btn btn-outline btn-sm" onclick="testConnection(this)">&#9889; Test Connection</button>
+        </div>
+        <div class="card">
+          <div style="font-weight:600;margin-bottom:12px">Destination Credentials</div>
+          <div class="form-group"><label>Connection Name</label><input type="text" value="SharePoint Production" /></div>
+          <div class="form-group"><label>Tenant ID</label><input type="text" value="a1b2c3d4-e5f6-7890-abcd-ef1234567890" /></div>
+          <div class="form-group"><label>Client Secret</label><div class="password-wrap"><input type="password" value="xxxxxxxxxxxxxxxx" id="destToken" /><button class="eye-btn" onclick="togglePassword('destToken')">&#128065;</button></div></div>
+          <div class="form-group"><label>Site URL</label><input type="text" value="https://myorg.sharepoint.com/sites/projects" /></div>
+          <button class="btn btn-outline btn-sm" onclick="testConnection(this)">&#9889; Test Connection</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="wizard-step" id="wiz-step-3" style="display:none">
+      <div class="card" style="max-width:600px">
+        <div style="font-weight:600;margin-bottom:12px">Select Entities to Sync</div>
+        <div class="check-item"><input type="checkbox" checked><span>Issues <span class="badge badge-neutral">42 fields</span></span></div>
+        <div class="check-item"><input type="checkbox" checked><span>Projects <span class="badge badge-neutral">18 fields</span></span></div>
+        <div class="check-item"><input type="checkbox" checked><span>Users <span class="badge badge-neutral">12 fields</span></span></div>
+        <div class="check-item"><input type="checkbox"><span>Sprints <span class="badge badge-neutral">8 fields</span></span></div>
+        <div class="check-item"><input type="checkbox"><span>Components <span class="badge badge-neutral">6 fields</span></span></div>
+        <div class="check-item"><input type="checkbox" checked><span>Comments <span class="badge badge-neutral">7 fields</span></span></div>
+        <div class="check-item"><input type="checkbox"><span>Attachments <span class="badge badge-neutral">5 fields</span></span></div>
+        <div class="check-item"><input type="checkbox"><span>Worklogs <span class="badge badge-neutral">9 fields</span></span></div>
+      </div>
+    </div>
+
+    <div class="wizard-step" id="wiz-step-4" style="display:none">
+      <div style="text-align:center;padding:60px 20px">
+        <div style="font-size:3rem;margin-bottom:16px">&#8621;</div>
+        <div style="font-size:1.1rem;font-weight:600;margin-bottom:8px">Field Mapping Required</div>
+        <div style="color:var(--text-secondary);margin-bottom:20px;font-size:.9rem">Map source entity fields to destination fields using the visual canvas</div>
+        <button class="btn btn-primary" onclick="navigateTo('canvas')">Launch Mapping Canvas</button>
+      </div>
+    </div>
+
+    <div class="wizard-step" id="wiz-step-5" style="display:none">
+      <div class="grid-2" style="gap:24px">
+        <div class="card">
+          <div style="font-weight:600;margin-bottom:12px">Schedule Configuration</div>
+          <div class="form-group"><label>Sync Frequency</label>
+            <select><option>Every 15 minutes</option><option>Every 30 minutes</option><option selected>Every hour</option><option>Every 6 hours</option><option>Daily at midnight</option><option>Custom Cron</option></select>
+          </div>
+          <div class="form-group"><label>Cron Expression</label><input type="text" value="0 * * * *" style="font-family:monospace" /></div>
+          <div class="form-group"><label>Timezone</label>
+            <select><option selected>UTC</option><option>America/New_York</option><option>Europe/London</option><option>Asia/Kolkata</option></select>
+          </div>
+          <div class="check-item"><input type="checkbox" checked><span>Enable immediately after publish</span></div>
+        </div>
+        <div class="card">
+          <div style="font-weight:600;margin-bottom:12px">Retry Policy</div>
+          <div class="form-group"><label>Max Retries</label><input type="number" value="3" style="max-width:80px"/></div>
+          <div class="form-group"><label>Retry Delay</label>
+            <select><option>30 seconds</option><option selected>1 minute</option><option>5 minutes</option><option>15 minutes</option></select>
+          </div>
+          <div class="form-group"><label>Backoff Strategy</label>
+            <select><option selected>Exponential</option><option>Linear</option><option>Fixed</option></select>
+          </div>
+          <div class="form-group"><label>Dead Letter Queue</label>
+            <select><option selected>Enabled</option><option>Disabled</option></select>
+          </div>
+          <div class="form-group"><label>Alert On Failure</label>
+            <select><option selected>After 2 consecutive failures</option><option>On every failure</option><option>After 5 failures</option></select>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="wizard-step" id="wiz-step-6" style="display:none">
+      <div style="font-weight:600;margin-bottom:12px">Test & Preview</div>
+      <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:start">
+        <div class="card" style="background:var(--bg-main)">
+          <div style="font-size:.78rem;color:var(--text-dim);margin-bottom:8px;font-weight:600">Source Data (Jira)</div>
+          <div class="json-block"><span class="json-key">"key"</span>: <span class="json-string">"PROJ-1042"</span>,<br><span class="json-key">"summary"</span>: <span class="json-string">"Fix login timeout"</span>,<br><span class="json-key">"assignee"</span>: {<br>&nbsp;&nbsp;<span class="json-key">"accountId"</span>: <span class="json-string">"5f3c..."</span>,<br>&nbsp;&nbsp;<span class="json-key">"displayName"</span>: <span class="json-string">"Sarah Chen"</span><br>},<br><span class="json-key">"status"</span>: {<span class="json-key">"name"</span>: <span class="json-string">"In Progress"</span>},<br><span class="json-key">"priority"</span>: {<span class="json-key">"name"</span>: <span class="json-string">"High"</span>},<br><span class="json-key">"created"</span>: <span class="json-string">"2026-03-28T09:14:00Z"</span></div>
+        </div>
+        <div style="display:flex;align-items:center;padding-top:40px;font-size:1.5rem;color:var(--primary)">&rarr;</div>
+        <div class="card" style="background:var(--bg-main)">
+          <div style="font-size:.78rem;color:var(--text-dim);margin-bottom:8px;font-weight:600">Destination Data (SharePoint)</div>
+          <div class="json-block"><span class="json-key">"Title"</span>: <span class="json-string">"PROJ-1042: Fix login timeout"</span>,<br><span class="json-key">"Description"</span>: <span class="json-string">"Fix login timeout"</span>,<br><span class="json-key">"AssignedTo"</span>: <span class="json-string">"Sarah Chen"</span>,<br><span class="json-key">"Status"</span>: <span class="json-string">"In Progress"</span>,<br><span class="json-key">"Priority"</span>: <span class="json-string">"High"</span>,<br><span class="json-key">"CreatedDate"</span>: <span class="json-string">"2026-03-28"</span>,<br><span class="json-key">"ExternalId"</span>: <span class="json-string">"PROJ-1042"</span></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:12px;justify-content:flex-end;margin-top:16px">
+        <button class="btn btn-outline">&#9654; Run Test (5 records)</button>
+        <button class="btn btn-primary">Publish Integration</button>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;margin-top:24px">
+    <button class="btn btn-outline" id="wizBack" onclick="wizardNav(-1)" disabled>&larr; Back</button>
+    <button class="btn btn-primary" id="wizNext" onclick="wizardNav(1)">Next &rarr;</button>
+  </div>
+</div>
+
+<!-- ==================== PAGE: MAPPING CANVAS (REDESIGNED) ==================== -->
+<div class="page" id="page-canvas">
+  <div class="page-header" style="margin-bottom:12px">
+    <div><div class="page-title">Mapping Canvas</div><div class="page-subtitle">Jira Issues &rarr; SharePoint Tasks</div></div>
+  </div>
+
+  <div class="mapping-container" id="mappingContainer">
+    <div class="mapping-panel" id="sourcePanel">
+      <div style="font-weight:600;font-size:.85rem;margin-bottom:8px;color:var(--info)">&#128196; Source: Jira Issue</div>
+      <div id="sourceFieldsList"></div>
+    </div>
+    <div class="mapping-center-col" id="mappingCenterCol">
+      <div style="font-size:.6rem;font-weight:700;color:var(--text-dim);margin-bottom:8px;text-align:center">#</div>
+    </div>
+    <div class="mapping-panel" id="destPanel">
+      <div style="font-weight:600;font-size:.85rem;margin-bottom:8px;color:var(--success)">&#128196; Dest: SharePoint Task</div>
+      <div id="destFieldsList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: INTEGRATION REGISTRY ==================== -->
+<div class="page" id="page-registry">
+  <div class="page-header">
+    <div><div class="page-title">Integration Registry</div><div class="page-subtitle">All deployed adapters and integrations</div></div>
+    <button class="btn btn-primary btn-sm" onclick="navigateTo('wizard')">+ New Integration</button>
+  </div>
+
+  <div class="flex gap-12 mb-16" style="flex-wrap:wrap;align-items:center">
+    <div class="search-bar"><span class="search-icon">&#128269;</span><input type="text" placeholder="Search integrations..." style="width:300px"/></div>
+    <div class="filter-chips">
+      <span class="chip active">All</span>
+      <span class="chip" onclick="this.classList.toggle('active')">Dynamics 365</span>
+      <span class="chip" onclick="this.classList.toggle('active')">Jira</span>
+      <span class="chip" onclick="this.classList.toggle('active')">SAP</span>
+      <span class="chip" onclick="this.classList.toggle('active')">Active</span>
+      <span class="chip" onclick="this.classList.toggle('active')">Error</span>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px" id="registryGrid"></div>
+</div>
+
+<!-- ==================== PAGE: MESSAGE MONITOR ==================== -->
+<div class="page" id="page-monitor">
+  <div class="page-header">
+    <div><div class="page-title">Trading Network Console</div><div class="page-subtitle">Message Monitor</div></div>
+    <div class="flex gap-8 items-center">
+      <label style="display:flex;align-items:center;gap:6px;font-size:.82rem;cursor:pointer">
+        <span class="pulse-indicator" id="realtimePulse"></span> Real-time
+        <input type="checkbox" checked style="accent-color:var(--primary)" onchange="document.getElementById('realtimePulse').style.animationPlayState=this.checked?'running':'paused'">
+      </label>
+    </div>
+  </div>
+
+  <div class="flex gap-12 mb-16 items-center" style="flex-wrap:wrap">
+    <select style="min-width:180px"><option>All Adapters</option><option>CRM Data Export</option><option>Project Task Sync</option><option>SAP Data Warehouse Sync</option><option>Recruitment Pipeline Sync</option></select>
+    <input type="date" value="2026-04-02" style="max-width:160px"/>
+    <span style="color:var(--text-dim)">to</span>
+    <input type="date" value="2026-04-02" style="max-width:160px"/>
+    <div class="flex gap-8">
+      <label class="check-item" style="padding:0"><input type="checkbox" checked> <span style="font-size:.78rem">Success</span></label>
+      <label class="check-item" style="padding:0"><input type="checkbox" checked> <span style="font-size:.78rem">Failed</span></label>
+      <label class="check-item" style="padding:0"><input type="checkbox" checked> <span style="font-size:.78rem">Partial</span></label>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table id="monitorTable">
+      <thead><tr><th>Timestamp</th><th>Source</th><th></th><th>Destination</th><th>Adapter</th><th>Status</th><th>Records</th><th>Duration</th><th></th></tr></thead>
+      <tbody id="monitorBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ==================== PAGE: CREDENTIAL VAULT ==================== -->
+<div class="page" id="page-vault">
+  <div class="page-header">
+    <div><div class="page-title">Credential Vault</div><div class="page-subtitle">Secure credential management</div></div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>System</th><th>Auth Type</th><th>Credential</th><th>Owner</th><th>Last Rotated</th><th>Expiry</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="vaultBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ==================== PAGE: ADMINISTRATION ==================== -->
+<div class="page" id="page-admin">
+  <div class="page-header">
+    <div><div class="page-title">Administration</div><div class="page-subtitle">Users, roles, and client applications</div></div>
+  </div>
+
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchAdminTab(this,'users')">Users</button>
+    <button class="tab-btn" onclick="switchAdminTab(this,'apps')">Client Applications</button>
+  </div>
+
+  <div id="admin-users">
+    <div class="flex justify-between items-center mb-12">
+      <div class="search-bar"><span class="search-icon">&#128269;</span><input type="text" placeholder="Search users..." /></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Last Active</th><th>Adapters</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+          <tr data-role="admin" style="cursor:pointer" onclick="showUserDetail('Anita Kumar','anita.k@acme.com','Admin')"><td><strong class="clickable">Anita Kumar</strong></td><td>anita.k@acme.com</td><td><span class="badge" style="background:rgba(168,85,247,.15);color:#a855f7">Admin</span></td><td>2 min ago</td><td>15</td><td><span class="badge badge-success">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showEditRoleForm('Anita Kumar','Admin')">Edit Role</button></td></tr>
+          <tr data-role="designer" style="cursor:pointer" onclick="showUserDetail('Marcus Chen','m.chen@acme.com','Designer')"><td><strong class="clickable">Marcus Chen</strong></td><td>m.chen@acme.com</td><td><span class="badge" style="background:rgba(59,130,246,.15);color:#3b82f6">Designer</span></td><td>1 hr ago</td><td>8</td><td><span class="badge badge-success">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showEditRoleForm('Marcus Chen','Designer')">Edit Role</button></td></tr>
+          <tr data-role="operator" style="cursor:pointer" onclick="showUserDetail('Sarah Thompson','s.thompson@acme.com','Operator')"><td><strong class="clickable">Sarah Thompson</strong></td><td>s.thompson@acme.com</td><td><span class="badge" style="background:rgba(34,197,94,.15);color:#22c55e">Operator</span></td><td>30 min ago</td><td>12</td><td><span class="badge badge-success">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showEditRoleForm('Sarah Thompson','Operator')">Edit Role</button></td></tr>
+          <tr data-role="designer" style="cursor:pointer" onclick="showUserDetail('David Park','d.park@acme.com','Designer')"><td><strong class="clickable">David Park</strong></td><td>d.park@acme.com</td><td><span class="badge" style="background:rgba(59,130,246,.15);color:#3b82f6">Designer</span></td><td>3 hrs ago</td><td>5</td><td><span class="badge badge-success">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showEditRoleForm('David Park','Designer')">Edit Role</button></td></tr>
+          <tr data-role="operator" style="cursor:pointer" onclick="showUserDetail('Elena Rodriguez','e.rodriguez@acme.com','Operator')"><td><strong class="clickable">Elena Rodriguez</strong></td><td>e.rodriguez@acme.com</td><td><span class="badge" style="background:rgba(34,197,94,.15);color:#22c55e">Operator</span></td><td>2 days ago</td><td>3</td><td><span class="badge badge-success">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showEditRoleForm('Elena Rodriguez','Operator')">Edit Role</button></td></tr>
+          <tr data-role="viewer" style="cursor:pointer" onclick="showUserDetail('James Wilson','j.wilson@acme.com','Viewer')"><td><strong class="clickable">James Wilson</strong></td><td>j.wilson@acme.com</td><td><span class="badge badge-neutral">Viewer</span></td><td>1 week ago</td><td>0</td><td><span class="badge badge-neutral">Inactive</span></td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showEditRoleForm('James Wilson','Viewer')">Edit Role</button> <button class="btn btn-ghost btn-sm" style="color:var(--error)" onclick="event.stopPropagation();deactivateUser('James Wilson')">Deactivate</button></td></tr>
+          <tr data-role="admin" style="cursor:pointer" onclick="showUserDetail('Lisa Nakamura','l.nakamura@acme.com','Admin')"><td><strong class="clickable">Lisa Nakamura</strong></td><td>l.nakamura@acme.com</td><td><span class="badge" style="background:rgba(168,85,247,.15);color:#a855f7">Admin</span></td><td>4 hrs ago</td><td>15</td><td><span class="badge badge-success">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showEditRoleForm('Lisa Nakamura','Admin')">Edit Role</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="admin-apps" style="display:none">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Application</th><th>Client ID</th><th>Tier</th><th>API Calls (30d)</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+          <tr style="cursor:pointer" onclick="showClientDetail('ERP Sync Service','Heavy',145230)"><td><strong>ERP Sync Service</strong></td><td><span style="font-family:monospace;font-size:.78rem">syn_cli_a1b2****</span></td><td><span class="badge badge-error">Heavy</span></td><td>145,230</td><td><span class="badge badge-success">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showClientDetail('ERP Sync Service','Heavy',145230)">Manage</button></td></tr>
+          <tr style="cursor:pointer" onclick="showClientDetail('CRM Integration','Moderate',42891)"><td><strong>CRM Integration</strong></td><td><span style="font-family:monospace;font-size:.78rem">syn_cli_c3d4****</span></td><td><span class="badge badge-warning">Moderate</span></td><td>42,891</td><td><span class="badge badge-success">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showClientDetail('CRM Integration','Moderate',42891)">Manage</button></td></tr>
+          <tr style="cursor:pointer" onclick="showClientDetail('Analytics Pipeline','Light',8445)"><td><strong>Analytics Pipeline</strong></td><td><span style="font-family:monospace;font-size:.78rem">syn_cli_e5f6****</span></td><td><span class="badge badge-info">Light</span></td><td>8,445</td><td><span class="badge badge-success">Active</span></td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showClientDetail('Analytics Pipeline','Light',8445)">Manage</button></td></tr>
+          <tr style="cursor:pointer" onclick="showClientDetail('Mobile App Backend','Light',3112)"><td><strong>Mobile App Backend</strong></td><td><span style="font-family:monospace;font-size:.78rem">syn_cli_g7h8****</span></td><td><span class="badge badge-info">Light</span></td><td>3,112</td><td><span class="badge badge-neutral">Disabled</span></td><td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();showClientDetail('Mobile App Backend','Light',3112)">Manage</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== PAGE: ALERTS ==================== -->
+<div class="page" id="page-alerts">
+  <div class="page-header">
+    <div><div class="page-title">Alerts & Notifications</div><div class="page-subtitle">3 unresolved alerts</div></div>
+    <div class="flex gap-8">
+      <select style="padding:4px 8px;font-size:.8rem"><option>All Severities</option><option>Critical Only</option><option>Warnings</option></select>
+    </div>
+  </div>
+
+  <div id="alertsList"></div>
+</div>
+
+<!-- ==================== PAGE: ENTITY CATALOG ==================== -->
+<div class="page" id="page-catalog">
+  <div class="page-header">
+    <div><div class="page-title">Master Entity Catalog</div><div class="page-subtitle">Canonical data model reference</div></div>
+  </div>
+
+  <div style="display:flex;gap:20px;height:calc(100vh - 200px)">
+    <div class="card tree-nav" style="overflow-y:auto;flex-shrink:0;padding:12px">
+      <div style="font-size:.78rem;color:var(--text-dim);margin-bottom:8px;font-weight:600">Departments</div>
+      <div class="tree-item parent">&#9654; Engineering</div>
+      <div class="tree-item child active" onclick="selectEntity(this,'Issue','Engineering',['id','key','summary','description','status','priority','assignee','reporter','created','updated','labels'])">Issue</div>
+      <div class="tree-item child" onclick="selectEntity(this,'Sprint','Engineering',['id','name','state','startDate','endDate','goal','boardId','completedIssues'])">Sprint</div>
+      <div class="tree-item child" onclick="selectEntity(this,'Repository','Engineering',['id','name','url','language','stars','forks','lastCommit','branches'])">Repository</div>
+      <div class="tree-item parent">&#9654; Sales</div>
+      <div class="tree-item child" onclick="selectEntity(this,'Lead','Sales',['id','name','email','company','source','status','score','assignedTo','createdDate'])">Lead</div>
+      <div class="tree-item child" onclick="selectEntity(this,'Opportunity','Sales',['id','name','amount','stage','probability','closeDate','owner','accountId'])">Opportunity</div>
+      <div class="tree-item child" onclick="selectEntity(this,'Account','Sales',['id','name','industry','website','phone','billingAddress','annualRevenue','employees'])">Account</div>
+      <div class="tree-item parent">&#9654; Finance</div>
+      <div class="tree-item child" onclick="selectEntity(this,'Invoice','Finance',['id','number','amount','currency','dueDate','status','customerId','lineItems'])">Invoice</div>
+      <div class="tree-item child" onclick="selectEntity(this,'Payment','Finance',['id','amount','method','status','transactionId','date','invoiceId'])">Payment</div>
+      <div class="tree-item child" onclick="selectEntity(this,'Subscription','Finance',['id','plan','status','startDate','renewalDate','amount','customerId'])">Subscription</div>
+      <div class="tree-item parent">&#9654; HR</div>
+      <div class="tree-item child" onclick="selectEntity(this,'Employee','HR',['id','name','email','department','title','manager','hireDate','status'])">Employee</div>
+      <div class="tree-item child" onclick="selectEntity(this,'Department','HR',['id','name','head','budget','headcount','location','costCenter'])">Department</div>
+      <div class="tree-item parent">&#9654; Operations</div>
+      <div class="tree-item child" onclick="selectEntity(this,'Ticket','Operations',['id','title','description','priority','status','assignee','category','sla'])">Ticket</div>
+      <div class="tree-item child" onclick="selectEntity(this,'Asset','Operations',['id','name','type','serialNumber','location','assignedTo','purchaseDate','status'])">Asset</div>
+    </div>
+
+    <div style="flex:1;overflow-y:auto" id="entityDetailPanel">
+      <div class="card mb-16">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div><span style="font-weight:700;font-size:1.1rem" id="entityName">Issue</span> <span class="badge badge-primary" id="entityDept">Engineering</span></div>
+          <div style="font-size:.78rem;color:var(--text-dim)" id="entityUsage">Used by 3 connectors, 4 adapters</div>
+        </div>
+        <table id="entityFieldsTable">
+          <thead><tr><th>Field</th><th>Label</th><th>Type</th><th>Description</th><th>Usage</th></tr></thead>
+          <tbody>
+            <tr><td style="font-family:monospace;font-size:.78rem">id</td><td>Issue ID</td><td><span class="badge badge-neutral">string</span></td><td style="color:var(--text-dim)">Unique identifier</td><td><div class="usage-bar" style="width:80px"><div class="usage-bar-fill" style="width:95%;background:var(--success)"></div></div></td></tr>
+            <tr><td style="font-family:monospace;font-size:.78rem">key</td><td>Issue Key</td><td><span class="badge badge-neutral">string</span></td><td style="color:var(--text-dim)">Project-scoped key (e.g., PROJ-123)</td><td><div class="usage-bar" style="width:80px"><div class="usage-bar-fill" style="width:90%;background:var(--success)"></div></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:600;font-size:.9rem;margin-bottom:12px">Cross-References</div>
+        <div class="grid-2">
+          <div>
+            <div style="font-size:.78rem;color:var(--text-dim);margin-bottom:6px;font-weight:600">Connectors Using This Entity</div>
+            <div style="font-size:.85rem;display:flex;flex-direction:column;gap:4px">
+              <span class="clickable" onclick="navigateTo('studio')">&#127760; Jira Cloud REST API <span class="badge badge-success">Published</span></span>
+              <span class="clickable" onclick="navigateTo('studio')">&#127760; Azure DevOps REST API <span class="badge badge-success">Published</span></span>
+              <span class="clickable" onclick="navigateTo('studio')">&#128451; PostgreSQL Issue Tracker <span class="badge badge-info">Draft</span></span>
+            </div>
+          </div>
+          <div>
+            <div style="font-size:.78rem;color:var(--text-dim);margin-bottom:6px;font-weight:600">Adapters Using This Entity</div>
+            <div style="font-size:.85rem;display:flex;flex-direction:column;gap:4px">
+              <span class="clickable" onclick="showAdapterDetail('Project Task Sync','Jira','SharePoint','green',89)">Project Task Sync <span class="status-dot green"></span></span>
+              <span class="clickable" onclick="navigateTo('registry')">Jira &rarr; Confluence <span class="status-dot green"></span></span>
+              <span class="clickable" onclick="navigateTo('registry')">Azure DevOps &rarr; Jira <span class="status-dot green"></span></span>
+              <span class="clickable" onclick="navigateTo('registry')">Jira &rarr; Slack Notifier <span class="status-dot amber"></span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- end main-content -->
+
+<!-- FLOATING RIGHT DETAIL PANE -->
+<div class="detail-pane" id="detailPane">
+  <div class="detail-pane-header">
+    <span class="dp-title" id="dpTitle">Detail</span>
+    <button class="dp-close" onclick="closeDetailPane()">&times;</button>
+  </div>
+  <div class="detail-pane-breadcrumb" id="dpBreadcrumb" style="display:none"></div>
+  <div class="detail-pane-body" id="dpBody"></div>
+</div>
+
+</div><!-- end main-content-wrapper -->
+</div><!-- end app-body -->
+
+<!-- Toast notification -->
+<div id="toastNotif" style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--bg-card);border:1px solid var(--success);border-radius:var(--radius);padding:10px 20px;font-size:.85rem;font-weight:600;color:var(--success);box-shadow:var(--shadow-md);z-index:999;transition:transform 0.3s ease;display:flex;align-items:center;gap:8px">
+  <span>&#10003;</span> <span id="toastText">Done</span>
+</div>
+
+
+<script src="js/app.js"></script>
+</body>
+</html>

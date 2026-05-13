@@ -1,0 +1,17 @@
+export const monitorData = [
+  { time: '10:15:03', src: 'Dynamics 365', dest: 'Excel', adapter: 'CRM Data Export', status: 'Success', records: 142, dur: '3.2s', dir: '\u2192' },
+  { time: '10:14:58', src: 'Jira', dest: 'SharePoint', adapter: 'Project Task Sync', status: 'Success', records: 23, dur: '1.1s', dir: '\u2192' },
+  { time: '10:14:42', src: 'TARA', dest: 'Dynamics 365', adapter: 'Recruitment Pipeline Sync', status: 'Success', records: 67, dur: '2.8s', dir: '\u2192' },
+  { time: '10:14:30', src: 'SAP ERP', dest: 'TFS', adapter: 'SAP Data Warehouse Sync', status: 'Failed', records: 0, dur: '0.3s', dir: '\u2192' },
+  { time: '10:14:12', src: 'Shopify', dest: 'NetSuite', adapter: 'eCommerce Order Sync', status: 'Success', records: 312, dur: '5.6s', dir: '\u2192' },
+  { time: '10:13:55', src: 'GitHub', dest: 'Slack', adapter: 'DevOps Notification Relay', status: 'Success', records: 8, dur: '0.4s', dir: '\u2192' },
+  { time: '10:13:40', src: 'Zendesk', dest: 'ServiceNow', adapter: 'ITSM Ticket Bridge', status: 'Partial', records: 45, dur: '3.1s', dir: '\u2192' },
+  { time: '10:13:22', src: 'PostgreSQL', dest: 'GSC', adapter: 'Search Index Pipeline', status: 'Success', records: 1204, dur: '8.2s', dir: '\u2192' },
+  { time: '10:12:58', src: 'Keka', dest: 'Holiday Tracker', adapter: 'Leave Balance Sync', status: 'Success', records: 56, dur: '2.4s', dir: '\u2192' },
+  { time: '10:12:30', src: 'Dynamics 365', dest: 'Excel', adapter: 'CRM Data Export', status: 'Success', records: 89, dur: '2.1s', dir: '\u2192' },
+  { time: '10:12:15', src: 'TFS', dest: 'Excel', adapter: 'TFS Build Pipeline Sync', status: 'Success', records: 2340, dur: '4.5s', dir: '\u2192' },
+  { time: '10:11:48', src: 'SAP ERP', dest: 'TFS', adapter: 'SAP Data Warehouse Sync', status: 'Failed', records: 0, dur: '0.2s', dir: '\u2192' },
+  { time: '10:11:30', src: 'Mailchimp', dest: 'Dynamics 365', adapter: 'Marketing Lead Sync', status: 'Success', records: 178, dur: '3.8s', dir: '\u2190' },
+  { time: '10:11:10', src: 'Twilio', dest: 'Segment', adapter: 'Comms Analytics Pipeline', status: 'Processing', records: 445, dur: '-', dir: '\u2192' },
+  { time: '10:10:55', src: 'Ahrefs', dest: 'GSC', adapter: 'SEO Performance Pipeline', status: 'Success', records: 8920, dur: '12.3s', dir: '\u2192' },
+];
