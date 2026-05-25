@@ -6,6 +6,7 @@ import { api } from '../../services/api';
 const sourceCards = [
   { icon: '\u{1F3E2}', label: 'Dynamics 365' },
   { icon: '\u{1F4CB}', label: 'Jira' },
+  { icon: '\u{1F4C1}', label: 'SharePoint' },
   { icon: '\u{1F4DD}', label: 'TARA' },
   { icon: '\u{1F5C3}', label: 'PostgreSQL' },
   { icon: '\u{1F4CA}', label: 'Excel' },
@@ -14,12 +15,13 @@ const sourceCards = [
 const destCards = [
   { icon: '\u2699', label: 'TFS' },
   { icon: '\u{1F4C1}', label: 'SharePoint' },
+  { icon: '\u{1F5C3}', label: 'PostgreSQL' },
   { icon: '\u{1F4C5}', label: 'Holiday Tracker' },
   { icon: '\u{1F517}', label: 'Ahrefs' },
   { icon: '\u{1F50D}', label: 'GSC' },
   { icon: '\u{1F4E2}', label: 'Google Adwords' },
 ];
-const stepLabels = ['Select Systems', 'Credentials', 'Entities', 'Mapping', 'Fetch & Review', 'Push to SharePoint'];
+const stepLabels = ['Select Systems', 'Credentials', 'Entities', 'Mapping', 'Fetch & Review', 'Push & Sync'];
 const credentialFields = {
   Jira: [
     { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'e.g. Jira Production' },
@@ -30,7 +32,17 @@ const credentialFields = {
   SharePoint: [
     { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'e.g. SharePoint Production' },
     { key: 'siteUrl', label: 'Site URL', type: 'text', placeholder: 'https://yourorg.sharepoint.com/sites/projects' },
-    { key: 'listName', label: 'List Name', type: 'text', placeholder: 'e.g. JiraData' },
+    { key: 'listName', label: 'List Name', type: 'text', placeholder: 'e.g. Invoice' },
+  ],
+  PostgreSQL: [
+    { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'e.g. Synapse Postgres' },
+    { key: 'host', label: 'Host', type: 'text', placeholder: 'localhost', defaultValue: 'localhost' },
+    { key: 'port', label: 'Port', type: 'text', placeholder: '5555', defaultValue: '5555' },
+    { key: 'database', label: 'Database', type: 'text', placeholder: 'synapse_db', defaultValue: 'synapse_db' },
+    { key: 'username', label: 'Username', type: 'text', placeholder: 'synapse', defaultValue: 'synapse' },
+    { key: 'password', label: 'Password', type: 'password', placeholder: 'Database password', defaultValue: 'synapse' },
+    { key: 'schema', label: 'Schema', type: 'text', placeholder: 'public', defaultValue: 'public' },
+    { key: 'table', label: 'Target Table', type: 'text', placeholder: 'e.g. sp_invoice (auto-created if missing)' },
   ],
 };
 const genericCredFields = [
@@ -503,6 +515,14 @@ export default function WizardPage() {
   const [projects, setProjects] = useState([]);
   const [selectedProject, setSelectedProject] = useState('');
 
+  // Step 3 — Search + PG tables
+  const [entitySearch, setEntitySearch] = useState('');
+  const [pgTables, setPgTables] = useState([]); // [{ name, columnCount }]
+  const [pgTablesLoading, setPgTablesLoading] = useState(false);
+  const [selectedPgTable, setSelectedPgTable] = useState('');
+  const [createNewTable, setCreateNewTable] = useState(false);
+  const [newTableName, setNewTableName] = useState('');
+
   // Step 4 — Mapping
   const [srcFields, setSrcFields] = useState([]);
   const [destFields, setDestFields] = useState([]);
@@ -524,6 +544,11 @@ export default function WizardPage() {
   const [pushResult, setPushResult] = useState(null); // { pushRunId, total, created, updated, failed }
   const [pushError, setPushError] = useState('');
   const [pushProgress, setPushProgress] = useState(null);
+
+  // Step 6 — DDL Preview (Database destination)
+  const [ddlPreview, setDdlPreview] = useState(null); // { missingColumns, ddlStatements, requiresApproval, tableExists }
+  const [ddlStatus, setDdlStatus] = useState('idle'); // idle | loading | loaded | applying | applied | error
+  const [ddlError, setDdlError] = useState('');
 
   const updateSrcCred = (key, val) => setSrcCreds(prev => ({ ...prev, [key]: val }));
   const updateDestCred = (key, val) => setDestCreds(prev => ({ ...prev, [key]: val }));
@@ -600,37 +625,52 @@ export default function WizardPage() {
     if (wizardStep === 1 && (!selectedSource || !selectedDest)) return;
     if (wizardStep === 2 && (srcTestStatus !== 'connected' || destTestStatus !== 'connected')) return;
     if (wizardStep === 3 && !selectedEntity) return;
+    // Sync PG table selection to destCreds before moving to step 4
+    if (wizardStep === 3 && selectedDest === 'PostgreSQL') {
+      const tbl = createNewTable ? newTableName : selectedPgTable;
+      if (!tbl) return; // must pick a table
+      setDestCreds(prev => ({ ...prev, table: tbl }));
+    }
     if (wizardStep === 5 && fetchStatus !== 'done') return; // must fetch before push
-    if (wizardStep === 6) { handlePushToSharePoint(); return; } // Step 6 button triggers push
+    if (wizardStep === 6) { handlePush(); return; } // Step 6 button triggers push
     setWizardStep(prev => Math.min(6, prev + 1));
   };
 
-  // ─── Step 5: Fetch Jira data ───────────────────────────
-  const handleFetchJira = async () => {
+  // ─── Step 5: Fetch source data ─────────────────────────
+  const handleFetchData = async () => {
     setFetchStatus('fetching');
     setFetchError('');
     setFetchResult(null);
     try {
-      const { endpointUrl, email, apiToken } = srcCreds;
-      const result = await api.fetchJiraIssues({
-        endpointUrl, email, apiToken,
-        projectKey: selectedProject,
-        selectedEntities: [selectedEntity],
-        dateFrom: dateStart,
-        dateTo: dateEnd,
-        saveConnection: true,
-      });
-      if (result.ok && result.data?.success) {
-        const data = result.data.data;
-        const runId = data?.runId;
-        const issueEntity = data?.entities?.issues;
-        const tickets = issueEntity?.records || [];
-        const totalCount = issueEntity?.count ?? tickets.length;
-        setFetchResult({ runId, tickets, totalCount });
-        setFetchStatus('done');
-      } else {
-        setFetchError(result.data?.error || 'Fetch failed');
-        setFetchStatus('error');
+      if (selectedSource === 'Jira') {
+        const { endpointUrl, email, apiToken } = srcCreds;
+        const result = await api.fetchJiraIssues({
+          endpointUrl, email, apiToken,
+          projectKey: selectedProject,
+          selectedEntities: [selectedEntity],
+          dateFrom: dateStart,
+          dateTo: dateEnd,
+          saveConnection: true,
+        });
+        if (result.ok && result.data?.success) {
+          const data = result.data.data;
+          const runId = data?.runId;
+          const issueEntity = data?.entities?.issues;
+          const tickets = issueEntity?.records || [];
+          const totalCount = issueEntity?.count ?? tickets.length;
+          setFetchResult({ runId, tickets, totalCount });
+          setFetchStatus('done');
+        } else { setFetchError(result.data?.error || 'Fetch failed'); setFetchStatus('error'); }
+      } else if (selectedSource === 'SharePoint') {
+        const result = await api.fetchSpItems({
+          siteId: srcConnectionData?.siteId,
+          listId: selectedEntity,
+        });
+        if (result.ok && result.data?.success) {
+          const items = result.data.data?.items || [];
+          setFetchResult({ runId: 'sp-fetch-' + Date.now(), tickets: items, totalCount: items.length });
+          setFetchStatus('done');
+        } else { setFetchError(result.data?.error || 'Fetch failed'); setFetchStatus('error'); }
       }
     } catch (err) {
       setFetchError('Network error during fetch');
@@ -638,7 +678,71 @@ export default function WizardPage() {
     }
   };
 
-  // ─── Step 6: Push to SharePoint ────────────────────────
+  // ─── Step 6: Push to destination ───────────────────────
+  const handlePush = async () => {
+    if (selectedDest === 'PostgreSQL') {
+      handlePushToPg();
+    } else {
+      handlePushToSharePoint();
+    }
+  };
+
+  const handlePushToPg = async () => {
+    if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
+    setPushStatus('pushing');
+    setPushError('');
+    setPushResult(null);
+    try {
+      const pgCfg = destConnectionData || destCreds;
+      const targetTable = destCreds.table || 'sp_data';
+      const targetSchema = destCreds.schema || 'public';
+
+      // Build mappings from wizard mappings
+      const dbMappings = mappings.map(m => ({
+        from: m.sources[0] || '',
+        to: m.destinations[0] || '',
+        type: mapSpTypeToPgType(m.srcTypes?.[0] || 'text'),
+      }));
+
+      const result = await api.pushToPg({
+        spConfig: {
+          siteId: srcConnectionData?.siteId,
+          listId: selectedEntity,
+        },
+        pgConfig: {
+          host: pgCfg.host, port: Number(pgCfg.port) || 5432,
+          database: pgCfg.database, username: pgCfg.username, password: pgCfg.password,
+        },
+        targetSchema,
+        targetTable,
+        mappings: dbMappings,
+      });
+
+      if (result.ok && result.data?.success) {
+        const d = result.data.data;
+        setPushResult({
+          pushRunId: 'pg-' + Date.now(),
+          total: d.total,
+          status: 'success',
+          created: d.inserted,
+          updated: d.updated,
+          skipped: d.skipped || 0,
+          failed: d.errors,
+          tableCreated: d.tableCreated,
+          totalColumnsChanged: d.totalColumnsChanged || 0,
+          columnChanges: d.columnChanges || [],
+        });
+        setPushStatus('done');
+      } else {
+        setPushError(result.data?.error || 'Push failed');
+        setPushStatus('error');
+      }
+    } catch (err) {
+      setPushError('Network error during push');
+      setPushStatus('error');
+    }
+  };
+
   const handlePushToSharePoint = async () => {
     if (!fetchResult?.runId) { setPushError('No Jira data fetched. Go back and fetch first.'); return; }
     setPushStatus('pushing');
@@ -650,7 +754,7 @@ export default function WizardPage() {
         siteUrl, listName,
         runId: fetchResult.runId,
         source: 'api_token',
-        upsertMode: true,   // Always upsert — update existing by IssueKey, create new
+        upsertMode: true,
         forceNew: false,
         siteId: destConnectionData?.siteId,
         listId: destConnectionData?.listId,
@@ -659,21 +763,14 @@ export default function WizardPage() {
         const d = result.data.data;
         setPushResult({ pushRunId: d.pushRunId, total: d.total, status: 'running' });
         setPushStatus('polling');
-        // Poll for completion
         pollPushProgress(d.pushRunId);
       } else if (result.status === 409) {
-        // Already pushed — offer upsert
         const prev = result.data?.previousPush;
-        setPushError(`Already pushed to "${prev?.listName}" (${prev?.recordCount} records on ${new Date(prev?.pushedAt).toLocaleDateString()}). Re-running with upsert...`);
-        // Auto-retry with upsert + forceNew
+        setPushError(`Already pushed. Re-running with upsert...`);
         const retry = await api.pushToSharePoint({
-          siteUrl, listName,
-          runId: fetchResult.runId,
-          source: 'api_token',
-          upsertMode: true,
-          forceNew: true,
-          siteId: destConnectionData?.siteId,
-          listId: destConnectionData?.listId,
+          siteUrl, listName, runId: fetchResult.runId, source: 'api_token',
+          upsertMode: true, forceNew: true,
+          siteId: destConnectionData?.siteId, listId: destConnectionData?.listId,
         });
         if (retry.ok && retry.data?.success) {
           const d = retry.data.data;
@@ -681,41 +778,24 @@ export default function WizardPage() {
           setPushResult({ pushRunId: d.pushRunId, total: d.total, status: 'running' });
           setPushStatus('polling');
           pollPushProgress(d.pushRunId);
-        } else {
-          setPushError(retry.data?.error || 'Push failed after retry');
-          setPushStatus('error');
-        }
-      } else {
-        setPushError(result.data?.error || 'Push failed');
-        setPushStatus('error');
-      }
-    } catch (err) {
-      setPushError('Network error during push');
-      setPushStatus('error');
-    }
+        } else { setPushError(retry.data?.error || 'Push failed'); setPushStatus('error'); }
+      } else { setPushError(result.data?.error || 'Push failed'); setPushStatus('error'); }
+    } catch (err) { setPushError('Network error during push'); setPushStatus('error'); }
   };
 
   const pollPushProgress = (pushRunId) => {
     let attempts = 0;
-    const maxAttempts = 60; // 60 * 3s = 3 min max
+    const maxAttempts = 60;
     const poll = async () => {
       attempts++;
-      // Query the DB-backed push run endpoint
       const res = await fetch(`http://localhost:4000/api/sharepoint/runs/${pushRunId}`, {
         headers: { 'Content-Type': 'application/json' },
       }).then(r => r.json()).catch(() => null);
-
-      if (!res?.success || !res?.data) {
-        if (attempts < maxAttempts) setTimeout(poll, 3000);
-        return;
-      }
+      if (!res?.success || !res?.data) { if (attempts < maxAttempts) setTimeout(poll, 3000); return; }
       const run = res.data;
       setPushProgress(run);
-
       if (run.status === 'success' || run.status === 'error') {
-        setPushResult(prev => ({
-          ...prev,
-          status: run.status,
+        setPushResult(prev => ({ ...prev, status: run.status,
           created: run.createdCount ?? run.created_count ?? 0,
           updated: run.updatedCount ?? run.updated_count ?? 0,
           failed: run.failedCount ?? run.failed_count ?? 0,
@@ -723,11 +803,18 @@ export default function WizardPage() {
         setPushStatus('done');
         return;
       }
-      // Keep polling if still running
       if (attempts < maxAttempts) setTimeout(poll, 3000);
     };
-    setTimeout(poll, 3000); // initial delay for backend to start processing
+    setTimeout(poll, 3000);
   };
+
+  /** Map SP field type string to PG column type for wizard mappings */
+  function mapSpTypeToPgType(spType) {
+    const map = { text: 'string', note: 'string', number: 'number', currency: 'number',
+      dateTime: 'datetime', boolean: 'boolean', choiceSingle: 'string', choiceMulti: 'json',
+      person: 'json', lookup: 'json', hyperlink: 'json', managedMetadata: 'string' };
+    return map[spType] || 'string';
+  }
 
   // ─── Credential handlers ────────────────────────────────
   const handleSrcCredChange = (key, val) => {
@@ -751,6 +838,15 @@ export default function WizardPage() {
           setSrcTestMsg(`Connected as ${result.data.data?.displayName || 'verified user'}`);
           setSrcConnectionData(result.data.data);
         } else { setSrcTestStatus('error'); setSrcTestMsg(result.data?.error || 'Connection failed'); }
+      } else if (selectedSource === 'SharePoint') {
+        const { siteUrl } = srcCreds;
+        if (!siteUrl) { setSrcTestStatus('error'); setSrcTestMsg('Please fill in the Site URL'); return; }
+        const result = await api.testSpSource({ siteUrl });
+        if (result.ok && result.data?.success) {
+          setSrcTestStatus('connected');
+          setSrcTestMsg(`Connected to "${result.data.data?.siteDisplayName}" (${result.data.data?.hostname})`);
+          setSrcConnectionData(result.data.data);
+        } else { setSrcTestStatus('error'); setSrcTestMsg(result.data?.error || 'Connection failed'); }
       } else { setSrcTestStatus('error'); setSrcTestMsg(`${selectedSource} not yet supported.`); }
     } catch { setSrcTestStatus('error'); setSrcTestMsg('Connection failed.'); }
   };
@@ -767,6 +863,15 @@ export default function WizardPage() {
           setDestTestMsg(`Connected to "${result.data.data?.siteDisplayName}" \u2014 list "${result.data.data?.listName}" (${result.data.data?.listColumnCount} columns)`);
           setDestConnectionData(result.data.data);
         } else { setDestTestStatus('error'); setDestTestMsg(result.data?.error || 'Connection failed'); }
+      } else if (selectedDest === 'PostgreSQL') {
+        const { host, port, database, username, password } = destCreds;
+        if (!host || !database || !username) { setDestTestStatus('error'); setDestTestMsg('Please fill in Host, Database, and Username'); return; }
+        const result = await api.testPgDest({ host, port: Number(port) || 5432, database, username, password });
+        if (result.ok && result.data?.data?.connectionOk) {
+          setDestTestStatus('connected');
+          setDestTestMsg(`Connected to ${host}:${port || 5432}/${database}`);
+          setDestConnectionData({ host, port: Number(port) || 5432, database, username, password, schema: destCreds.schema || 'public', table: destCreds.table });
+        } else { setDestTestStatus('error'); setDestTestMsg('Connection failed \u2014 check credentials'); }
       } else { setDestTestStatus('error'); setDestTestMsg(`${selectedDest} not yet supported.`); }
     } catch { setDestTestStatus('error'); setDestTestMsg('Connection failed.'); }
   };
@@ -776,13 +881,28 @@ export default function WizardPage() {
     setActiveIntegrationId(null); setSaveStatus('idle'); setSaveMsg(''); setDeleteStatus('idle');
   };
   const handleDestSelect = (label) => {
-    setSelectedDest(label); setDestCreds({}); setDestTestStatus('idle'); setDestTestMsg(''); setDestConnectionData(null);
+    // Pre-fill defaults for the destination
+    const fields = credentialFields[label] || [];
+    const defaults = {};
+    fields.forEach(f => { if (f.defaultValue) defaults[f.key] = f.defaultValue; });
+    setSelectedDest(label); setDestCreds(defaults); setDestTestStatus('idle'); setDestTestMsg(''); setDestConnectionData(null);
   };
 
   // ─── Save connection (upsert by endpoint URL) ──────────
   const handleSaveConnection = async () => {
-    if (!srcCreds.endpointUrl || !srcCreds.email || !srcCreds.apiToken) {
+    // Validate based on source type
+    if (selectedSource === 'Jira' && (!srcCreds.endpointUrl || !srcCreds.email || !srcCreds.apiToken)) {
       setSaveMsg('Fill in all Jira credential fields first');
+      setSaveStatus('error');
+      return;
+    }
+    if (selectedSource === 'SharePoint' && !srcCreds.siteUrl) {
+      setSaveMsg('Fill in the SharePoint Site URL first');
+      setSaveStatus('error');
+      return;
+    }
+    if (srcTestStatus !== 'connected' || destTestStatus !== 'connected') {
+      setSaveMsg('Test both connections before saving');
       setSaveStatus('error');
       return;
     }
@@ -790,13 +910,21 @@ export default function WizardPage() {
     setSaveMsg('');
     try {
       const body = {
-        name: srcCreds.connectionName || 'Jira Integration',
-        endpointUrl: srcCreds.endpointUrl,
-        email: srcCreds.email,
-        apiToken: srcCreds.apiToken,
+        name: srcCreds.connectionName || `${selectedSource} → ${selectedDest}`,
+        sourceType: selectedSource,
+        destType: selectedDest,
+        endpointUrl: srcCreds.endpointUrl || srcCreds.siteUrl || '',
+        email: srcCreds.email || undefined,
+        apiToken: srcCreds.apiToken || undefined,
         projectKey: selectedProject || undefined,
-        siteUrl: destCreds.siteUrl || undefined,
-        listName: destCreds.listName || undefined,
+        siteUrl: selectedSource === 'SharePoint' ? srcCreds.siteUrl : (destCreds.siteUrl || undefined),
+        listName: srcCreds.listName || destCreds.listName || undefined,
+        // PG dest fields
+        pgHost: destCreds.host || undefined,
+        pgPort: destCreds.port || undefined,
+        pgDatabase: destCreds.database || undefined,
+        pgSchema: destCreds.schema || undefined,
+        pgTable: destCreds.table || undefined,
       };
       const res = await api.saveConnection(body);
       if (res.ok && res.data?.success) {
@@ -865,28 +993,75 @@ export default function WizardPage() {
   // ─── Step 3: Load entities + projects when entering ─────
   useEffect(() => {
     if (wizardStep !== 3) return;
-    if (selectedSource !== 'Jira') return;
 
-    const loadProjects = async () => {
-      const { endpointUrl, email, apiToken } = srcCreds;
-      const result = await api.discoverProjects({ endpointUrl, email, apiToken });
-      if (result.ok && result.data?.success) {
-        setProjects(result.data.data || []);
-        if (result.data.data?.length === 1) setSelectedProject(result.data.data[0].key);
-      }
-    };
-    loadProjects();
+    if (selectedSource === 'Jira') {
+      const loadProjects = async () => {
+        const { endpointUrl, email, apiToken } = srcCreds;
+        const result = await api.discoverProjects({ endpointUrl, email, apiToken });
+        if (result.ok && result.data?.success) {
+          setProjects(result.data.data || []);
+          if (result.data.data?.length === 1) setSelectedProject(result.data.data[0].key);
+        }
+      };
+      loadProjects();
+    } else if (selectedSource === 'SharePoint') {
+      // Discover lists on the SP site — each list is an "entity"
+      const loadLists = async () => {
+        setEntitiesLoading(true);
+        const result = await api.discoverSpLists({
+          siteId: srcConnectionData?.siteId,
+        });
+        if (result.ok && result.data?.success) {
+          const lists = (result.data.data?.lists || [])
+            .filter(l => l.template === 'genericList')
+            .map(l => ({ id: l.id, name: l.name, fieldCount: null, available: true }));
+          setEntities(lists);
+          setProjects([{ key: srcConnectionData?.siteDisplayName || 'Site', name: srcConnectionData?.siteDisplayName || 'SharePoint Site' }]);
+          setSelectedProject(srcConnectionData?.siteDisplayName || 'Site');
+          // Auto-select the list from siteUrl if listName was provided
+          const listName = srcCreds.listName;
+          if (listName) {
+            const match = lists.find(l => l.name.toLowerCase() === listName.toLowerCase());
+            if (match) setSelectedEntity(match.id);
+          }
+        }
+        setEntitiesLoading(false);
+
+        // Also load PG tables if destination is PostgreSQL
+        if (selectedDest === 'PostgreSQL') {
+          const pgCfg = destConnectionData || destCreds;
+          if (pgCfg.host && pgCfg.database) {
+            setPgTablesLoading(true);
+            const pgResult = await api.getPgTables({
+              host: pgCfg.host, port: Number(pgCfg.port) || 5555,
+              database: pgCfg.database, username: pgCfg.username, password: pgCfg.password,
+              schema: destCreds.schema || 'public',
+            });
+            if (pgResult.ok && pgResult.data?.success) {
+              setPgTables(pgResult.data.data?.tables || []);
+              if (destCreds.table) {
+                const match = (pgResult.data.data?.tables || []).find(t => t.name === destCreds.table);
+                if (match) setSelectedPgTable(match.name);
+                else { setCreateNewTable(true); setNewTableName(destCreds.table); }
+              }
+            }
+            setPgTablesLoading(false);
+          }
+        }
+      };
+      loadLists();
+    }
   }, [wizardStep]);
 
   useEffect(() => {
     if (wizardStep !== 3 || !selectedProject) return;
+    if (selectedSource !== 'Jira') return; // SP lists already loaded above
     const loadEntities = async () => {
       setEntitiesLoading(true);
       const { endpointUrl, email, apiToken } = srcCreds;
       const result = await api.discoverEntities({ endpointUrl, email, apiToken, projectKey: selectedProject });
       if (result.ok && result.data?.success) {
         setEntities(result.data.data?.entities || []);
-        // Auto-select Issues if available
         const issues = result.data.data?.entities?.find(e => e.id === 'issues');
         if (issues?.available) setSelectedEntity('issues');
       }
@@ -900,27 +1075,85 @@ export default function WizardPage() {
     if (wizardStep !== 4) return;
     const loadFields = async () => {
       setFieldsLoading(true);
-      const { endpointUrl, email, apiToken } = srcCreds;
-      const { siteUrl, listName } = destCreds;
 
-      // Fetch both in parallel
-      const [srcResult, destResult] = await Promise.all([
-        api.getEntityFields({ endpointUrl, email, apiToken, projectKey: selectedProject, entity: selectedEntity }),
-        api.getSharePointListFields({ siteUrl, listName, siteId: destConnectionData?.siteId }),
-      ]);
+      if (selectedSource === 'Jira' && selectedDest === 'SharePoint') {
+        // Original Jira → SP flow
+        const { endpointUrl, email, apiToken } = srcCreds;
+        const { siteUrl, listName } = destCreds;
+        const [srcResult, destResult] = await Promise.all([
+          api.getEntityFields({ endpointUrl, email, apiToken, projectKey: selectedProject, entity: selectedEntity }),
+          api.getSharePointListFields({ siteUrl, listName, siteId: destConnectionData?.siteId }),
+        ]);
+        if (srcResult.ok && srcResult.data?.success) setSrcFields(srcResult.data.data?.fields || []);
+        if (destResult.ok && destResult.data?.success) {
+          const spf = (destResult.data.data?.spFields || []).map(f => ({
+            name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: f.required || false,
+          }));
+          setDestFields(spf);
+        }
+      } else if (selectedSource === 'SharePoint' && selectedDest === 'PostgreSQL') {
+        // SP → PG flow: source = SP list fields, dest = PG table columns (or empty for auto-create)
+        const srcResult = await api.getSpListFields({
+          siteId: srcConnectionData?.siteId, listId: selectedEntity,
+        });
+        if (srcResult.ok && srcResult.data?.success) {
+          setSrcFields(srcResult.data.data?.fields || []);
+        }
 
-      if (srcResult.ok && srcResult.data?.success) {
-        setSrcFields(srcResult.data.data?.fields || []);
+        // Try to load existing PG table columns (if table exists)
+        const pgCfg = destConnectionData || destCreds;
+        if (pgCfg.host && pgCfg.database && destCreds.table) {
+          const destResult = await api.getPgTableColumns({
+            host: pgCfg.host, port: Number(pgCfg.port) || 5432,
+            database: pgCfg.database, username: pgCfg.username, password: pgCfg.password,
+            schema: destCreds.schema || 'public', table: destCreds.table,
+          });
+          if (destResult.ok && destResult.data?.success && destResult.data.data?.exists) {
+            setDestFields(destResult.data.data.columns || []);
+          } else {
+            // Table doesn't exist yet — generate dest fields from source (auto-map)
+            const spFields = srcResult?.data?.data?.fields || [];
+            const autoDestFields = [
+              { name: 'sp_item_id', displayName: 'sp_item_id', type: 'varchar', required: true },
+              ...spFields.map(f => {
+                const pgName = f.name.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '').replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_');
+                return { name: pgName, displayName: pgName, type: mapSpTypeToPgType(f.type), required: false };
+              }),
+              { name: 'sp_created_at', displayName: 'sp_created_at', type: 'timestamptz', required: false },
+              { name: 'sp_modified_at', displayName: 'sp_modified_at', type: 'timestamptz', required: false },
+            ];
+            setDestFields(autoDestFields);
+          }
+        } else {
+          // No table specified — generate from source
+          const spFields = srcResult?.data?.data?.fields || [];
+          const autoDestFields = [
+            { name: 'sp_item_id', displayName: 'sp_item_id', type: 'varchar', required: true },
+            ...spFields.map(f => {
+              const pgName = f.name.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '').replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_');
+              return { name: pgName, displayName: pgName, type: mapSpTypeToPgType(f.type), required: false };
+            }),
+            { name: 'sp_created_at', displayName: 'sp_created_at', type: 'timestamptz', required: false },
+            { name: 'sp_modified_at', displayName: 'sp_modified_at', type: 'timestamptz', required: false },
+          ];
+          setDestFields(autoDestFields);
+        }
+      } else {
+        // Fallback: try original Jira fields + SP columns
+        const { endpointUrl, email, apiToken } = srcCreds;
+        const { siteUrl, listName } = destCreds;
+        const [srcResult, destResult] = await Promise.all([
+          api.getEntityFields({ endpointUrl, email, apiToken, projectKey: selectedProject, entity: selectedEntity }),
+          api.getSharePointListFields({ siteUrl, listName, siteId: destConnectionData?.siteId }),
+        ]);
+        if (srcResult.ok && srcResult.data?.success) setSrcFields(srcResult.data.data?.fields || []);
+        if (destResult.ok && destResult.data?.success) {
+          setDestFields((destResult.data.data?.spFields || []).map(f => ({
+            name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: f.required || false,
+          })));
+        }
       }
-      if (destResult.ok && destResult.data?.success) {
-        const spf = (destResult.data.data?.spFields || []).map(f => ({
-          name: f.name,
-          displayName: f.displayName || f.name,
-          type: f.type || 'text',
-          required: f.required || false,
-        }));
-        setDestFields(spf);
-      }
+
       setFieldsLoading(false);
     };
     loadFields();
@@ -1051,7 +1284,7 @@ export default function WizardPage() {
             (wizardStep === 6 && (pushStatus === 'pushing' || pushStatus === 'polling'))
           }>
           {wizardStep === 5 && fetchStatus !== 'done' ? 'Fetch First' :
-           wizardStep === 6 ? (pushStatus === 'idle' ? '\u25B6 Push to SharePoint' : pushStatus === 'done' ? 'Done' : 'Pushing...') :
+           wizardStep === 6 ? (pushStatus === 'idle' ? `\u25B6 Push to ${selectedDest || 'Destination'}` : pushStatus === 'done' ? 'Done' : 'Pushing...') :
            'Next \u2192'}
         </button>
       </div>
@@ -1175,7 +1408,7 @@ export default function WizardPage() {
                 <button
                   className="btn btn-primary btn-sm"
                   onClick={handleSaveConnection}
-                  disabled={saveStatus === 'saving' || !srcCreds.endpointUrl || !srcCreds.email || !srcCreds.apiToken}
+                  disabled={saveStatus === 'saving' || srcTestStatus !== 'connected' || destTestStatus !== 'connected'}
                   style={{ minWidth: 140 }}
                 >
                   {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved' : 'Save Connection'}
@@ -1212,7 +1445,7 @@ export default function WizardPage() {
                 )}
               </div>
               <div style={{ fontSize: '.75rem', color: 'var(--text-dim)', marginTop: 6 }}>
-                Save stores both Jira and SharePoint details. Same Jira URL will update the existing connection instead of creating a duplicate.
+                Save stores source and destination connection details. Same source URL will update the existing connection.
               </div>
             </div>
 
@@ -1224,72 +1457,204 @@ export default function WizardPage() {
           </div>
         )}
 
-        {/* ── Step 3: Entities ── */}
+        {/* ── Step 3: Source Entity + Destination Table ── */}
         {wizardStep === 3 && (
           <div className="wizard-step active">
             <div className="entity-header-bar">
               <div>
-                <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: 4 }}>Choose what to sync</div>
+                <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: 4 }}>
+                  {selectedSource === 'SharePoint' ? 'Select Source List & Destination Table' : 'Choose what to sync'}
+                </div>
                 <div className="conn-summary">
-                  <strong>{srcCreds.connectionName || selectedSource}</strong> ({srcCreds.endpointUrl})
+                  <strong>{srcCreds.connectionName || selectedSource}</strong> ({srcCreds.siteUrl || srcCreds.endpointUrl})
                   &nbsp;&rarr;&nbsp;
-                  <strong>{destCreds.connectionName || selectedDest}</strong> ({destCreds.listName})
-                  {destConnectionData?.listColumnCount ? ` \u2014 ${destConnectionData.listColumnCount} columns` : ''}
+                  <strong>{destCreds.connectionName || selectedDest}</strong> ({destCreds.database || destCreds.listName || ''})
                 </div>
               </div>
             </div>
 
-            {/* Project selector */}
-            {projects.length > 1 && (
+            {/* Jira project selector (unchanged) */}
+            {selectedSource === 'Jira' && projects.length > 1 && (
               <div className="form-group" style={{ maxWidth: 400, marginBottom: 16 }}>
                 <label>Select Project</label>
                 <select value={selectedProject} onChange={e => setSelectedProject(e.target.value)}>
                   <option value="">Choose a project...</option>
-                  {projects.map(p => <option key={p.key} value={p.key}>{p.key} \u2014 {p.name}</option>)}
+                  {projects.map(p => <option key={p.key} value={p.key}>{p.key} &mdash; {p.name}</option>)}
                 </select>
               </div>
             )}
-            {projects.length === 1 && (
+            {selectedSource === 'Jira' && projects.length === 1 && (
               <div style={{ marginBottom: 12, fontSize: '.85rem', color: 'var(--text-secondary)' }}>
-                Project: <strong style={{ color: 'var(--text)' }}>{projects[0].key} \u2014 {projects[0].name}</strong>
+                Project: <strong style={{ color: 'var(--text)' }}>{projects[0].key} &mdash; {projects[0].name}</strong>
               </div>
             )}
 
             {entitiesLoading ? (
               <div className="wizard-loader">
                 <div className="loader-spinner"></div>
-                <div className="loader-text">Loading entities from {selectedSource}...</div>
+                <div className="loader-text">Loading {selectedSource === 'SharePoint' ? 'lists' : 'entities'} from {selectedSource}...</div>
               </div>
-            ) : entities.length > 0 ? (
-              <div className="entity-list">
-                {entities.map(ent => (
-                  <div
-                    key={ent.id}
-                    className={`entity-card${selectedEntity === ent.id ? ' selected' : ''}${!ent.available ? ' disabled' : ''}`}
-                    onClick={() => ent.available && setSelectedEntity(ent.id)}
-                  >
-                    <div className="entity-radio"></div>
-                    <div className="entity-info">
-                      <div className="entity-name">{ent.name}</div>
-                      <div className="entity-desc">{entityDescriptions[ent.id] || ''}</div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: selectedDest === 'PostgreSQL' ? '1fr 1fr' : '1fr', gap: 20 }}>
+
+                {/* ── LEFT: Source list/entity picker ── */}
+                <div className="card" style={{ padding: 16 }}>
+                  <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 10 }}>
+                    {selectedSource === 'SharePoint' ? `SharePoint Lists (${entities.length})` : `${selectedSource} Entities`}
+                  </div>
+
+                  {/* Search bar */}
+                  <input
+                    type="text"
+                    placeholder={`Search ${selectedSource === 'SharePoint' ? 'lists' : 'entities'}...`}
+                    value={entitySearch}
+                    onChange={e => setEntitySearch(e.target.value)}
+                    style={{ width: '100%', padding: '7px 12px', borderRadius: 6, border: '1px solid var(--border)', marginBottom: 10, fontSize: '.85rem' }}
+                  />
+
+                  {/* Scrollable list */}
+                  <div style={{ maxHeight: 380, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+                    {entities
+                      .filter(ent => !entitySearch || ent.name.toLowerCase().includes(entitySearch.toLowerCase()))
+                      .map(ent => (
+                        <div
+                          key={ent.id}
+                          onClick={() => ent.available !== false && setSelectedEntity(ent.id)}
+                          style={{
+                            padding: '10px 14px',
+                            cursor: ent.available !== false ? 'pointer' : 'default',
+                            opacity: ent.available === false ? 0.4 : 1,
+                            background: selectedEntity === ent.id ? 'var(--primary-dim)' : 'transparent',
+                            borderBottom: '1px solid var(--border)',
+                            borderLeft: selectedEntity === ent.id ? '3px solid var(--primary)' : '3px solid transparent',
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          }}
+                        >
+                          <div>
+                            <div style={{ fontWeight: selectedEntity === ent.id ? 700 : 500, fontSize: '.88rem' }}>{ent.name}</div>
+                            <div style={{ fontSize: '.72rem', color: 'var(--text-dim)' }}>
+                              {entityDescriptions[ent.id] || (selectedSource === 'SharePoint' ? 'SharePoint List' : '')}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            {ent.fieldCount && <span className="badge badge-neutral" style={{ fontSize: '.68rem' }}>{ent.fieldCount} cols</span>}
+                            {selectedEntity === ent.id && <span style={{ color: 'var(--primary)', fontWeight: 700 }}>&#10003;</span>}
+                          </div>
+                        </div>
+                      ))}
+                    {entities.filter(ent => !entitySearch || ent.name.toLowerCase().includes(entitySearch.toLowerCase())).length === 0 && (
+                      <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)', fontSize: '.85rem' }}>
+                        No matches for "{entitySearch}"
+                      </div>
+                    )}
+                  </div>
+                  {selectedEntity && (
+                    <div style={{ marginTop: 8, fontSize: '.78rem', color: 'var(--success)', fontWeight: 600 }}>
+                      &#10003; Selected: {entities.find(e => e.id === selectedEntity)?.name}
                     </div>
-                    <div className="entity-badges">
-                      <span className="badge badge-neutral">{ent.fieldCount} fields</span>
-                      {ent.id === 'issues' && <span className="badge badge-primary">Recommended</span>}
-                      {!ent.available && <span className="badge badge-warning">Unavailable</span>}
+                  )}
+                </div>
+
+                {/* ── RIGHT: Destination table picker (PostgreSQL only) ── */}
+                {selectedDest === 'PostgreSQL' && (
+                  <div className="card" style={{ padding: 16 }}>
+                    <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 10 }}>
+                      PostgreSQL Destination Table
+                    </div>
+
+                    {/* Toggle: existing vs new */}
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                      <button
+                        className={`btn btn-sm ${!createNewTable ? 'btn-primary' : ''}`}
+                        style={createNewTable ? { background: 'var(--bg-main)', border: '1px solid var(--border)' } : {}}
+                        onClick={() => { setCreateNewTable(false); setNewTableName(''); }}
+                      >
+                        Existing Table ({pgTables.length})
+                      </button>
+                      <button
+                        className={`btn btn-sm ${createNewTable ? 'btn-primary' : ''}`}
+                        style={!createNewTable ? { background: 'var(--bg-main)', border: '1px solid var(--border)' } : {}}
+                        onClick={() => { setCreateNewTable(true); setSelectedPgTable(''); }}
+                      >
+                        + Create New
+                      </button>
+                    </div>
+
+                    {!createNewTable ? (
+                      <>
+                        {pgTablesLoading ? (
+                          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)' }}>Loading tables...</div>
+                        ) : (
+                          <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+                            {pgTables.map(t => (
+                              <div
+                                key={t.name}
+                                onClick={() => setSelectedPgTable(t.name)}
+                                style={{
+                                  padding: '10px 14px',
+                                  cursor: 'pointer',
+                                  background: selectedPgTable === t.name ? 'var(--primary-dim)' : 'transparent',
+                                  borderBottom: '1px solid var(--border)',
+                                  borderLeft: selectedPgTable === t.name ? '3px solid var(--primary)' : '3px solid transparent',
+                                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                }}
+                              >
+                                <div>
+                                  <div style={{ fontWeight: selectedPgTable === t.name ? 700 : 500, fontSize: '.88rem', fontFamily: 'monospace' }}>{t.name}</div>
+                                </div>
+                                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                  <span className="badge badge-neutral" style={{ fontSize: '.68rem' }}>{t.columnCount} cols</span>
+                                  {selectedPgTable === t.name && <span style={{ color: 'var(--primary)', fontWeight: 700 }}>&#10003;</span>}
+                                </div>
+                              </div>
+                            ))}
+                            {pgTables.length === 0 && (
+                              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)', fontSize: '.85rem' }}>
+                                No tables found in schema "{destCreds.schema || 'public'}"
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {selectedPgTable && (
+                          <div style={{ marginTop: 8, fontSize: '.78rem', color: 'var(--success)', fontWeight: 600 }}>
+                            &#10003; Target: {destCreds.schema || 'public'}.{selectedPgTable}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div>
+                        <div style={{ marginBottom: 8, fontSize: '.82rem', color: 'var(--text-secondary)' }}>
+                          Enter a name for the new table. It will be auto-created with columns derived from the source.
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="e.g. sp_invoice"
+                          value={newTableName}
+                          onChange={e => setNewTableName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', fontFamily: 'monospace', fontSize: '.9rem' }}
+                        />
+                        {newTableName && (
+                          <div style={{ marginTop: 8, fontSize: '.78rem', color: 'var(--info)' }}>
+                            Will create: <strong>{destCreds.schema || 'public'}.{newTableName}</strong> with columns from the selected source list
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div style={{ marginTop: 14, padding: '8px 12px', background: 'var(--info-dim)', border: '1px solid var(--info)', borderRadius: 6, fontSize: '.75rem', color: 'var(--info)' }}>
+                      <strong>Smart Sync:</strong> Only changed columns are updated. If 100 rows are pushed and only 2 rows have changes in specific columns, only those 2 columns on those 2 rows are updated.
                     </div>
                   </div>
-                ))}
+                )}
               </div>
-            ) : !selectedProject ? (
-              <div style={{ color: 'var(--text-dim)', textAlign: 'center', padding: 40 }}>
-                Select a project above to discover available entities
-              </div>
-            ) : null}
+            )}
 
+            {/* Validation messages */}
             {!selectedEntity && entities.length > 0 && (
               <div style={{ color: 'var(--text-dim)', fontSize: '.85rem', marginTop: 16, textAlign: 'center' }}>
-                Select an entity to continue
+                {selectedDest === 'PostgreSQL'
+                  ? 'Select a source list and destination table to continue'
+                  : 'Select an entity to continue'}
               </div>
             )}
           </div>
@@ -1426,7 +1791,7 @@ export default function WizardPage() {
         {/* ── Step 5: Fetch & Review ── */}
         {wizardStep === 5 && (
           <div className="wizard-step active">
-            <div style={{ fontWeight: 600, marginBottom: 16, fontSize: '1rem' }}>Fetch Jira Data</div>
+            <div style={{ fontWeight: 600, marginBottom: 16, fontSize: '1rem' }}>Fetch {selectedSource} Data</div>
 
             <div className="grid-2" style={{ gap: 24 }}>
               {/* Left: Config */}
@@ -1437,31 +1802,38 @@ export default function WizardPage() {
                   <input type="text" value={selectedProject} readOnly style={{ background: 'var(--bg-main)' }} />
                 </div>
                 <div className="form-group">
-                  <label>Entity</label>
-                  <input type="text" value={selectedEntity || ''} readOnly style={{ background: 'var(--bg-main)' }} />
+                  <label>{selectedSource === 'SharePoint' ? 'List' : 'Entity'}</label>
+                  <input type="text" value={selectedSource === 'SharePoint' ? (entities.find(e => e.id === selectedEntity)?.name || selectedEntity) : (selectedEntity || '')} readOnly style={{ background: 'var(--bg-main)' }} />
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                  <div className="form-group">
-                    <label>Date Start</label>
-                    <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} />
+                {selectedSource !== 'SharePoint' && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div className="form-group">
+                      <label>Date Start</label>
+                      <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} />
+                    </div>
+                    <div className="form-group">
+                      <label>Date End</label>
+                      <input type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} />
+                    </div>
                   </div>
-                  <div className="form-group">
-                    <label>Date End</label>
-                    <input type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} />
+                )}
+                {selectedSource === 'SharePoint' && (
+                  <div style={{ padding: '8px 12px', background: 'var(--info-dim)', border: '1px solid var(--info)', borderRadius: 6, fontSize: '.78rem', color: 'var(--info)', marginBottom: 8 }}>
+                    All items from the SharePoint list will be fetched (delta query).
                   </div>
-                </div>
+                )}
                 <div className="form-group" style={{ marginTop: 4 }}>
                   <label style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>
-                    {mappings.length} field mappings configured &middot; {selectedProject} &rarr; {destCreds.listName}
+                    {mappings.length} field mappings configured &middot; {selectedSource} &rarr; {destCreds.table || destCreds.listName || selectedDest}
                   </label>
                 </div>
                 <button
                   className="btn btn-primary"
-                  onClick={handleFetchJira}
+                  onClick={handleFetchData}
                   disabled={fetchStatus === 'fetching'}
                   style={{ marginTop: 8, width: '100%' }}
                 >
-                  {fetchStatus === 'fetching' ? 'Fetching...' : fetchStatus === 'done' ? 'Re-fetch' : 'Fetch Jira Issues'}
+                  {fetchStatus === 'fetching' ? 'Fetching...' : fetchStatus === 'done' ? 'Re-fetch' : `Fetch ${selectedSource} Data`}
                 </button>
                 {fetchError && (
                   <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--error-dim)', border: '1px solid var(--error)', borderRadius: 6, fontSize: '.82rem', color: 'var(--error)' }}>
@@ -1489,13 +1861,12 @@ export default function WizardPage() {
                   <div>
                     <div style={{ padding: '10px 14px', background: 'var(--success-dim)', border: '1px solid var(--success)', borderRadius: 8, marginBottom: 12 }}>
                       <div style={{ fontWeight: 700, color: 'var(--success)', fontSize: '.88rem' }}>
-                        &#9989; Fetched {fetchResult.totalCount} issues
+                        &#9989; Fetched {fetchResult.totalCount} {selectedSource === 'SharePoint' ? 'items' : 'issues'}
                       </div>
                       <div style={{ fontSize: '.78rem', color: 'var(--text-secondary)', marginTop: 2 }}>
                         Run ID: <span style={{ fontFamily: 'monospace' }}>{fetchResult.runId}</span>
                       </div>
                     </div>
-                    {/* Preview first few tickets */}
                     <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginBottom: 6, fontWeight: 600 }}>
                       Preview (first {Math.min(5, fetchResult.tickets.length)} of {fetchResult.totalCount})
                     </div>
@@ -1503,31 +1874,60 @@ export default function WizardPage() {
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.78rem' }}>
                         <thead>
                           <tr style={{ background: 'var(--bg-main)' }}>
-                            <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Key</th>
-                            <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Summary</th>
-                            <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Status</th>
+                            {selectedSource === 'SharePoint' ? (
+                              <>
+                                <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Item ID</th>
+                                {srcFields.slice(0, 3).map(f => (
+                                  <th key={f.name} style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>{f.displayName || f.name}</th>
+                                ))}
+                              </>
+                            ) : (
+                              <>
+                                <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Key</th>
+                                <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Summary</th>
+                                <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Status</th>
+                              </>
+                            )}
                           </tr>
                         </thead>
                         <tbody>
                           {fetchResult.tickets.slice(0, 5).map((t, i) => (
                             <tr key={i}>
-                              <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-                                {t.key || t.issueKey || '--'}
-                              </td>
-                              <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
-                                {(t.fields?.summary || t.summary || '').substring(0, 60)}
-                              </td>
-                              <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>
-                                {t.fields?.status?.name || t.status || '--'}
-                              </td>
+                              {selectedSource === 'SharePoint' ? (
+                                <>
+                                  <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                                    {t.spItemId || t.id || '--'}
+                                  </td>
+                                  {srcFields.slice(0, 3).map(f => (
+                                    <td key={f.name} style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
+                                      {String(t.fields?.[f.name] ?? '').substring(0, 50)}
+                                    </td>
+                                  ))}
+                                </>
+                              ) : (
+                                <>
+                                  <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                                    {t.key || t.issueKey || '--'}
+                                  </td>
+                                  <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
+                                    {(t.fields?.summary || t.summary || '').substring(0, 60)}
+                                  </td>
+                                  <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>
+                                    {t.fields?.status?.name || t.status || '--'}
+                                  </td>
+                                </>
+                              )}
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
                     <div style={{ marginTop: 12, fontSize: '.82rem', color: 'var(--text-secondary)' }}>
-                      Click <strong>Next</strong> to push these {fetchResult.totalCount} issues to <strong>{destCreds.listName}</strong> on SharePoint.
-                      Existing records will be updated by IssueKey; new ones will be created.
+                      {selectedDest === 'PostgreSQL' ? (
+                        <>Click <strong>Next</strong> to push {fetchResult.totalCount} items to <strong>{destCreds.table || 'auto-generated table'}</strong> in PostgreSQL. Table will be auto-created if it doesn't exist. Existing rows updated by sp_item_id.</>
+                      ) : (
+                        <>Click <strong>Next</strong> to push these {fetchResult.totalCount} issues to <strong>{destCreds.listName}</strong> on SharePoint. Existing records will be updated by IssueKey; new ones will be created.</>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1536,10 +1936,10 @@ export default function WizardPage() {
           </div>
         )}
 
-        {/* ── Step 6: Push to SharePoint ── */}
+        {/* ── Step 6: Push & Sync ── */}
         {wizardStep === 6 && (
           <div className="wizard-step active">
-            <div style={{ fontWeight: 600, marginBottom: 16, fontSize: '1rem' }}>Push to SharePoint</div>
+            <div style={{ fontWeight: 600, marginBottom: 16, fontSize: '1rem' }}>Push to {selectedDest}</div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {/* Config + Status row */}
@@ -1548,7 +1948,7 @@ export default function WizardPage() {
                 <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.9rem' }}>Push Configuration</div>
                 <div style={{ display: 'grid', gap: 10 }}>
                   <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Source:</span> <strong>{selectedProject}</strong> ({fetchResult?.totalCount || 0} issues)</div>
-                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Destination:</span> <strong>{destCreds.listName}</strong></div>
+                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Destination:</span> <strong>{destCreds.table || destCreds.listName}</strong> ({selectedDest})</div>
                   <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Site:</span> <span style={{ fontSize: '.82rem', wordBreak: 'break-all' }}>{destCreds.siteUrl}</span></div>
                   <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Mappings:</span> {mappings.length} fields</div>
                   <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Mode:</span> <strong>Upsert</strong> (update by IssueKey, create if new)</div>
@@ -1658,6 +2058,68 @@ export default function WizardPage() {
                 </div>
               )}
 
+              {/* DDL Preview — Database destination schema diff */}
+              {ddlPreview && ddlPreview.requiresApproval && ddlStatus !== 'applied' && (
+                <div className="card" style={{ padding: 20, gridColumn: '1 / -1', border: '2px solid var(--warning)', background: 'var(--bg-main)' }}>
+                  <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.9rem', color: 'var(--warning)' }}>
+                    &#9888; Schema Changes Required — DDL Preview
+                  </div>
+                  <div style={{ fontSize: '.82rem', color: 'var(--text-secondary)', marginBottom: 12 }}>
+                    The target table is missing {ddlPreview.missingColumns.length} column(s) needed by your field mapping.
+                    Review the ALTER statements below and approve to proceed.
+                  </div>
+                  <div style={{ background: '#1a1d2e', color: '#e2e4f0', padding: 14, borderRadius: 8, fontFamily: 'monospace', fontSize: '.78rem', whiteSpace: 'pre-wrap', marginBottom: 12, maxHeight: 240, overflow: 'auto' }}>
+                    {ddlPreview.ddlStatements.join('\n')}
+                  </div>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button
+                      className="btn btn-primary"
+                      disabled={ddlStatus === 'applying'}
+                      onClick={async () => {
+                        setDdlStatus('applying');
+                        setDdlError('');
+                        try {
+                          const res = await api.post('/api/hub/apply-ddl', {
+                            connection: ddlPreview._connection,
+                            ddlStatements: ddlPreview.ddlStatements,
+                          });
+                          if (res.data?.success) {
+                            setDdlStatus('applied');
+                          } else {
+                            setDdlStatus('error');
+                            setDdlError(res.data?.error || 'Failed to apply DDL');
+                          }
+                        } catch (err) {
+                          setDdlStatus('error');
+                          setDdlError(err.message || 'Network error');
+                        }
+                      }}
+                    >
+                      {ddlStatus === 'applying' ? 'Applying...' : '✓ Approve & Apply DDL'}
+                    </button>
+                    <button
+                      className="btn"
+                      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+                      onClick={() => { setDdlPreview(null); setDdlStatus('idle'); }}
+                    >
+                      ✗ Reject
+                    </button>
+                  </div>
+                  {ddlError && (
+                    <div style={{ marginTop: 8, padding: '6px 10px', background: 'var(--error-dim)', color: 'var(--error)', borderRadius: 4, fontSize: '.78rem' }}>
+                      {ddlError}
+                    </div>
+                  )}
+                </div>
+              )}
+              {ddlStatus === 'applied' && (
+                <div className="card" style={{ padding: 16, gridColumn: '1 / -1', border: '2px solid var(--success)', background: 'var(--bg-main)' }}>
+                  <span style={{ color: 'var(--success)', fontWeight: 600, fontSize: '.9rem' }}>
+                    &#10003; DDL applied successfully — {ddlPreview?.ddlStatements?.length || 0} statement(s) executed.
+                  </span>
+                </div>
+              )}
+
               {/* Right: Push status */}
               <div className="card" style={{ padding: 20, gridColumn: pushStatus === 'idle' && fetchResult?.tickets?.length > 0 ? '1 / -1' : undefined }}>
                 <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.9rem' }}>Push Status</div>
@@ -1666,13 +2128,13 @@ export default function WizardPage() {
                   <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-dim)' }}>
                     <div style={{ fontSize: '2rem', marginBottom: 8 }}>&#128640;</div>
                     <div style={{ fontSize: '.88rem' }}>Ready to push {fetchResult?.totalCount || 0} records.</div>
-                    <div style={{ fontSize: '.78rem', marginTop: 4 }}>Click <strong>Push to SharePoint</strong> below to start.</div>
+                    <div style={{ fontSize: '.78rem', marginTop: 4 }}>Click <strong>Push to {selectedDest}</strong> below to start.</div>
                     <button
                       className="btn btn-primary"
-                      onClick={handlePushToSharePoint}
+                      onClick={handlePush}
                       style={{ marginTop: 16 }}
                     >
-                      &#9654; Push to SharePoint
+                      &#9654; Push to {selectedDest}
                     </button>
                   </div>
                 )}
@@ -1709,20 +2171,49 @@ export default function WizardPage() {
                         {pushResult.status === 'success' ? '\u2705 Push Complete' : '\u274C Push Had Errors'}
                       </div>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: pushResult.skipped != null ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 12 }}>
                       <div style={{ padding: 12, background: 'var(--bg-main)', borderRadius: 6, textAlign: 'center' }}>
-                        <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>Created</div>
-                        <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--success)' }}>{pushResult.created || 0}</div>
+                        <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>Inserted</div>
+                        <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--success)' }}>{pushResult.created || pushResult.inserted || 0}</div>
                       </div>
                       <div style={{ padding: 12, background: 'var(--bg-main)', borderRadius: 6, textAlign: 'center' }}>
                         <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>Updated</div>
                         <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--primary)' }}>{pushResult.updated || 0}</div>
                       </div>
+                      {pushResult.skipped != null && (
+                        <div style={{ padding: 12, background: 'var(--bg-main)', borderRadius: 6, textAlign: 'center' }}>
+                          <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>Unchanged</div>
+                          <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text-dim)' }}>{pushResult.skipped}</div>
+                        </div>
+                      )}
                       <div style={{ padding: 12, background: 'var(--bg-main)', borderRadius: 6, textAlign: 'center' }}>
                         <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>Failed</div>
                         <div style={{ fontSize: '1.3rem', fontWeight: 800, color: pushResult.failed > 0 ? 'var(--error)' : 'var(--text-dim)' }}>{pushResult.failed || 0}</div>
                       </div>
                     </div>
+
+                    {/* Column-level diff stats (PG smart upsert) */}
+                    {pushResult.columnChanges && pushResult.columnChanges.length > 0 && (
+                      <div style={{ marginTop: 14, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+                        <div style={{ padding: '8px 14px', background: 'var(--bg-main)', fontWeight: 600, fontSize: '.78rem', borderBottom: '1px solid var(--border)' }}>
+                          Column-Level Changes ({pushResult.totalColumnsChanged || 0} cell updates across {pushResult.updated || 0} rows)
+                        </div>
+                        <div style={{ maxHeight: 180, overflowY: 'auto' }}>
+                          {pushResult.columnChanges.map(c => (
+                            <div key={c.column} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 14px', borderBottom: '1px solid var(--border)', fontSize: '.78rem' }}>
+                              <span style={{ fontFamily: 'monospace' }}>{c.column}</span>
+                              <span style={{ fontWeight: 600, color: 'var(--primary)' }}>{c.count} row{c.count !== 1 ? 's' : ''} changed</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {pushResult.skipped > 0 && (!pushResult.columnChanges || pushResult.columnChanges.length === 0) && pushResult.updated === 0 && (
+                      <div style={{ marginTop: 12, padding: '8px 14px', background: 'var(--info-dim)', border: '1px solid var(--info)', borderRadius: 6, fontSize: '.78rem', color: 'var(--info)' }}>
+                        All {pushResult.skipped} existing records are identical — no updates needed.
+                      </div>
+                    )}
+
                     <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
                       <button className="btn btn-outline" onClick={() => navigate('/connected')}>View Connected</button>
                       <button className="btn btn-outline" onClick={() => { setPushStatus('idle'); setPushResult(null); }}>Push Again</button>

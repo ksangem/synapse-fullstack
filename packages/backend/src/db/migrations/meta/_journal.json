@@ -8,6 +8,13 @@
       "when": 1775722780457,
       "tag": "0000_shallow_wonder_man",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1779272832761,
+      "tag": "0001_abandoned_paper_doll",
+      "breakpoints": true
     }
   ]
 }

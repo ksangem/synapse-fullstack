@@ -1,0 +1,65 @@
+{
+  "name": "Synapse Integration Hub",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/synapse-fullstack",
+
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    }
+  },
+
+  "forwardPorts": [5173, 4000, 5050, 5432, 6379],
+  "portsAttributes": {
+    "5173": {
+      "label": "Frontend (React)",
+      "onAutoForward": "openBrowser",
+      "visibility": "public"
+    },
+    "4000": {
+      "label": "Backend (Express API)",
+      "onAutoForward": "notify",
+      "visibility": "public"
+    },
+    "5050": {
+      "label": "pgAdmin (Database UI)",
+      "onAutoForward": "notify",
+      "visibility": "public"
+    },
+    "5432": {
+      "label": "PostgreSQL",
+      "onAutoForward": "silent"
+    },
+    "6379": {
+      "label": "Redis",
+      "onAutoForward": "silent"
+    }
+  },
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "postStartCommand": "bash .devcontainer/post-start.sh",
+
+  "remoteEnv": {
+    "DATABASE_URL": "postgresql://synapse:synapse@postgres:5432/synapse_db",
+    "REDIS_URL": "redis://redis:6379",
+    "ENCRYPTION_KEY": "0000000000000000000000000000000000000000000000000000000000000000",
+    "NODE_ENV": "development",
+    "PORT": "4000",
+    "FRONTEND_PORT": "5173"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-azuretools.vscode-docker",
+        "bradlc.vscode-tailwindcss"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}

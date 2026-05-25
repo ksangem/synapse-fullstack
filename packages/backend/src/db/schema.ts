@@ -215,3 +215,87 @@ export const jiraTickets = jiraDataSchema.table('jira_tickets', {
   normalizedTicket: jsonb('normalized_ticket').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
+
+// ═══════════════════════════════════════════════════════
+// HUB — Inbox / Outbox / DLQ / Idempotency / Source Cursors
+// Implements LLD §8 persistence model. All scoped by org_id.
+// ═══════════════════════════════════════════════════════
+
+export const envelopeStatusEnum = appSchema.enum('envelope_status', [
+  'pending',
+  'processing',
+  'done',
+  'failed',
+  'poisoned',
+]);
+
+export const inboxEntries = appSchema.table('inbox_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.orgId),
+  messageId: uuid('message_id').notNull(),
+  correlationId: uuid('correlation_id').notNull(),
+  sourceConnectorId: varchar('source_connector_id', { length: 100 }).notNull(),
+  topic: varchar('topic', { length: 200 }).notNull(),
+  sequenceNo: integer('sequence_no').notNull(),
+  checksum: varchar('checksum', { length: 64 }).notNull(),
+  envelopeJson: jsonb('envelope_json').notNull(),
+  status: envelopeStatusEnum('status').notNull().default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  processedAt: timestamp('processed_at', { withTimezone: true }),
+  error: text('error'),
+}, (table) => [
+  unique('uq_inbox_org_message').on(table.orgId, table.messageId),
+]);
+
+export const outboxEntries = appSchema.table('outbox_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.orgId),
+  messageId: uuid('message_id').notNull(),
+  destConnectorId: varchar('dest_connector_id', { length: 100 }).notNull(),
+  envelopeJson: jsonb('envelope_json').notNull(),
+  status: envelopeStatusEnum('status').notNull().default('pending'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  dispatchedAt: timestamp('dispatched_at', { withTimezone: true }),
+  error: text('error'),
+}, (table) => [
+  unique('uq_outbox_org_message_dest').on(table.orgId, table.messageId, table.destConnectorId),
+]);
+
+export const deadLetterEntries = appSchema.table('dead_letter_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.orgId),
+  messageId: uuid('message_id').notNull(),
+  correlationId: uuid('correlation_id').notNull(),
+  topic: varchar('topic', { length: 200 }).notNull(),
+  destConnectorId: varchar('dest_connector_id', { length: 100 }).notNull(),
+  envelopeJson: jsonb('envelope_json').notNull(),
+  error: text('error').notNull(),
+  retryCount: integer('retry_count').notNull().default(0),
+  status: envelopeStatusEnum('status').notNull().default('failed'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  lastReplayedAt: timestamp('last_replayed_at', { withTimezone: true }),
+});
+
+export const idempotencyEntries = appSchema.table('idempotency_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.orgId),
+  messageId: uuid('message_id').notNull(),
+  destConnectorId: varchar('dest_connector_id', { length: 100 }).notNull(),
+  processedAt: timestamp('processed_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  unique('uq_idempotency_org_message_dest').on(table.orgId, table.messageId, table.destConnectorId),
+]);
+
+export const sourceCursors = appSchema.table('source_cursors', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.orgId),
+  integrationId: uuid('integration_id').notNull()
+    .references(() => integrations.integrationId, { onDelete: 'cascade' }),
+  sourceConnectorId: varchar('source_connector_id', { length: 100 }).notNull(),
+  cursorKey: varchar('cursor_key', { length: 200 }).notNull(),
+  cursorValue: text('cursor_value').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  unique('uq_source_cursor_integration_key')
+    .on(table.integrationId, table.sourceConnectorId, table.cursorKey),
+]);

@@ -1,0 +1,63 @@
+services:
+  app:
+    image: mcr.microsoft.com/devcontainers/javascript-node:20
+    volumes:
+      - ..:/workspaces/synapse-fullstack:cached
+    command: sleep infinity
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://synapse:synapse@postgres:5432/synapse_db
+      REDIS_URL: redis://redis:6379
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      NODE_ENV: development
+      PORT: "4000"
+      FRONTEND_PORT: "5173"
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: synapse
+      POSTGRES_DB: synapse_db
+    volumes:
+      - synapse_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse -d synapse_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: qa@nalashaa.com
+      PGADMIN_DEFAULT_PASSWORD: synapse
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin-servers.json:/pgadmin4/servers.json
+
+volumes:
+  pgadmin_data:
+  synapse_pgdata:

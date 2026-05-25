@@ -8,7 +8,11 @@ import { credentials as mockCredentials } from '../data/credentials';
 import { alerts as mockAlerts } from '../data/alerts';
 import { dashboardTiles } from '../data/dashboardTiles';
 
-const API = 'http://localhost:4000';
+// Use whatever host the page was loaded from, on the backend's port 4000.
+// → On your PC (localhost:5173) it calls localhost:4000.
+// → On QA's PC (http://192.168.x.x:5173) it calls http://192.168.x.x:4000 — same host, no config.
+// Override with VITE_API_URL in an .env file if backend runs elsewhere.
+const API = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:4000`;
 
 async function fetchApi(path, options = {}) {
   try {
@@ -219,6 +223,40 @@ export const api = {
     return fetchApi(`/api/integrations/${id}`, {
       method: 'DELETE',
     });
+  },
+
+  // ── Hub: SharePoint Source ──
+  testSpSource: async (params) => {
+    return fetchApi('/api/hub/test-sp-source', { method: 'POST', body: JSON.stringify(params) });
+  },
+  discoverSpLists: async (params) => {
+    return fetchApi('/api/hub/discover-sp-lists', { method: 'POST', body: JSON.stringify(params) });
+  },
+  getSpListFields: async (params) => {
+    return fetchApi('/api/hub/sp-list-fields', { method: 'POST', body: JSON.stringify(params) });
+  },
+  fetchSpItems: async (params) => {
+    return fetchApi('/api/hub/fetch-sp-items', { method: 'POST', body: JSON.stringify(params) });
+  },
+
+  // ── Hub: PostgreSQL Destination ──
+  getPgTables: async (params) => {
+    return fetchApi('/api/hub/pg-tables', { method: 'POST', body: JSON.stringify(params) });
+  },
+  testPgDest: async (params) => {
+    return fetchApi('/api/hub/test-pg-dest', { method: 'POST', body: JSON.stringify(params) });
+  },
+  getPgTableColumns: async (params) => {
+    return fetchApi('/api/hub/pg-table-columns', { method: 'POST', body: JSON.stringify(params) });
+  },
+  pushToPg: async (params) => {
+    return fetchApi('/api/hub/push-to-pg', { method: 'POST', body: JSON.stringify(params) });
+  },
+  previewDdl: async (params) => {
+    return fetchApi('/api/hub/preview-ddl', { method: 'POST', body: JSON.stringify(params) });
+  },
+  applyDdl: async (params) => {
+    return fetchApi('/api/hub/apply-ddl', { method: 'POST', body: JSON.stringify(params) });
   },
 
   // ── Health check ──

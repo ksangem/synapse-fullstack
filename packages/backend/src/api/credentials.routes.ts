@@ -4,6 +4,9 @@ import { db } from '../db/client';
 import { credentials } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { CredentialService } from '../services/CredentialService';
+import { PostgresWriter } from '../integrations/database/writers/PostgresWriter';
+import { SqlServerWriter } from '../integrations/database/writers/SqlServerWriter';
+import type { DbConnectionConfig, DbEngine } from '../integrations/database/types';
 
 const router = Router();
 const credentialService = new CredentialService();
@@ -86,6 +89,71 @@ router.get('/:id/decrypt', async (req: Request, res: Response) => {
         authType: cred.authType,
         payload: decrypted,
       },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ success: false, error: message });
+  }
+});
+
+// POST /api/credentials/:id/test — test a stored database connection credential
+router.post('/:id/test', async (req: Request, res: Response) => {
+  try {
+    const credId = req.params.id as string;
+    const [cred] = await db.select().from(credentials).where(
+      eq(credentials.credId, credId)
+    );
+    if (!cred) {
+      res.status(404).json({ success: false, error: 'Credential not found' });
+      return;
+    }
+
+    if (cred.authType !== 'database_connection') {
+      res.status(400).json({
+        success: false,
+        error: `Test connection only supports authType "database_connection", got "${cred.authType}"`,
+      });
+      return;
+    }
+
+    const decrypted = JSON.parse(credentialService.decrypt(cred.encryptedPayload)) as DbConnectionConfig;
+    const writer = decrypted.engine === 'sqlserver' ? new SqlServerWriter() : new PostgresWriter();
+    const ok = await writer.testConnection(decrypted);
+
+    res.json({
+      success: true,
+      data: {
+        credId: cred.credId,
+        connectionOk: ok,
+        engine: decrypted.engine,
+        host: decrypted.host,
+        database: decrypted.database,
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(500).json({ success: false, error: message });
+  }
+});
+
+// POST /api/credentials/test-connection — test a database connection without saving
+router.post('/test-connection', async (req: Request, res: Response) => {
+  try {
+    const config = req.body as DbConnectionConfig;
+    if (!config.engine || !config.host || !config.database) {
+      res.status(400).json({
+        success: false,
+        error: 'Missing required fields: engine, host, database',
+      });
+      return;
+    }
+
+    const writer = config.engine === 'sqlserver' ? new SqlServerWriter() : new PostgresWriter();
+    const ok = await writer.testConnection(config);
+
+    res.json({
+      success: true,
+      data: { connectionOk: ok },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
