@@ -258,6 +258,9 @@ export const api = {
   applyDdl: async (params) => {
     return fetchApi('/api/hub/apply-ddl', { method: 'POST', body: JSON.stringify(params) });
   },
+  pgQuickView: async (params) => {
+    return fetchApi('/api/hub/pg-quick-view', { method: 'POST', body: JSON.stringify(params) });
+  },
 
   // ── Health check ──
   healthCheck: async () => {

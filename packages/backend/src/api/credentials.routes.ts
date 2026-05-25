@@ -12,7 +12,7 @@ const router = Router();
 const credentialService = new CredentialService();
 
 const createCredentialSchema = z.object({
-  orgId: z.string().uuid(),
+  orgId: z.string().min(1),
   systemName: z.string().min(1),
   authType: z.string().min(1),
   payload: z.record(z.string(), z.unknown()),

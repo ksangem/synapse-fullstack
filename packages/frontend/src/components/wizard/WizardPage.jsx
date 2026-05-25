@@ -550,6 +550,11 @@ export default function WizardPage() {
   const [ddlStatus, setDdlStatus] = useState('idle'); // idle | loading | loaded | applying | applied | error
   const [ddlError, setDdlError] = useState('');
 
+  // Step 6 — Quick View (DB lookup after push)
+  const [quickView, setQuickView] = useState(null); // { columns, rows, rowCount, totalCount, table }
+  const [quickViewLoading, setQuickViewLoading] = useState(false);
+  const [quickViewError, setQuickViewError] = useState('');
+
   const updateSrcCred = (key, val) => setSrcCreds(prev => ({ ...prev, [key]: val }));
   const updateDestCred = (key, val) => setDestCreds(prev => ({ ...prev, [key]: val }));
   const getFields = (system) => credentialFields[system] || genericCredFields;
@@ -684,6 +689,33 @@ export default function WizardPage() {
       handlePushToPg();
     } else {
       handlePushToSharePoint();
+    }
+  };
+
+  const handleQuickView = async () => {
+    setQuickViewLoading(true);
+    setQuickViewError('');
+    setQuickView(null);
+    try {
+      const res = await api.pgQuickView({
+        host: destCreds.host || 'localhost',
+        port: destCreds.port || 5555,
+        database: destCreds.database || 'synapse_db',
+        username: destCreds.username || 'synapse',
+        password: destCreds.password || 'synapse',
+        schema: destCreds.schema || 'public',
+        table: destCreds.table,
+        limit: 50,
+      });
+      if (res.ok && res.data?.success) {
+        setQuickView(res.data.data);
+      } else {
+        setQuickViewError(res.data?.error || 'Failed to query table');
+      }
+    } catch {
+      setQuickViewError('Network error');
+    } finally {
+      setQuickViewLoading(false);
     }
   };
 
@@ -2214,10 +2246,70 @@ export default function WizardPage() {
                       </div>
                     )}
 
-                    <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
                       <button className="btn btn-outline" onClick={() => navigate('/connected')}>View Connected</button>
-                      <button className="btn btn-outline" onClick={() => { setPushStatus('idle'); setPushResult(null); }}>Push Again</button>
+                      <button className="btn btn-outline" onClick={() => { setPushStatus('idle'); setPushResult(null); setQuickView(null); }}>Push Again</button>
+                      {selectedDest === 'PostgreSQL' && destCreds.table && (
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={handleQuickView}
+                          disabled={quickViewLoading}
+                          style={{ marginLeft: 'auto' }}
+                        >
+                          {quickViewLoading ? 'Loading...' : quickView ? 'Refresh View' : '\uD83D\uDD0D Quick View DB'}
+                        </button>
+                      )}
                     </div>
+
+                    {/* Quick View — SELECT * preview */}
+                    {quickViewError && (
+                      <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--error-dim)', border: '1px solid var(--error)', borderRadius: 6, fontSize: '.82rem', color: 'var(--error)' }}>
+                        {quickViewError}
+                      </div>
+                    )}
+                    {quickView && (
+                      <div style={{ marginTop: 14, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+                        <div style={{ padding: '10px 16px', background: 'var(--bg-main)', fontWeight: 600, fontSize: '.85rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span>
+                            <span style={{ fontFamily: 'monospace' }}>{quickView.table}</span>
+                            {' '}&mdash; {quickView.rowCount} of {quickView.totalCount} rows
+                          </span>
+                          <span style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>SELECT * LIMIT 50</span>
+                        </div>
+                        <div style={{ maxHeight: 400, overflow: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.74rem' }}>
+                            <thead>
+                              <tr style={{ background: 'var(--bg-main)', position: 'sticky', top: 0, zIndex: 1 }}>
+                                {quickView.columns.map(col => (
+                                  <th key={col} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: '.72rem' }}>
+                                    {col}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {quickView.rows.map((row, ri) => (
+                                <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}
+                                  onMouseEnter={e => e.currentTarget.style.background = 'var(--primary-dim)'}
+                                  onMouseLeave={e => e.currentTarget.style.background = ''}
+                                >
+                                  {quickView.columns.map(col => {
+                                    const val = row[col];
+                                    const display = val == null ? '' : typeof val === 'object' ? JSON.stringify(val) : String(val);
+                                    const truncated = display.length > 60 ? display.substring(0, 60) + '...' : display;
+                                    return (
+                                      <td key={col} title={display} style={{ padding: '5px 10px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {val == null ? <span style={{ color: 'var(--text-dim)', fontStyle: 'italic' }}>null</span> : truncated}
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 

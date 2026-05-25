@@ -11,7 +11,7 @@ const credentialService = new CredentialService();
 const router = Router();
 
 const createIntegrationSchema = z.object({
-  orgId: z.string().uuid(),
+  orgId: z.string().min(1),
   name: z.string().min(1),
   sourceConnectorId: z.string().uuid().optional(),
   destConnectorId: z.string().uuid().optional(),
@@ -49,16 +49,25 @@ router.get('/', async (_req: Request, res: Response) => {
 const saveConnectionSchema = z.object({
   name: z.string().min(1),
   endpointUrl: z.string().min(1),
-  email: z.string().min(1),
-  apiToken: z.string().min(1),
+  sourceType: z.string().optional(),
+  destType: z.string().optional(),
+  email: z.string().optional(),
+  apiToken: z.string().optional(),
   projectKey: z.string().optional(),
   siteUrl: z.string().optional(),
   listName: z.string().optional(),
+  pgHost: z.string().optional(),
+  pgPort: z.string().optional(),
+  pgDatabase: z.string().optional(),
+  pgSchema: z.string().optional(),
+  pgTable: z.string().optional(),
 });
 
 router.post('/save-connection', async (req: Request, res: Response) => {
   try {
     const body = saveConnectionSchema.parse(req.body);
+    const sourceType = body.sourceType || 'Jira';
+    const destType = body.destType || 'SharePoint';
 
     // Look for existing active integration with same endpointUrl
     const allActive = await db.select().from(integrations)
@@ -69,66 +78,95 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       return fm?.endpointUrl === body.endpointUrl;
     });
 
-    // Encrypt Jira credentials
-    const encPayload = credentialService.encrypt(JSON.stringify({
-      email: body.email,
-      apiToken: body.apiToken,
-    }));
+    // Encrypt source credentials based on source type
+    let credId: string | null = null;
+    if (sourceType === 'Jira' && body.email && body.apiToken) {
+      const encPayload = credentialService.encrypt(JSON.stringify({
+        email: body.email,
+        apiToken: body.apiToken,
+      }));
 
-    if (existing) {
-      // Update existing — delete old credential and create new one
-      const oldFm = existing.fieldMappings as Record<string, string> | null;
-      if (oldFm?.credId) {
-        await db.delete(credentials).where(eq(credentials.credId, oldFm.credId));
+      // Delete old credential if updating
+      if (existing) {
+        const oldFm = existing.fieldMappings as Record<string, string> | null;
+        if (oldFm?.credId) {
+          await db.delete(credentials).where(eq(credentials.credId, oldFm.credId));
+        }
       }
 
       const [cred] = await db.insert(credentials).values({
         orgId: '00000000-0000-0000-0000-000000000001',
-        systemName: 'Jira',
+        systemName: sourceType,
         authType: 'api_token',
         encryptedPayload: encPayload,
       }).returning();
+      credId = cred.credId;
+    } else if (sourceType === 'SharePoint') {
+      // SP source doesn't need separate credential — uses Azure env creds
+      if (existing) {
+        const oldFm = existing.fieldMappings as Record<string, string> | null;
+        if (oldFm?.credId) {
+          await db.delete(credentials).where(eq(credentials.credId, oldFm.credId));
+        }
+      }
+    }
 
-      const newFm: Record<string, unknown> = {
-        ...(oldFm ?? {}),
-        endpointUrl: body.endpointUrl,
-        credId: cred.credId,
-        authMethod: 'api_token',
-      };
-      if (body.projectKey) newFm.projectKey = body.projectKey;
-      if (body.siteUrl) newFm.siteUrl = body.siteUrl;
-      if (body.listName) newFm.listName = body.listName;
+    // Store PG destination credentials if present
+    let destCredId: string | null = null;
+    if (destType === 'PostgreSQL' && body.pgHost && body.pgDatabase) {
+      const pgPayload = credentialService.encrypt(JSON.stringify({
+        engine: 'postgres',
+        host: body.pgHost,
+        port: Number(body.pgPort) || 5432,
+        database: body.pgDatabase,
+        username: body.pgSchema || 'synapse', // fallback
+        password: '', // password not stored in save-connection for safety
+        schema: body.pgSchema || 'public',
+      }));
 
+      const [destCred] = await db.insert(credentials).values({
+        orgId: '00000000-0000-0000-0000-000000000001',
+        systemName: 'PostgreSQL',
+        authType: 'database_connection',
+        encryptedPayload: pgPayload,
+      }).returning();
+      destCredId = destCred.credId;
+    }
+
+    // Build fieldMappings object
+    const buildFm = (baseFm?: Record<string, unknown> | null): Record<string, unknown> => {
+      const fm: Record<string, unknown> = { ...(baseFm ?? {}) };
+      fm.endpointUrl = body.endpointUrl;
+      fm.sourceType = sourceType;
+      fm.destType = destType;
+      if (credId) { fm.credId = credId; fm.authMethod = 'api_token'; }
+      if (destCredId) fm.destCredId = destCredId;
+      if (body.projectKey) fm.projectKey = body.projectKey;
+      if (body.siteUrl) fm.siteUrl = body.siteUrl;
+      if (body.listName) fm.listName = body.listName;
+      if (body.pgHost) fm.pgHost = body.pgHost;
+      if (body.pgPort) fm.pgPort = body.pgPort;
+      if (body.pgDatabase) fm.pgDatabase = body.pgDatabase;
+      if (body.pgSchema) fm.pgSchema = body.pgSchema;
+      if (body.pgTable) fm.pgTable = body.pgTable;
+      return fm;
+    };
+
+    if (existing) {
+      const oldFm = existing.fieldMappings as Record<string, unknown> | null;
       const [result] = await db.update(integrations).set({
         name: body.name,
-        fieldMappings: newFm,
+        fieldMappings: buildFm(oldFm),
         updatedAt: new Date(),
       }).where(eq(integrations.integrationId, existing.integrationId)).returning();
 
       res.json({ success: true, data: result, updated: true });
     } else {
-      // Create new credential + integration
-      const [cred] = await db.insert(credentials).values({
-        orgId: '00000000-0000-0000-0000-000000000001',
-        systemName: 'Jira',
-        authType: 'api_token',
-        encryptedPayload: encPayload,
-      }).returning();
-
-      const fm: Record<string, unknown> = {
-        endpointUrl: body.endpointUrl,
-        credId: cred.credId,
-        authMethod: 'api_token',
-      };
-      if (body.projectKey) fm.projectKey = body.projectKey;
-      if (body.siteUrl) fm.siteUrl = body.siteUrl;
-      if (body.listName) fm.listName = body.listName;
-
       const [result] = await db.insert(integrations).values({
         orgId: '00000000-0000-0000-0000-000000000001',
         name: body.name,
         status: 'active',
-        fieldMappings: fm,
+        fieldMappings: buildFm(),
       }).returning();
 
       res.json({ success: true, data: result, updated: false });

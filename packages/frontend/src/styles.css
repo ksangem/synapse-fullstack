@@ -121,7 +121,8 @@ input:focus,select:focus,textarea:focus{border-color:var(--primary)}
 .main-content-wrapper{display:flex;flex:1;overflow:hidden;transition:all 0.25s ease}
 .main-content{flex:1;overflow-y:auto;padding:20px 24px;position:relative;transition:all 0.25s ease}
 .page{display:none}
-.page.active{display:block;animation:pageFadeIn 0.15s ease}
+.page.active{display:block;animation:pageFadeIn 0.15s ease;min-height:0}
+.wizard-content{min-height:0;padding-bottom:40px}
 @keyframes pageFadeIn{from{opacity:0}to{opacity:1}}
 .page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
 .page-title{font-size:1.4rem;font-weight:700}
@@ -414,7 +415,7 @@ html.dark-theme .json-bool{color:#c084fc}
 .mapper-toolbar .mapper-stats{font-size:.82rem;color:var(--text-secondary)}
 .mapper-toolbar .mapper-stats strong{color:var(--primary)}
 
-.mapper-layout{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:0;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;height:calc(100vh - 330px);min-height:460px}
+.mapper-layout{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:0;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;height:calc(100vh - 340px);min-height:400px;max-height:calc(100vh - 280px)}
 .mapper-col{display:flex;flex-direction:column;background:var(--bg-card);overflow:hidden}
 .mapper-col:not(:last-child){border-right:1px solid var(--border)}
 

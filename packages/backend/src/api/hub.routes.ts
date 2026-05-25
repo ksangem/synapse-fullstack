@@ -509,6 +509,62 @@ router.post('/apply-ddl', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * POST /api/hub/pg-quick-view
+ * Run SELECT * FROM table LIMIT N and return rows + column names.
+ * Used for the "Quick View" lookup after a push.
+ */
+router.post('/pg-quick-view', async (req: Request, res: Response) => {
+  try {
+    const { host, port, database, username, password, schema, table, limit } = req.body;
+    if (!host || !database || !table) {
+      res.status(400).json({ success: false, error: 'Missing required fields: host, database, table' });
+      return;
+    }
+    const rowLimit = Math.min(Number(limit) || 50, 200); // cap at 200 rows
+    const targetSchema = schema || 'public';
+
+    const writer = new PostgresWriter();
+    await writer.connect({ engine: 'postgres', host, port: Number(port), database, username, password });
+    try {
+      // Try ordering by synced_at (push tables), fallback to no order
+      let result;
+      try {
+        result = await (writer as any).pool!.query(
+          `SELECT * FROM "${targetSchema}"."${table}" ORDER BY synced_at DESC NULLS LAST LIMIT $1`,
+          [rowLimit],
+        );
+      } catch {
+        result = await (writer as any).pool!.query(
+          `SELECT * FROM "${targetSchema}"."${table}" LIMIT $1`,
+          [rowLimit],
+        );
+      }
+
+      // Also get total row count
+      const countResult = await (writer as any).pool!.query(
+        `SELECT count(*)::int AS total FROM "${targetSchema}"."${table}"`,
+      );
+
+      const columns = result.fields.map((f: any) => f.name);
+      res.json({
+        success: true,
+        data: {
+          columns,
+          rows: result.rows,
+          rowCount: result.rows.length,
+          totalCount: countResult.rows[0]?.total || 0,
+          table: `${targetSchema}.${table}`,
+        },
+      });
+    } finally {
+      await writer.disconnect();
+    }
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // ═══════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════
