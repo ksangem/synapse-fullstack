@@ -262,6 +262,23 @@ export const api = {
     return fetchApi('/api/hub/pg-quick-view', { method: 'POST', body: JSON.stringify(params) });
   },
 
+  // ── Hub: MySQL Destination ──
+  testMysqlDest: async (params) => {
+    return fetchApi('/api/hub/test-mysql-dest', { method: 'POST', body: JSON.stringify(params) });
+  },
+  getMysqlTables: async (params) => {
+    return fetchApi('/api/hub/mysql-tables', { method: 'POST', body: JSON.stringify(params) });
+  },
+  getMysqlTableColumns: async (params) => {
+    return fetchApi('/api/hub/mysql-table-columns', { method: 'POST', body: JSON.stringify(params) });
+  },
+  pushToMysql: async (params) => {
+    return fetchApi('/api/hub/push-to-mysql', { method: 'POST', body: JSON.stringify(params) });
+  },
+  mysqlQuickView: async (params) => {
+    return fetchApi('/api/hub/mysql-quick-view', { method: 'POST', body: JSON.stringify(params) });
+  },
+
   // ── Health check ──
   healthCheck: async () => {
     return fetchApi('/health');

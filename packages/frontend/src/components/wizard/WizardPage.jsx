@@ -16,6 +16,7 @@ const destCards = [
   { icon: '\u2699', label: 'TFS' },
   { icon: '\u{1F4C1}', label: 'SharePoint' },
   { icon: '\u{1F5C3}', label: 'PostgreSQL' },
+  { icon: '\u{1F42C}', label: 'MySQL' },
   { icon: '\u{1F4C5}', label: 'Holiday Tracker' },
   { icon: '\u{1F517}', label: 'Ahrefs' },
   { icon: '\u{1F50D}', label: 'GSC' },
@@ -42,6 +43,15 @@ const credentialFields = {
     { key: 'username', label: 'Username', type: 'text', placeholder: 'synapse', defaultValue: 'synapse' },
     { key: 'password', label: 'Password', type: 'password', placeholder: 'Database password', defaultValue: 'synapse' },
     { key: 'schema', label: 'Schema', type: 'text', placeholder: 'public', defaultValue: 'public' },
+    { key: 'table', label: 'Target Table', type: 'text', placeholder: 'e.g. sp_invoice (auto-created if missing)' },
+  ],
+  MySQL: [
+    { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'e.g. MySQL Production' },
+    { key: 'host', label: 'Host', type: 'text', placeholder: 'localhost', defaultValue: 'localhost' },
+    { key: 'port', label: 'Port', type: 'text', placeholder: '3307', defaultValue: '3307' },
+    { key: 'database', label: 'Database', type: 'text', placeholder: 'synapse_db', defaultValue: 'synapse_db' },
+    { key: 'username', label: 'Username', type: 'text', placeholder: 'synapse', defaultValue: 'synapse' },
+    { key: 'password', label: 'Password', type: 'password', placeholder: 'Database password', defaultValue: 'synapse' },
     { key: 'table', label: 'Target Table', type: 'text', placeholder: 'e.g. sp_invoice (auto-created if missing)' },
   ],
 };
@@ -631,7 +641,7 @@ export default function WizardPage() {
     if (wizardStep === 2 && (srcTestStatus !== 'connected' || destTestStatus !== 'connected')) return;
     if (wizardStep === 3 && !selectedEntity) return;
     // Sync PG table selection to destCreds before moving to step 4
-    if (wizardStep === 3 && selectedDest === 'PostgreSQL') {
+    if (wizardStep === 3 && (selectedDest === 'PostgreSQL' || selectedDest === 'MySQL')) {
       const tbl = createNewTable ? newTableName : selectedPgTable;
       if (!tbl) return; // must pick a table
       setDestCreds(prev => ({ ...prev, table: tbl }));
@@ -687,6 +697,8 @@ export default function WizardPage() {
   const handlePush = async () => {
     if (selectedDest === 'PostgreSQL') {
       handlePushToPg();
+    } else if (selectedDest === 'MySQL') {
+      handlePushToMysql();
     } else {
       handlePushToSharePoint();
     }
@@ -697,9 +709,10 @@ export default function WizardPage() {
     setQuickViewError('');
     setQuickView(null);
     try {
-      const res = await api.pgQuickView({
+      const apiFn = selectedDest === 'MySQL' ? api.mysqlQuickView : api.pgQuickView;
+      const res = await apiFn({
         host: destCreds.host || 'localhost',
-        port: destCreds.port || 5555,
+        port: destCreds.port || (selectedDest === 'MySQL' ? 3307 : 5555),
         database: destCreds.database || 'synapse_db',
         username: destCreds.username || 'synapse',
         password: destCreds.password || 'synapse',
@@ -754,6 +767,59 @@ export default function WizardPage() {
         const d = result.data.data;
         setPushResult({
           pushRunId: 'pg-' + Date.now(),
+          total: d.total,
+          status: 'success',
+          created: d.inserted,
+          updated: d.updated,
+          skipped: d.skipped || 0,
+          failed: d.errors,
+          tableCreated: d.tableCreated,
+          totalColumnsChanged: d.totalColumnsChanged || 0,
+          columnChanges: d.columnChanges || [],
+        });
+        setPushStatus('done');
+      } else {
+        setPushError(result.data?.error || 'Push failed');
+        setPushStatus('error');
+      }
+    } catch (err) {
+      setPushError('Network error during push');
+      setPushStatus('error');
+    }
+  };
+
+  const handlePushToMysql = async () => {
+    if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
+    setPushStatus('pushing');
+    setPushError('');
+    setPushResult(null);
+    try {
+      const mysqlCfg = destConnectionData || destCreds;
+      const targetTable = destCreds.table || 'sp_data';
+
+      const dbMappings = mappings.map(m => ({
+        from: m.sources[0] || '',
+        to: m.destinations[0] || '',
+        type: mapSpTypeToPgType(m.srcTypes?.[0] || 'text'),
+      }));
+
+      const result = await api.pushToMysql({
+        spConfig: {
+          siteId: srcConnectionData?.siteId,
+          listId: selectedEntity,
+        },
+        mysqlConfig: {
+          host: mysqlCfg.host, port: Number(mysqlCfg.port) || 3306,
+          database: mysqlCfg.database, username: mysqlCfg.username, password: mysqlCfg.password,
+        },
+        targetTable,
+        mappings: dbMappings,
+      });
+
+      if (result.ok && result.data?.success) {
+        const d = result.data.data;
+        setPushResult({
+          pushRunId: 'mysql-' + Date.now(),
           total: d.total,
           status: 'success',
           created: d.inserted,
@@ -903,6 +969,15 @@ export default function WizardPage() {
           setDestTestStatus('connected');
           setDestTestMsg(`Connected to ${host}:${port || 5432}/${database}`);
           setDestConnectionData({ host, port: Number(port) || 5432, database, username, password, schema: destCreds.schema || 'public', table: destCreds.table });
+        } else { setDestTestStatus('error'); setDestTestMsg('Connection failed \u2014 check credentials'); }
+      } else if (selectedDest === 'MySQL') {
+        const { host, port, database, username, password } = destCreds;
+        if (!host || !database || !username) { setDestTestStatus('error'); setDestTestMsg('Please fill in Host, Database, and Username'); return; }
+        const result = await api.testMysqlDest({ host, port: Number(port) || 3306, database, username, password });
+        if (result.ok && result.data?.data?.connectionOk) {
+          setDestTestStatus('connected');
+          setDestTestMsg(`Connected to ${host}:${port || 3306}/${database}`);
+          setDestConnectionData({ host, port: Number(port) || 3306, database, username, password, table: destCreds.table });
         } else { setDestTestStatus('error'); setDestTestMsg('Connection failed \u2014 check credentials'); }
       } else { setDestTestStatus('error'); setDestTestMsg(`${selectedDest} not yet supported.`); }
     } catch { setDestTestStatus('error'); setDestTestMsg('Connection failed.'); }
@@ -1059,20 +1134,21 @@ export default function WizardPage() {
         }
         setEntitiesLoading(false);
 
-        // Also load PG tables if destination is PostgreSQL
-        if (selectedDest === 'PostgreSQL') {
-          const pgCfg = destConnectionData || destCreds;
-          if (pgCfg.host && pgCfg.database) {
+        // Also load DB tables if destination is PostgreSQL or MySQL
+        if (selectedDest === 'PostgreSQL' || selectedDest === 'MySQL') {
+          const dbCfg = destConnectionData || destCreds;
+          if (dbCfg.host && dbCfg.database) {
             setPgTablesLoading(true);
-            const pgResult = await api.getPgTables({
-              host: pgCfg.host, port: Number(pgCfg.port) || 5555,
-              database: pgCfg.database, username: pgCfg.username, password: pgCfg.password,
-              schema: destCreds.schema || 'public',
+            const apiFn = selectedDest === 'MySQL' ? api.getMysqlTables : api.getPgTables;
+            const dbResult = await apiFn({
+              host: dbCfg.host, port: Number(dbCfg.port) || (selectedDest === 'MySQL' ? 3306 : 5555),
+              database: dbCfg.database, username: dbCfg.username, password: dbCfg.password,
+              schema: selectedDest === 'MySQL' ? undefined : (destCreds.schema || 'public'),
             });
-            if (pgResult.ok && pgResult.data?.success) {
-              setPgTables(pgResult.data.data?.tables || []);
+            if (dbResult.ok && dbResult.data?.success) {
+              setPgTables(dbResult.data.data?.tables || []);
               if (destCreds.table) {
-                const match = (pgResult.data.data?.tables || []).find(t => t.name === destCreds.table);
+                const match = (dbResult.data.data?.tables || []).find(t => t.name === destCreds.table);
                 if (match) setSelectedPgTable(match.name);
                 else { setCreateNewTable(true); setNewTableName(destCreds.table); }
               }
@@ -1123,8 +1199,8 @@ export default function WizardPage() {
           }));
           setDestFields(spf);
         }
-      } else if (selectedSource === 'SharePoint' && selectedDest === 'PostgreSQL') {
-        // SP → PG flow: source = SP list fields, dest = PG table columns (or empty for auto-create)
+      } else if (selectedSource === 'SharePoint' && (selectedDest === 'PostgreSQL' || selectedDest === 'MySQL')) {
+        // SP → DB flow: source = SP list fields, dest = DB table columns (or empty for auto-create)
         const srcResult = await api.getSpListFields({
           siteId: srcConnectionData?.siteId, listId: selectedEntity,
         });
@@ -1132,13 +1208,15 @@ export default function WizardPage() {
           setSrcFields(srcResult.data.data?.fields || []);
         }
 
-        // Try to load existing PG table columns (if table exists)
-        const pgCfg = destConnectionData || destCreds;
-        if (pgCfg.host && pgCfg.database && destCreds.table) {
-          const destResult = await api.getPgTableColumns({
-            host: pgCfg.host, port: Number(pgCfg.port) || 5432,
-            database: pgCfg.database, username: pgCfg.username, password: pgCfg.password,
-            schema: destCreds.schema || 'public', table: destCreds.table,
+        // Try to load existing DB table columns (if table exists)
+        const dbCfg = destConnectionData || destCreds;
+        if (dbCfg.host && dbCfg.database && destCreds.table) {
+          const colApiFn = selectedDest === 'MySQL' ? api.getMysqlTableColumns : api.getPgTableColumns;
+          const destResult = await colApiFn({
+            host: dbCfg.host, port: Number(dbCfg.port) || (selectedDest === 'MySQL' ? 3306 : 5432),
+            database: dbCfg.database, username: dbCfg.username, password: dbCfg.password,
+            schema: selectedDest === 'MySQL' ? undefined : (destCreds.schema || 'public'),
+            table: destCreds.table,
           });
           if (destResult.ok && destResult.data?.success && destResult.data.data?.exists) {
             setDestFields(destResult.data.data.columns || []);
@@ -1527,7 +1605,7 @@ export default function WizardPage() {
                 <div className="loader-text">Loading {selectedSource === 'SharePoint' ? 'lists' : 'entities'} from {selectedSource}...</div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: selectedDest === 'PostgreSQL' ? '1fr 1fr' : '1fr', gap: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: (selectedDest === 'PostgreSQL' || selectedDest === 'MySQL') ? '1fr 1fr' : '1fr', gap: 20 }}>
 
                 {/* ── LEFT: Source list/entity picker ── */}
                 <div className="card" style={{ padding: 16 }}>
@@ -1587,11 +1665,11 @@ export default function WizardPage() {
                   )}
                 </div>
 
-                {/* ── RIGHT: Destination table picker (PostgreSQL only) ── */}
-                {selectedDest === 'PostgreSQL' && (
+                {/* ── RIGHT: Destination table picker (PostgreSQL / MySQL) ── */}
+                {(selectedDest === 'PostgreSQL' || selectedDest === 'MySQL') && (
                   <div className="card" style={{ padding: 16 }}>
                     <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 10 }}>
-                      PostgreSQL Destination Table
+                      {selectedDest} Destination Table
                     </div>
 
                     {/* Toggle: existing vs new */}
@@ -1684,7 +1762,7 @@ export default function WizardPage() {
             {/* Validation messages */}
             {!selectedEntity && entities.length > 0 && (
               <div style={{ color: 'var(--text-dim)', fontSize: '.85rem', marginTop: 16, textAlign: 'center' }}>
-                {selectedDest === 'PostgreSQL'
+                {(selectedDest === 'PostgreSQL' || selectedDest === 'MySQL')
                   ? 'Select a source list and destination table to continue'
                   : 'Select an entity to continue'}
               </div>
@@ -1955,8 +2033,8 @@ export default function WizardPage() {
                       </table>
                     </div>
                     <div style={{ marginTop: 12, fontSize: '.82rem', color: 'var(--text-secondary)' }}>
-                      {selectedDest === 'PostgreSQL' ? (
-                        <>Click <strong>Next</strong> to push {fetchResult.totalCount} items to <strong>{destCreds.table || 'auto-generated table'}</strong> in PostgreSQL. Table will be auto-created if it doesn't exist. Existing rows updated by sp_item_id.</>
+                      {(selectedDest === 'PostgreSQL' || selectedDest === 'MySQL') ? (
+                        <>Click <strong>Next</strong> to push {fetchResult.totalCount} items to <strong>{destCreds.table || 'auto-generated table'}</strong> in {selectedDest}. Table will be auto-created if it doesn't exist. Existing rows updated by sp_item_id.</>
                       ) : (
                         <>Click <strong>Next</strong> to push these {fetchResult.totalCount} issues to <strong>{destCreds.listName}</strong> on SharePoint. Existing records will be updated by IssueKey; new ones will be created.</>
                       )}
@@ -2249,7 +2327,7 @@ export default function WizardPage() {
                     <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
                       <button className="btn btn-outline" onClick={() => navigate('/connected')}>View Connected</button>
                       <button className="btn btn-outline" onClick={() => { setPushStatus('idle'); setPushResult(null); setQuickView(null); }}>Push Again</button>
-                      {selectedDest === 'PostgreSQL' && destCreds.table && (
+                      {(selectedDest === 'PostgreSQL' || selectedDest === 'MySQL') && destCreds.table && (
                         <button
                           className="btn btn-primary btn-sm"
                           onClick={handleQuickView}

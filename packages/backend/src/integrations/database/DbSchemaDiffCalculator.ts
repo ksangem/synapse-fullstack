@@ -61,10 +61,13 @@ export class DbSchemaDiffCalculator {
 
     // Check is_deleted column if propagateDeletes might be used
     if (!existingNames.has('is_deleted')) {
+      const boolType = engine === 'postgres' ? 'BOOLEAN DEFAULT false'
+        : engine === 'mysql' ? 'TINYINT(1) DEFAULT 0'
+        : 'BIT DEFAULT 0';
       missingColumns.push({
         columnName: 'is_deleted',
         mappingType: 'boolean',
-        suggestedDbType: engine === 'sqlserver' ? 'BIT DEFAULT 0' : 'BOOLEAN DEFAULT false',
+        suggestedDbType: boolType,
       });
     }
 
@@ -95,6 +98,17 @@ function resolveDbType(mappingType: string, engine: DbEngine): string {
     }
   }
 
+  if (engine === 'mysql') {
+    switch (mappingType) {
+      case 'string': return 'TEXT';
+      case 'number': return 'DECIMAL(18,4)';
+      case 'boolean': return 'TINYINT(1) DEFAULT 0';
+      case 'datetime': return 'DATETIME';
+      case 'json': return 'JSON';
+      default: return 'TEXT';
+    }
+  }
+
   // SQL Server
   switch (mappingType) {
     case 'string': return 'NVARCHAR(MAX)';
@@ -115,6 +129,9 @@ function generateAlterAdd(
 ): string {
   if (engine === 'postgres') {
     return `ALTER TABLE "${schema}"."${table}" ADD COLUMN "${columnName}" ${dbType};`;
+  }
+  if (engine === 'mysql') {
+    return `ALTER TABLE \`${schema}\`.\`${table}\` ADD COLUMN \`${columnName}\` ${dbType};`;
   }
   return `ALTER TABLE [${schema}].[${table}] ADD [${columnName}] ${dbType};`;
 }

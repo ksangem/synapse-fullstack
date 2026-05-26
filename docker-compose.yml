@@ -18,6 +18,24 @@ services:
       timeout: 5s
       retries: 5
 
+  mysql:
+    image: mysql:8.0
+    container_name: synapse-mysql
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: synapse
+      MYSQL_DATABASE: synapse_db
+      MYSQL_USER: synapse
+      MYSQL_PASSWORD: synapse
+    volumes:
+      - synapse_mysqldata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   redis:
     image: redis:7-alpine
     container_name: synapse-redis
@@ -31,3 +49,4 @@ services:
 
 volumes:
   synapse_pgdata:
+  synapse_mysqldata:

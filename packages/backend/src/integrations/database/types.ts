@@ -2,7 +2,7 @@
  * Database destination connector types.
  */
 
-export type DbEngine = 'postgres' | 'sqlserver';
+export type DbEngine = 'postgres' | 'sqlserver' | 'mysql';
 
 export interface DbConnectionConfig {
   engine: DbEngine;
