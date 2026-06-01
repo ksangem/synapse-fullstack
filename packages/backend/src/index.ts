@@ -1,5 +1,6 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
+import path from 'path';
 import { config } from './config';
 import apiRouter from './api/router';
 
@@ -14,9 +15,11 @@ app.get('/health', (_req: Request, res: Response) => {
 
 app.use('/api', apiRouter);
 
-// 404 handler
-app.use((_req: Request, res: Response) => {
-  res.status(404).json({ success: false, error: `Route not found: ${_req.method} ${_req.path}` });
+// Serve React frontend in production/QA
+const frontendDist = path.resolve(__dirname, '../../../frontend/dist');
+app.use(express.static(frontendDist));
+app.get('*', (_req: Request, res: Response) => {
+  res.sendFile(path.join(frontendDist, 'index.html'));
 });
 
 app.listen(config.PORT, '0.0.0.0', () => {
