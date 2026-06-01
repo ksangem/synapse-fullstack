@@ -158,8 +158,9 @@ export class FlatironScraper {
           { url: apiUrl, jql, fields, startAt, maxResults }
         );
 
-        allIssues.push(...(response.issues ?? []));
-        if (startAt + maxResults >= (response.total ?? 0)) break;
+        const data = response as { issues?: RawJiraTicket[]; total?: number };
+        allIssues.push(...(data.issues ?? []));
+        if (startAt + maxResults >= (data.total ?? 0)) break;
         startAt += maxResults;
       }
 

@@ -10,7 +10,7 @@ router.get('/:runId', async (req: Request, res: Response) => {
   try {
     const [run] = await db.select()
       .from(runs)
-      .where(eq(runs.runId, req.params.runId));
+      .where(eq(runs.runId, req.params.runId as string));
 
     if (!run) {
       res.status(404).json({ success: false, error: 'Run not found' });
@@ -19,7 +19,7 @@ router.get('/:runId', async (req: Request, res: Response) => {
 
     const tickets = await db.select()
       .from(jiraTickets)
-      .where(eq(jiraTickets.runId, req.params.runId));
+      .where(eq(jiraTickets.runId, req.params.runId as string));
 
     res.json({ success: true, data: { ...run, tickets } });
   } catch (err) {

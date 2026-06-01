@@ -146,7 +146,7 @@ export async function launchBrowserAuth(config: BrowserAuthConfig): Promise<Auth
     try {
       await page.waitForFunction(
         (baseUrl: string) => {
-          const url = window.location.href;
+          const url = (globalThis as any).location.href as string;
           // Jira Cloud patterns after successful login
           return (
             url.includes('/jira/') ||
@@ -207,7 +207,7 @@ export async function launchBrowserAuth(config: BrowserAuthConfig): Promise<Auth
     currentAuthStatus = { phase: 'authenticated', user: userName };
     return session;
   } catch (err) {
-    if (currentAuthStatus.phase !== 'timeout') {
+    if ((currentAuthStatus as AuthStatus).phase !== 'timeout') {
       currentAuthStatus = {
         phase: 'error',
         message: err instanceof Error ? err.message : 'Unknown error',

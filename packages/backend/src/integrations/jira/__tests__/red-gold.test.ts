@@ -42,7 +42,7 @@ describe('RedGoldDataExtractor', () => {
 
   beforeEach(() => {
     fetchMock = vi.fn();
-    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(fetchMock as typeof fetch);
   });
 
   it('paginates across 3 pages of results', async () => {

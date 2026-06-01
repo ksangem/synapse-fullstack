@@ -52,10 +52,10 @@ const sampleIssue = {
     },
     priority: { name: 'High' },
     issuetype: { name: 'Story', subtask: false, hierarchyLevel: 0 },
-    resolution: null,
+    resolution: undefined,
     created: '2026-03-15T10:30:00.000+0530',
     updated: '2026-04-20T14:15:00.000+0530',
-    resolutiondate: null,
+    resolutiondate: undefined,
     labels: ['frontend', 'ux', 'sprint-5'],
     customfield_10016: 8,  // story points
     customfield_10020: [{

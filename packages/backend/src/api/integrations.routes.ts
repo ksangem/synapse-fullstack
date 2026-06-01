@@ -182,7 +182,7 @@ router.get('/:id', async (req: Request, res: Response) => {
   try {
     const [result] = await db.select()
       .from(integrations)
-      .where(eq(integrations.integrationId, req.params.id));
+      .where(eq(integrations.integrationId, req.params.id as string));
 
     if (!result) {
       res.status(404).json({ success: false, error: 'Integration not found' });
@@ -279,7 +279,7 @@ router.delete('/:id', async (req: Request, res: Response) => {
 // POST /api/integrations/:id/run — trigger manual run
 router.post('/:id/run', async (req: Request, res: Response) => {
   try {
-    const integrationId = req.params.id;
+    const integrationId = req.params.id as string;
 
     // Create a run record
     const [run] = await db.insert(runs).values({
@@ -310,7 +310,7 @@ router.get('/:id/runs', async (req: Request, res: Response) => {
 
     const results = await db.select()
       .from(runs)
-      .where(eq(runs.integrationId, req.params.id))
+      .where(eq(runs.integrationId, req.params.id as string))
       .orderBy(desc(runs.startedAt))
       .limit(limit)
       .offset(offset);

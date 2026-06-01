@@ -67,7 +67,7 @@ export class MySqlWriter implements IDbWriter {
       sql = `INSERT IGNORE INTO ${qualifiedTable} (${columnList}) VALUES (${placeholderList})`;
     }
 
-    const [result] = await this.pool!.execute(sql, values) as any;
+    const [result] = await this.pool!.execute(sql, values as any[]) as any;
 
     // MySQL affectedRows: 1 = inserted, 2 = updated, 0 = no change
     if (result.affectedRows === 0) {
@@ -108,7 +108,7 @@ export class MySqlWriter implements IDbWriter {
     if (existingRows.length === 0) {
       // INSERT — new row
       const placeholders = columns.map(() => '?');
-      const values = columns.map((col) => row[col]);
+      const values = columns.map((col) => row[col]) as any[];
       const columnList = columns.map((c) => `\`${c}\``).join(', ');
       await this.pool!.execute(
         `INSERT INTO ${qualifiedTable} (${columnList}) VALUES (${placeholders.join(', ')})`,
@@ -154,7 +154,7 @@ export class MySqlWriter implements IDbWriter {
     changedValues.push(naturalKeyValue);
     await this.pool!.execute(
       `UPDATE ${qualifiedTable} SET ${setClauses.join(', ')} WHERE \`${naturalKeyColumn}\` = ?`,
-      changedValues,
+      changedValues as any[],
     );
 
     return { action: 'updated', naturalKey: naturalKeyValue, changedColumns };

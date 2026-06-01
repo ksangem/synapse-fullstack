@@ -540,7 +540,7 @@ describe('E2E: SP source → transform → DB destination', () => {
       connect: vi.fn(async () => {}),
       upsert: vi.fn(async (_s, _t, _nk, r) => {
         upsertedRows.push(r as Record<string, unknown>);
-        return { action: 'inserted', naturalKey: String((r as Record<string, unknown>).sp_item_id) };
+        return { action: 'inserted' as const, naturalKey: String((r as Record<string, unknown>).sp_item_id) };
       }),
       introspect: vi.fn(async () => ({ schema: 'public', table: 'projects', columns: [], exists: true })),
       applyDdl: vi.fn(async () => {}),

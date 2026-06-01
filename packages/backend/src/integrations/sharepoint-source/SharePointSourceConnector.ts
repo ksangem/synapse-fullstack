@@ -5,7 +5,7 @@
  * for each changed item. The delta cursor is persisted via SourceCursorRepository.
  */
 
-import type { ISourceConnector, MessageEnvelope } from '../../hub/interfaces';
+import type { ISourceConnector, MessageEnvelope, JsonValue } from '../../hub/interfaces';
 import { createEnvelope } from '../../hub/envelope';
 import { SharePointGraphReader } from './SharePointGraphReader';
 import { SharePointFieldTypeMapper } from './SharePointFieldTypeMapper';
@@ -80,7 +80,7 @@ export class SharePointSourceConnector implements ISourceConnector {
         payload: {
           spItemId: mapped.spItemId,
           event: mapped.event,
-          fields: mapped.fields,
+          fields: mapped.fields as Record<string, JsonValue>,
           createdDateTime: rawItem.createdDateTime,
           lastModifiedDateTime: rawItem.lastModifiedDateTime,
         },

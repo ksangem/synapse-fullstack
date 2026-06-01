@@ -396,7 +396,7 @@ router.get('/runs', async (_req: Request, res: Response) => {
 router.get('/runs/:pushRunId', async (req: Request, res: Response) => {
   try {
     const [pushRun] = await db.select().from(sharepointPushRuns)
-      .where(eq(sharepointPushRuns.pushRunId, req.params.pushRunId));
+      .where(eq(sharepointPushRuns.pushRunId, req.params.pushRunId as string));
     if (!pushRun) {
       res.status(404).json({ success: false, error: 'Push run not found' });
       return;

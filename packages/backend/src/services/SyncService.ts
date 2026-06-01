@@ -203,7 +203,7 @@ export async function runSync(
 
         // Use user-defined MappingConfig if available in fieldMappings, else default mapper
         const userMappingConfig = (fieldMappings as Record<string, unknown>)?.mappings
-          ? (fieldMappings as MappingConfig)
+          ? (fieldMappings as unknown as MappingConfig)
           : null;
         const mapped = userMappingConfig?.mappings?.length
           ? applyMappings(issue, userMappingConfig)

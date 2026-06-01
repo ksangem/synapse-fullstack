@@ -299,7 +299,7 @@ router.post('/browser-fetch', async (req: Request, res: Response) => {
 
       while (true) {
         const params = new URLSearchParams({ jql, maxResults: String(maxResults), fields, startAt: String(startAt) });
-        let apiRes: Response;
+        let apiRes: globalThis.Response;
         try {
           // Try new endpoint first, fall back to old (30s timeout per page)
           apiRes = await fetchWithCookies(session, `/rest/api/3/search/jql?${params}`, 30000);
@@ -651,7 +651,7 @@ router.get('/projects/:integrationId', async (req: Request, res: Response) => {
 
     // Load integration + decrypt credentials
     const [integration] = await db.select().from(integrations)
-      .where(eq(integrations.integrationId, integrationId));
+      .where(eq(integrations.integrationId, integrationId as string));
 
     if (!integration) {
       res.status(404).json({ success: false, error: 'Integration not found' });
@@ -911,7 +911,7 @@ router.get('/runs', async (_req: Request, res: Response) => {
 router.get('/runs/:runId/tickets', async (req: Request, res: Response) => {
   try {
     const tickets = await db.select().from(jiraTickets)
-      .where(eq(jiraTickets.runId, req.params.runId));
+      .where(eq(jiraTickets.runId, req.params.runId as string));
     res.json({ success: true, data: tickets });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
