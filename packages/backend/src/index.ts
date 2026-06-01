@@ -18,7 +18,7 @@ app.use('/api', apiRouter);
 // Serve React frontend in production/QA
 const frontendDist = path.resolve(__dirname, '../../../frontend/dist');
 app.use(express.static(frontendDist));
-app.get('*', (_req: Request, res: Response) => {
+app.use((_req: Request, res: Response) => {
   res.sendFile(path.join(frontendDist, 'index.html'));
 });
 
