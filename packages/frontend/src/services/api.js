@@ -279,6 +279,23 @@ export const api = {
     return fetchApi('/api/hub/mysql-quick-view', { method: 'POST', body: JSON.stringify(params) });
   },
 
+  // ── Hub: SQL Server Destination ──
+  testMssqlDest: async (params) => {
+    return fetchApi('/api/hub/test-mssql-dest', { method: 'POST', body: JSON.stringify(params) });
+  },
+  getMssqlTables: async (params) => {
+    return fetchApi('/api/hub/mssql-tables', { method: 'POST', body: JSON.stringify(params) });
+  },
+  getMssqlTableColumns: async (params) => {
+    return fetchApi('/api/hub/mssql-table-columns', { method: 'POST', body: JSON.stringify(params) });
+  },
+  pushToMssql: async (params) => {
+    return fetchApi('/api/hub/push-to-mssql', { method: 'POST', body: JSON.stringify(params) });
+  },
+  mssqlQuickView: async (params) => {
+    return fetchApi('/api/hub/mssql-quick-view', { method: 'POST', body: JSON.stringify(params) });
+  },
+
   // ── Health check ──
   healthCheck: async () => {
     return fetchApi('/health');

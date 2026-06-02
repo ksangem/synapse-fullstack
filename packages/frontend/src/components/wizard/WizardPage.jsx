@@ -17,6 +17,7 @@ const destCards = [
   { icon: '\u{1F4C1}', label: 'SharePoint' },
   { icon: '\u{1F5C3}', label: 'PostgreSQL' },
   { icon: '\u{1F42C}', label: 'MySQL' },
+  { icon: '\u{1F5A5}', label: 'SQL Server' },
   { icon: '\u{1F4C5}', label: 'Holiday Tracker' },
   { icon: '\u{1F517}', label: 'Ahrefs' },
   { icon: '\u{1F50D}', label: 'GSC' },
@@ -34,6 +35,9 @@ const credentialFields = {
     { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'e.g. SharePoint Production' },
     { key: 'siteUrl', label: 'Site URL', type: 'text', placeholder: 'https://yourorg.sharepoint.com/sites/projects' },
     { key: 'listName', label: 'List Name', type: 'text', placeholder: 'e.g. Invoice' },
+    { key: 'tenantId', label: 'Azure Tenant ID', type: 'text', placeholder: 'Directory (tenant) ID' },
+    { key: 'clientId', label: 'Azure Client ID', type: 'text', placeholder: 'Application (client) ID' },
+    { key: 'clientSecret', label: 'Azure Client Secret', type: 'password', placeholder: 'App registration client secret' },
   ],
   PostgreSQL: [
     { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'e.g. Synapse Postgres' },
@@ -54,7 +58,28 @@ const credentialFields = {
     { key: 'password', label: 'Password', type: 'password', placeholder: 'Database password', defaultValue: 'synapse' },
     { key: 'table', label: 'Target Table', type: 'text', placeholder: 'e.g. sp_invoice (auto-created if missing)' },
   ],
+  'SQL Server': [
+    { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'e.g. SQL Server Production' },
+    { key: 'host', label: 'Host', type: 'text', placeholder: 'localhost', defaultValue: 'localhost' },
+    { key: 'port', label: 'Port', type: 'text', placeholder: '1433', defaultValue: '1433' },
+    { key: 'database', label: 'Database', type: 'text', placeholder: 'master', defaultValue: 'master' },
+    { key: 'username', label: 'Username', type: 'text', placeholder: 'sa', defaultValue: 'sa' },
+    { key: 'password', label: 'Password', type: 'password', placeholder: 'Database password' },
+    { key: 'schema', label: 'Schema', type: 'text', placeholder: 'dbo', defaultValue: 'dbo' },
+    { key: 'table', label: 'Target Table', type: 'text', placeholder: 'e.g. sp_invoice (auto-created if missing)' },
+  ],
 };
+
+/* DB destination engine config — keeps the SP→DB flow engine-agnostic (T-06). */
+const DB_DEST_CONFIG = {
+  PostgreSQL: { defaultPort: 5555, hasSchema: true, defaultSchema: 'public',
+    test: 'testPgDest', tables: 'getPgTables', columns: 'getPgTableColumns', push: 'pushToPg', quickView: 'pgQuickView' },
+  MySQL: { defaultPort: 3307, hasSchema: false, defaultSchema: undefined,
+    test: 'testMysqlDest', tables: 'getMysqlTables', columns: 'getMysqlTableColumns', push: 'pushToMysql', quickView: 'mysqlQuickView' },
+  'SQL Server': { defaultPort: 1433, hasSchema: true, defaultSchema: 'dbo',
+    test: 'testMssqlDest', tables: 'getMssqlTables', columns: 'getMssqlTableColumns', push: 'pushToMssql', quickView: 'mssqlQuickView' },
+};
+const isDbDest = (dest) => !!DB_DEST_CONFIG[dest];
 const genericCredFields = [
   { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'Connection name' },
   { key: 'endpoint', label: 'Endpoint URL', type: 'text', placeholder: 'https://...' },
@@ -641,7 +666,7 @@ export default function WizardPage() {
     if (wizardStep === 2 && (srcTestStatus !== 'connected' || destTestStatus !== 'connected')) return;
     if (wizardStep === 3 && !selectedEntity) return;
     // Sync PG table selection to destCreds before moving to step 4
-    if (wizardStep === 3 && (selectedDest === 'PostgreSQL' || selectedDest === 'MySQL')) {
+    if (wizardStep === 3 && (isDbDest(selectedDest))) {
       const tbl = createNewTable ? newTableName : selectedPgTable;
       if (!tbl) return; // must pick a table
       setDestCreds(prev => ({ ...prev, table: tbl }));
@@ -680,6 +705,7 @@ export default function WizardPage() {
         const result = await api.fetchSpItems({
           siteId: srcConnectionData?.siteId,
           listId: selectedEntity,
+          tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret,
         });
         if (result.ok && result.data?.success) {
           const items = result.data.data?.items || [];
@@ -699,6 +725,8 @@ export default function WizardPage() {
       handlePushToPg();
     } else if (selectedDest === 'MySQL') {
       handlePushToMysql();
+    } else if (selectedDest === 'SQL Server') {
+      handlePushToMssql();
     } else {
       handlePushToSharePoint();
     }
@@ -709,14 +737,15 @@ export default function WizardPage() {
     setQuickViewError('');
     setQuickView(null);
     try {
-      const apiFn = selectedDest === 'MySQL' ? api.mysqlQuickView : api.pgQuickView;
+      const cfg = DB_DEST_CONFIG[selectedDest] || DB_DEST_CONFIG.PostgreSQL;
+      const apiFn = api[cfg.quickView];
       const res = await apiFn({
         host: destCreds.host || 'localhost',
-        port: destCreds.port || (selectedDest === 'MySQL' ? 3307 : 5555),
+        port: Number(destCreds.port) || cfg.defaultPort,
         database: destCreds.database || 'synapse_db',
         username: destCreds.username || 'synapse',
         password: destCreds.password || 'synapse',
-        schema: destCreds.schema || 'public',
+        schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
         table: destCreds.table,
         limit: 50,
       });
@@ -753,6 +782,7 @@ export default function WizardPage() {
         spConfig: {
           siteId: srcConnectionData?.siteId,
           listId: selectedEntity,
+          tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret,
         },
         pgConfig: {
           host: pgCfg.host, port: Number(pgCfg.port) || 5432,
@@ -807,6 +837,7 @@ export default function WizardPage() {
         spConfig: {
           siteId: srcConnectionData?.siteId,
           listId: selectedEntity,
+          tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret,
         },
         mysqlConfig: {
           host: mysqlCfg.host, port: Number(mysqlCfg.port) || 3306,
@@ -820,6 +851,62 @@ export default function WizardPage() {
         const d = result.data.data;
         setPushResult({
           pushRunId: 'mysql-' + Date.now(),
+          total: d.total,
+          status: 'success',
+          created: d.inserted,
+          updated: d.updated,
+          skipped: d.skipped || 0,
+          failed: d.errors,
+          tableCreated: d.tableCreated,
+          totalColumnsChanged: d.totalColumnsChanged || 0,
+          columnChanges: d.columnChanges || [],
+        });
+        setPushStatus('done');
+      } else {
+        setPushError(result.data?.error || 'Push failed');
+        setPushStatus('error');
+      }
+    } catch (err) {
+      setPushError('Network error during push');
+      setPushStatus('error');
+    }
+  };
+
+  const handlePushToMssql = async () => {
+    if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
+    setPushStatus('pushing');
+    setPushError('');
+    setPushResult(null);
+    try {
+      const mssqlCfg = destConnectionData || destCreds;
+      const targetTable = destCreds.table || 'sp_data';
+      const targetSchema = destCreds.schema || 'dbo';
+
+      const dbMappings = mappings.map(m => ({
+        from: m.sources[0] || '',
+        to: m.destinations[0] || '',
+        type: mapSpTypeToPgType(m.srcTypes?.[0] || 'text'),
+      }));
+
+      const result = await api.pushToMssql({
+        spConfig: {
+          siteId: srcConnectionData?.siteId,
+          listId: selectedEntity,
+          tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret,
+        },
+        mssqlConfig: {
+          host: mssqlCfg.host, port: Number(mssqlCfg.port) || 1433,
+          database: mssqlCfg.database, username: mssqlCfg.username, password: mssqlCfg.password,
+        },
+        targetSchema,
+        targetTable,
+        mappings: dbMappings,
+      });
+
+      if (result.ok && result.data?.success) {
+        const d = result.data.data;
+        setPushResult({
+          pushRunId: 'mssql-' + Date.now(),
           total: d.total,
           status: 'success',
           created: d.inserted,
@@ -939,7 +1026,7 @@ export default function WizardPage() {
       } else if (selectedSource === 'SharePoint') {
         const { siteUrl } = srcCreds;
         if (!siteUrl) { setSrcTestStatus('error'); setSrcTestMsg('Please fill in the Site URL'); return; }
-        const result = await api.testSpSource({ siteUrl });
+        const result = await api.testSpSource({ siteUrl, tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret });
         if (result.ok && result.data?.success) {
           setSrcTestStatus('connected');
           setSrcTestMsg(`Connected to "${result.data.data?.siteDisplayName}" (${result.data.data?.hostname})`);
@@ -978,6 +1065,15 @@ export default function WizardPage() {
           setDestTestStatus('connected');
           setDestTestMsg(`Connected to ${host}:${port || 3306}/${database}`);
           setDestConnectionData({ host, port: Number(port) || 3306, database, username, password, table: destCreds.table });
+        } else { setDestTestStatus('error'); setDestTestMsg('Connection failed \u2014 check credentials'); }
+      } else if (selectedDest === 'SQL Server') {
+        const { host, port, database, username, password } = destCreds;
+        if (!host || !database || !username) { setDestTestStatus('error'); setDestTestMsg('Please fill in Host, Database, and Username'); return; }
+        const result = await api.testMssqlDest({ host, port: Number(port) || 1433, database, username, password });
+        if (result.ok && result.data?.data?.connectionOk) {
+          setDestTestStatus('connected');
+          setDestTestMsg(`Connected to ${host}:${port || 1433}/${database}`);
+          setDestConnectionData({ host, port: Number(port) || 1433, database, username, password, schema: destCreds.schema || 'dbo', table: destCreds.table });
         } else { setDestTestStatus('error'); setDestTestMsg('Connection failed \u2014 check credentials'); }
       } else { setDestTestStatus('error'); setDestTestMsg(`${selectedDest} not yet supported.`); }
     } catch { setDestTestStatus('error'); setDestTestMsg('Connection failed.'); }
@@ -1117,6 +1213,7 @@ export default function WizardPage() {
         setEntitiesLoading(true);
         const result = await api.discoverSpLists({
           siteId: srcConnectionData?.siteId,
+          tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret,
         });
         if (result.ok && result.data?.success) {
           const lists = (result.data.data?.lists || [])
@@ -1135,15 +1232,16 @@ export default function WizardPage() {
         setEntitiesLoading(false);
 
         // Also load DB tables if destination is PostgreSQL or MySQL
-        if (selectedDest === 'PostgreSQL' || selectedDest === 'MySQL') {
+        if (isDbDest(selectedDest)) {
           const dbCfg = destConnectionData || destCreds;
           if (dbCfg.host && dbCfg.database) {
             setPgTablesLoading(true);
-            const apiFn = selectedDest === 'MySQL' ? api.getMysqlTables : api.getPgTables;
+            const cfg = DB_DEST_CONFIG[selectedDest];
+            const apiFn = api[cfg.tables];
             const dbResult = await apiFn({
-              host: dbCfg.host, port: Number(dbCfg.port) || (selectedDest === 'MySQL' ? 3306 : 5555),
+              host: dbCfg.host, port: Number(dbCfg.port) || cfg.defaultPort,
               database: dbCfg.database, username: dbCfg.username, password: dbCfg.password,
-              schema: selectedDest === 'MySQL' ? undefined : (destCreds.schema || 'public'),
+              schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
             });
             if (dbResult.ok && dbResult.data?.success) {
               setPgTables(dbResult.data.data?.tables || []);
@@ -1199,10 +1297,11 @@ export default function WizardPage() {
           }));
           setDestFields(spf);
         }
-      } else if (selectedSource === 'SharePoint' && (selectedDest === 'PostgreSQL' || selectedDest === 'MySQL')) {
+      } else if (selectedSource === 'SharePoint' && (isDbDest(selectedDest))) {
         // SP → DB flow: source = SP list fields, dest = DB table columns (or empty for auto-create)
         const srcResult = await api.getSpListFields({
           siteId: srcConnectionData?.siteId, listId: selectedEntity,
+          tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret,
         });
         if (srcResult.ok && srcResult.data?.success) {
           setSrcFields(srcResult.data.data?.fields || []);
@@ -1211,11 +1310,12 @@ export default function WizardPage() {
         // Try to load existing DB table columns (if table exists)
         const dbCfg = destConnectionData || destCreds;
         if (dbCfg.host && dbCfg.database && destCreds.table) {
-          const colApiFn = selectedDest === 'MySQL' ? api.getMysqlTableColumns : api.getPgTableColumns;
+          const cfg = DB_DEST_CONFIG[selectedDest];
+          const colApiFn = api[cfg.columns];
           const destResult = await colApiFn({
-            host: dbCfg.host, port: Number(dbCfg.port) || (selectedDest === 'MySQL' ? 3306 : 5432),
+            host: dbCfg.host, port: Number(dbCfg.port) || cfg.defaultPort,
             database: dbCfg.database, username: dbCfg.username, password: dbCfg.password,
-            schema: selectedDest === 'MySQL' ? undefined : (destCreds.schema || 'public'),
+            schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
             table: destCreds.table,
           });
           if (destResult.ok && destResult.data?.success && destResult.data.data?.exists) {
@@ -1605,7 +1705,7 @@ export default function WizardPage() {
                 <div className="loader-text">Loading {selectedSource === 'SharePoint' ? 'lists' : 'entities'} from {selectedSource}...</div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: (selectedDest === 'PostgreSQL' || selectedDest === 'MySQL') ? '1fr 1fr' : '1fr', gap: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: (isDbDest(selectedDest)) ? '1fr 1fr' : '1fr', gap: 20 }}>
 
                 {/* ── LEFT: Source list/entity picker ── */}
                 <div className="card" style={{ padding: 16 }}>
@@ -1666,7 +1766,7 @@ export default function WizardPage() {
                 </div>
 
                 {/* ── RIGHT: Destination table picker (PostgreSQL / MySQL) ── */}
-                {(selectedDest === 'PostgreSQL' || selectedDest === 'MySQL') && (
+                {(isDbDest(selectedDest)) && (
                   <div className="card" style={{ padding: 16 }}>
                     <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 10 }}>
                       {selectedDest} Destination Table
@@ -1762,7 +1862,7 @@ export default function WizardPage() {
             {/* Validation messages */}
             {!selectedEntity && entities.length > 0 && (
               <div style={{ color: 'var(--text-dim)', fontSize: '.85rem', marginTop: 16, textAlign: 'center' }}>
-                {(selectedDest === 'PostgreSQL' || selectedDest === 'MySQL')
+                {(isDbDest(selectedDest))
                   ? 'Select a source list and destination table to continue'
                   : 'Select an entity to continue'}
               </div>
@@ -2033,7 +2133,7 @@ export default function WizardPage() {
                       </table>
                     </div>
                     <div style={{ marginTop: 12, fontSize: '.82rem', color: 'var(--text-secondary)' }}>
-                      {(selectedDest === 'PostgreSQL' || selectedDest === 'MySQL') ? (
+                      {(isDbDest(selectedDest)) ? (
                         <>Click <strong>Next</strong> to push {fetchResult.totalCount} items to <strong>{destCreds.table || 'auto-generated table'}</strong> in {selectedDest}. Table will be auto-created if it doesn't exist. Existing rows updated by sp_item_id.</>
                       ) : (
                         <>Click <strong>Next</strong> to push these {fetchResult.totalCount} issues to <strong>{destCreds.listName}</strong> on SharePoint. Existing records will be updated by IssueKey; new ones will be created.</>
@@ -2327,7 +2427,7 @@ export default function WizardPage() {
                     <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
                       <button className="btn btn-outline" onClick={() => navigate('/connected')}>View Connected</button>
                       <button className="btn btn-outline" onClick={() => { setPushStatus('idle'); setPushResult(null); setQuickView(null); }}>Push Again</button>
-                      {(selectedDest === 'PostgreSQL' || selectedDest === 'MySQL') && destCreds.table && (
+                      {(isDbDest(selectedDest)) && destCreds.table && (
                         <button
                           className="btn btn-primary btn-sm"
                           onClick={handleQuickView}

@@ -25,6 +25,18 @@ export interface IDbWriter {
   ): Promise<UpsertResult>;
 
   /**
+   * Smart UPSERT: fetches the existing row, compares column-by-column, and
+   * only writes the columns that actually changed. Returns the changed columns
+   * (empty = no change = skipped). Used by the SharePoint→DB sync flow.
+   */
+  smartUpsert(
+    schema: string,
+    table: string,
+    naturalKeyColumn: string,
+    row: UpsertRow,
+  ): Promise<UpsertResult>;
+
+  /**
    * Read the column schema of a target table via information_schema.
    */
   introspect(schema: string, table: string): Promise<IntrospectResult>;

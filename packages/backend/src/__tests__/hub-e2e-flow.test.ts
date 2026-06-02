@@ -308,6 +308,10 @@ describe('DbDestinationConnectorBase', () => {
         calls.push({ method: 'upsert', args });
         return { action: 'inserted' as const, naturalKey: 'SP-001' };
       }),
+      smartUpsert: vi.fn(async (...args: unknown[]) => {
+        calls.push({ method: 'smartUpsert', args });
+        return { action: 'inserted' as const, naturalKey: 'SP-001', changedColumns: [] };
+      }),
       introspect: vi.fn(async () => ({ schema: 'public', table: 'test', columns: [], exists: true })),
       applyDdl: vi.fn(async () => {}),
       softDelete: vi.fn(async (...args: unknown[]) => {
@@ -541,6 +545,10 @@ describe('E2E: SP source → transform → DB destination', () => {
       upsert: vi.fn(async (_s, _t, _nk, r) => {
         upsertedRows.push(r as Record<string, unknown>);
         return { action: 'inserted' as const, naturalKey: String((r as Record<string, unknown>).sp_item_id) };
+      }),
+      smartUpsert: vi.fn(async (_s, _t, _nk, r) => {
+        upsertedRows.push(r as Record<string, unknown>);
+        return { action: 'inserted' as const, naturalKey: String((r as Record<string, unknown>).sp_item_id), changedColumns: [] };
       }),
       introspect: vi.fn(async () => ({ schema: 'public', table: 'projects', columns: [], exists: true })),
       applyDdl: vi.fn(async () => {}),

@@ -19,10 +19,12 @@ const router = Router();
 
 /** Get Azure SP credentials — always from env, never from request body */
 function getSpCreds(body?: Record<string, string>) {
+  // Wizard-supplied creds take precedence; .env is only a fallback.
+  // (Consistent with sharepoint.routes.ts — creds entered in the UI win.)
   return {
-    tenantId: config.AZURE_TENANT_ID || body?.tenantId || '',
-    clientId: config.AZURE_CLIENT_ID || body?.clientId || '',
-    clientSecret: config.AZURE_CLIENT_SECRET || body?.clientSecret || '',
+    tenantId: body?.tenantId || config.AZURE_TENANT_ID || '',
+    clientId: body?.clientId || config.AZURE_CLIENT_ID || '',
+    clientSecret: body?.clientSecret || config.AZURE_CLIENT_SECRET || '',
   };
 }
 
@@ -839,6 +841,283 @@ router.post('/mysql-quick-view', async (req: Request, res: Response) => {
 });
 
 // ═══════════════════════════════════════════════════════
+// SQL Server Destination endpoints (T-06)
+// ═══════════════════════════════════════════════════════
+
+/**
+ * POST /api/hub/test-mssql-dest
+ * Test a SQL Server connection.
+ */
+router.post('/test-mssql-dest', async (req: Request, res: Response) => {
+  try {
+    const { host, port, database, username, password } = req.body;
+    const writer = new SqlServerWriter();
+    const ok = await writer.testConnection({
+      engine: 'sqlserver', host, port: Number(port) || 1433, database, username, password,
+    });
+    res.json({ success: true, data: { connectionOk: ok } });
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * POST /api/hub/mssql-tables
+ * List all user tables in a SQL Server schema (default dbo).
+ */
+router.post('/mssql-tables', async (req: Request, res: Response) => {
+  try {
+    const { host, port, database, username, password, schema } = req.body;
+    const writer = new SqlServerWriter();
+    await writer.connect({ engine: 'sqlserver', host, port: Number(port) || 1433, database, username, password });
+    try {
+      const request = (writer as any).pool!.request();
+      request.input('schema', schema || 'dbo');
+      const result = await request.query(`
+        SELECT t.TABLE_NAME AS table_name,
+               (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS c
+                WHERE c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME) AS column_count
+        FROM INFORMATION_SCHEMA.TABLES t
+        WHERE t.TABLE_SCHEMA = @schema AND t.TABLE_TYPE = 'BASE TABLE'
+        ORDER BY t.TABLE_NAME
+      `);
+      res.json({
+        success: true,
+        data: {
+          tables: result.recordset.map((r: Record<string, unknown>) => ({
+            name: r.table_name as string,
+            columnCount: Number(r.column_count),
+          })),
+        },
+      });
+    } finally {
+      await writer.disconnect();
+    }
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * POST /api/hub/mssql-table-columns
+ * Introspect a SQL Server table schema (for mapping destination fields).
+ */
+router.post('/mssql-table-columns', async (req: Request, res: Response) => {
+  try {
+    const { host, port, database, username, password, schema, table } = req.body;
+    const writer = new SqlServerWriter();
+    await writer.connect({ engine: 'sqlserver', host, port: Number(port) || 1433, database, username, password });
+    try {
+      const introspector = new DbSchemaIntrospector(writer);
+      const result = await introspector.getTableSchema(schema || 'dbo', table);
+      res.json({
+        success: true,
+        data: {
+          exists: result.exists,
+          columns: result.columns.map((c) => ({
+            name: c.columnName,
+            displayName: c.columnName,
+            type: c.dataType,
+            required: !c.isNullable,
+          })),
+        },
+      });
+    } finally {
+      await writer.disconnect();
+    }
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * POST /api/hub/push-to-mssql
+ * Execute the full SP→SQL Server sync: auto-create table if needed, smart-upsert all items.
+ */
+router.post('/push-to-mssql', async (req: Request, res: Response) => {
+  try {
+    const { spConfig, mssqlConfig, targetSchema, targetTable, mappings } = req.body;
+
+    if (!spConfig || !mssqlConfig || !targetTable || !mappings) {
+      res.status(400).json({ success: false, error: 'Missing required fields' });
+      return;
+    }
+
+    const spCreds = getSpCreds(spConfig);
+    const schema = targetSchema || 'dbo';
+    const naturalKey = 'sp_item_id';
+
+    const writer = new SqlServerWriter();
+    await writer.connect({
+      engine: 'sqlserver',
+      host: mssqlConfig.host,
+      port: Number(mssqlConfig.port) || 1433,
+      database: mssqlConfig.database,
+      username: mssqlConfig.username,
+      password: mssqlConfig.password,
+    });
+
+    try {
+      const introspector = new DbSchemaIntrospector(writer);
+      const exists = await introspector.tableExists(schema, targetTable);
+
+      // 1. Auto-create table if it doesn't exist
+      if (!exists) {
+        const colDefs = [
+          `[${naturalKey}] NVARCHAR(128) NOT NULL PRIMARY KEY`,
+          ...mappings.map((m: DbColumnMapping) => `[${m.to}] ${mapTypeToMssql(m.type)}`),
+          '[sp_created_at] DATETIME2',
+          '[sp_modified_at] DATETIME2',
+          '[is_deleted] BIT DEFAULT 0',
+          '[synced_at] DATETIME2 DEFAULT SYSUTCDATETIME()',
+        ];
+        const ddl = `CREATE TABLE [${schema}].[${targetTable}] (\n  ${colDefs.join(',\n  ')}\n)`;
+        await writer.applyDdl([ddl]);
+      }
+
+      // 2. Fetch SP items
+      const token = await getSpToken(spCreds.tenantId, spCreds.clientId, spCreds.clientSecret);
+      const allItems: RawSpItem[] = [];
+      let nextUrl: string | undefined =
+        `https://graph.microsoft.com/v1.0/sites/${spConfig.siteId}/lists/${spConfig.listId}/items?$expand=fields&$top=200`;
+
+      while (nextUrl) {
+        const r = await fetch(nextUrl, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        });
+        if (!r.ok) throw new Error(`SP fetch failed (${r.status})`);
+        const page = await r.json() as { value: Array<Record<string, unknown>>; '@odata.nextLink'?: string };
+        for (const item of page.value) {
+          allItems.push({
+            id: item.id as string,
+            createdDateTime: item.createdDateTime as string,
+            lastModifiedDateTime: item.lastModifiedDateTime as string,
+            fields: (item.fields || {}) as Record<string, unknown>,
+          });
+        }
+        nextUrl = page['@odata.nextLink'];
+      }
+
+      // 3. Discover column types
+      const reader = new SharePointGraphReader({
+        siteId: spConfig.siteId, listId: spConfig.listId,
+        triggerMode: 'delta', pollIntervalSec: 60,
+        tenantId: spCreds.tenantId, clientId: spCreds.clientId, clientSecret: spCreds.clientSecret,
+      });
+      const columns = await reader.discoverColumns();
+      const columnTypes = new Map<string, SpFieldType>();
+      for (const col of columns) columnTypes.set(col.name, col.fieldType);
+
+      // 4. Smart Map + UPSERT (column-level diff via MERGE-equivalent read-then-write)
+      let inserted = 0, updated = 0, skipped = 0, errors = 0;
+      const errorDetails: Array<{ id: string; error: string }> = [];
+      const columnChangeCounts: Record<string, number> = {};
+      let totalColumnsChanged = 0;
+
+      for (const item of allItems) {
+        try {
+          const mapped = SharePointFieldTypeMapper.mapItem(item, columnTypes);
+          const row: Record<string, unknown> = { [naturalKey]: mapped.spItemId };
+
+          for (const m of mappings as DbColumnMapping[]) {
+            const val = mapped.fields[m.from];
+            row[m.to] = (val !== null && val !== undefined && typeof val === 'object')
+              ? JSON.stringify(val) : val ?? null;
+          }
+          row['sp_created_at'] = item.createdDateTime || null;
+          row['sp_modified_at'] = item.lastModifiedDateTime || null;
+
+          const result = await writer.smartUpsert(schema, targetTable, naturalKey, row);
+          if (result.action === 'inserted') inserted++;
+          else if (result.action === 'updated') {
+            updated++;
+            for (const col of result.changedColumns || []) {
+              columnChangeCounts[col] = (columnChangeCounts[col] || 0) + 1;
+              totalColumnsChanged++;
+            }
+          } else skipped++;
+        } catch (err: unknown) {
+          errors++;
+          errorDetails.push({ id: item.id, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+
+      const columnChanges = Object.entries(columnChangeCounts)
+        .map(([column, count]) => ({ column, count }))
+        .sort((a, b) => b.count - a.count);
+
+      res.json({
+        success: true,
+        data: {
+          total: allItems.length, inserted, updated, skipped, errors,
+          totalColumnsChanged, columnChanges,
+          errorDetails: errorDetails.slice(0, 10),
+          tableCreated: !exists,
+        },
+      });
+    } finally {
+      await writer.disconnect();
+    }
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * POST /api/hub/mssql-quick-view
+ * Run SELECT TOP N FROM table for SQL Server.
+ */
+router.post('/mssql-quick-view', async (req: Request, res: Response) => {
+  try {
+    const { host, port, database, username, password, schema, table, limit } = req.body;
+    if (!host || !database || !table) {
+      res.status(400).json({ success: false, error: 'Missing required fields: host, database, table' });
+      return;
+    }
+    const rowLimit = Math.min(Number(limit) || 50, 200);
+    const targetSchema = schema || 'dbo';
+    const qualified = `[${targetSchema}].[${table}]`;
+
+    const writer = new SqlServerWriter();
+    await writer.connect({ engine: 'sqlserver', host, port: Number(port) || 1433, database, username, password });
+    try {
+      // Try ordering by synced_at (push tables), fallback to no order
+      let result;
+      try {
+        const req1 = (writer as any).pool!.request();
+        req1.input('limit', rowLimit);
+        result = await req1.query(`SELECT TOP (@limit) * FROM ${qualified} ORDER BY synced_at DESC`);
+      } catch {
+        const req2 = (writer as any).pool!.request();
+        req2.input('limit', rowLimit);
+        result = await req2.query(`SELECT TOP (@limit) * FROM ${qualified}`);
+      }
+
+      const countResult = await (writer as any).pool!.request().query(
+        `SELECT COUNT(*) AS total FROM ${qualified}`,
+      );
+
+      const rows = result.recordset as Array<Record<string, unknown>>;
+      const columns = Object.keys(result.recordset.columns || {});
+      res.json({
+        success: true,
+        data: {
+          columns: columns.length > 0 ? columns : (rows[0] ? Object.keys(rows[0]) : []),
+          rows,
+          rowCount: rows.length,
+          totalCount: countResult.recordset[0]?.total || 0,
+          table: `${targetSchema}.${table}`,
+        },
+      });
+    } finally {
+      await writer.disconnect();
+    }
+  } catch (err: unknown) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ═══════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════
 
@@ -884,6 +1163,17 @@ function mapTypeToMysql(type: string): string {
     case 'datetime': return 'DATETIME';
     case 'json': return 'JSON';
     default: return 'TEXT';
+  }
+}
+
+function mapTypeToMssql(type: string): string {
+  switch (type) {
+    case 'string': return 'NVARCHAR(MAX)';
+    case 'number': return 'DECIMAL(18,4)';
+    case 'boolean': return 'BIT';
+    case 'datetime': return 'DATETIME2';
+    case 'json': return 'NVARCHAR(MAX)';
+    default: return 'NVARCHAR(MAX)';
   }
 }
 

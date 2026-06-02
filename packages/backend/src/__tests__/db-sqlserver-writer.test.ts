@@ -151,6 +151,45 @@ describeDb('SqlServerWriter (integration)', () => {
     // No error thrown = success
   });
 
+  it('smartUpsert inserts, skips unchanged, and updates only changed columns', async () => {
+    // First write — inserts
+    const inserted = await writer.smartUpsert(testSchema, testTable, 'sp_item_id', {
+      sp_item_id: 'SP-SMART',
+      title: 'Smart Row',
+      owner_email: 'smart@example.com',
+      amount: 10,
+    });
+    expect(inserted.action).toBe('inserted');
+
+    // Identical write — no columns changed, skipped
+    const skipped = await writer.smartUpsert(testSchema, testTable, 'sp_item_id', {
+      sp_item_id: 'SP-SMART',
+      title: 'Smart Row',
+      owner_email: 'smart@example.com',
+      amount: 10,
+    });
+    expect(skipped.action).toBe('skipped');
+    expect(skipped.changedColumns).toEqual([]);
+
+    // Change one column — updates only that column
+    const updated = await writer.smartUpsert(testSchema, testTable, 'sp_item_id', {
+      sp_item_id: 'SP-SMART',
+      title: 'Smart Row Renamed',
+      owner_email: 'smart@example.com',
+      amount: 10,
+    });
+    expect(updated.action).toBe('updated');
+    expect(updated.changedColumns).toEqual(['title']);
+  });
+
+  it('introspect (sys.columns) reports types and nullability', async () => {
+    const result = await writer.introspect(testSchema, testTable);
+    const byName = Object.fromEntries(result.columns.map((c) => [c.columnName, c]));
+    expect(byName['sp_item_id'].isNullable).toBe(false);
+    expect(byName['title'].dataType).toBe('nvarchar');
+    expect(byName['amount'].dataType).toBe('decimal');
+  });
+
   it('upsert throws on empty row', async () => {
     await expect(
       writer.upsert(testSchema, testTable, 'sp_item_id', {}),

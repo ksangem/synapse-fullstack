@@ -30,7 +30,11 @@ export class SqlServerWriter implements IDbWriter {
       },
     };
 
-    this.pool = await sql.connect(sqlConfig);
+    // Use a dedicated ConnectionPool (NOT the global sql.connect()) so that
+    // multiple writers / a concurrent testConnection() don't share or close
+    // each other's connection.
+    this.pool = new sql.ConnectionPool(sqlConfig);
+    await this.pool.connect();
   }
 
   async upsert(
@@ -107,6 +111,84 @@ export class SqlServerWriter implements IDbWriter {
     };
   }
 
+  /**
+   * Smart UPSERT: SELECT the existing row, diff column-by-column, and only
+   * UPDATE the columns that changed (SQL Server has no RETURNING/xmax, so we
+   * read-then-write like the MySQL path).
+   */
+  async smartUpsert(
+    schema: string,
+    table: string,
+    naturalKeyColumn: string,
+    row: UpsertRow,
+  ): Promise<UpsertResult> {
+    this.ensureConnected();
+
+    const columns = Object.keys(row);
+    if (columns.length === 0) throw new Error('Cannot upsert an empty row');
+
+    const naturalKeyValue = String(row[naturalKeyColumn] ?? '');
+    if (!naturalKeyValue) throw new Error(`Natural key column "${naturalKeyColumn}" is missing or empty in row`);
+
+    const qualifiedTable = `[${schema}].[${table}]`;
+
+    // 1. Check if the row exists
+    const selectReq = this.pool!.request();
+    selectReq.input('nk', naturalKeyValue);
+    const existing = await selectReq.query(
+      `SELECT TOP 1 * FROM ${qualifiedTable} WHERE [${naturalKeyColumn}] = @nk`,
+    );
+
+    if (existing.recordset.length === 0) {
+      // INSERT — new row. Use positional param names to avoid collisions with column names.
+      const insertReq = this.pool!.request();
+      columns.forEach((col, i) => insertReq.input(`c${i}`, row[col]));
+      const columnList = columns.map((c) => `[${c}]`).join(', ');
+      const valueList = columns.map((_, i) => `@c${i}`).join(', ');
+      await insertReq.query(`INSERT INTO ${qualifiedTable} (${columnList}) VALUES (${valueList})`);
+      return { action: 'inserted', naturalKey: naturalKeyValue, changedColumns: columns };
+    }
+
+    // 2. Compare column-by-column
+    const existingRow = existing.recordset[0] as Record<string, unknown>;
+    const changedColumns: string[] = [];
+    const changedValues: unknown[] = [];
+
+    // Normalize for comparison: mssql returns Date objects for datetime columns and
+    // numeric strings for DECIMAL — coerce both sides to a comparable form.
+    const normalize = (v: unknown): string | null => {
+      if (v === null || v === undefined) return null;
+      if (v instanceof Date) return v.toISOString();
+      if (typeof v === 'object') return JSON.stringify(v);
+      const n = Number(v);
+      if (!isNaN(n) && String(v).trim() !== '') return String(n);
+      return String(v);
+    };
+
+    for (const col of columns) {
+      if (col === naturalKeyColumn) continue;
+      if (normalize(row[col]) !== normalize(existingRow[col])) {
+        changedColumns.push(col);
+        changedValues.push(row[col]);
+      }
+    }
+
+    if (changedColumns.length === 0) {
+      return { action: 'skipped', naturalKey: naturalKeyValue, changedColumns: [] };
+    }
+
+    // 3. UPDATE only the changed columns
+    const updateReq = this.pool!.request();
+    changedColumns.forEach((_, i) => updateReq.input(`u${i}`, changedValues[i]));
+    updateReq.input('nk', naturalKeyValue);
+    const setClauses = changedColumns.map((col, i) => `[${col}] = @u${i}`);
+    await updateReq.query(
+      `UPDATE ${qualifiedTable} SET ${setClauses.join(', ')} WHERE [${naturalKeyColumn}] = @nk`,
+    );
+
+    return { action: 'updated', naturalKey: naturalKeyValue, changedColumns };
+  }
+
   async introspect(schema: string, table: string): Promise<IntrospectResult> {
     this.ensureConnected();
 
@@ -114,32 +196,44 @@ export class SqlServerWriter implements IDbWriter {
     request.input('schema', sql.NVarChar, schema);
     request.input('table', sql.NVarChar, table);
 
+    // Introspect via the sys.columns catalog views (T-06): exposes identity,
+    // computed and MAX-length metadata that INFORMATION_SCHEMA flattens away.
     const result = await request.query(`
       SELECT
-        COLUMN_NAME AS column_name,
-        DATA_TYPE AS data_type,
-        IS_NULLABLE AS is_nullable,
-        CHARACTER_MAXIMUM_LENGTH AS character_maximum_length,
-        NUMERIC_PRECISION AS numeric_precision,
-        NUMERIC_SCALE AS numeric_scale,
-        COLUMN_DEFAULT AS column_default,
-        ORDINAL_POSITION AS ordinal_position
-      FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = @schema
-        AND TABLE_NAME = @table
-      ORDER BY ORDINAL_POSITION
+        c.name              AS column_name,
+        t.name              AS data_type,
+        c.is_nullable       AS is_nullable,
+        c.max_length        AS max_length,
+        c.precision         AS numeric_precision,
+        c.scale             AS numeric_scale,
+        dc.definition       AS column_default,
+        c.column_id         AS ordinal_position
+      FROM sys.columns c
+        INNER JOIN sys.objects o ON o.object_id = c.object_id
+        INNER JOIN sys.schemas s ON s.schema_id = o.schema_id
+        INNER JOIN sys.types   t ON t.user_type_id = c.user_type_id
+        LEFT JOIN sys.default_constraints dc ON dc.object_id = c.default_object_id
+      WHERE s.name = @schema
+        AND o.name = @table
+        AND o.type IN ('U', 'V')
+      ORDER BY c.column_id
     `);
 
-    const columns: DbColumnSpec[] = result.recordset.map((r: Record<string, unknown>) => ({
-      columnName: r.column_name as string,
-      dataType: r.data_type as string,
-      isNullable: r.is_nullable === 'YES',
-      maxLength: r.character_maximum_length as number | null,
-      numericPrecision: r.numeric_precision as number | null,
-      numericScale: r.numeric_scale as number | null,
-      columnDefault: r.column_default as string | null,
-      ordinalPosition: r.ordinal_position as number,
-    }));
+    const columns: DbColumnSpec[] = result.recordset.map((r: Record<string, unknown>) => {
+      const rawMax = r.max_length as number | null;
+      return {
+        columnName: r.column_name as string,
+        dataType: r.data_type as string,
+        // sys.columns.is_nullable is a BIT (true/false / 1/0)
+        isNullable: r.is_nullable === true || r.is_nullable === 1,
+        // -1 == MAX (e.g. NVARCHAR(MAX)); expose as null like the other engines
+        maxLength: rawMax === -1 || rawMax === null || rawMax === undefined ? null : rawMax,
+        numericPrecision: (r.numeric_precision as number | null) ?? null,
+        numericScale: (r.numeric_scale as number | null) ?? null,
+        columnDefault: (r.column_default as string | null) ?? null,
+        ordinalPosition: r.ordinal_position as number,
+      };
+    });
 
     return {
       schema,
@@ -187,25 +281,32 @@ export class SqlServerWriter implements IDbWriter {
   }
 
   async testConnection(config: DbConnectionConfig): Promise<boolean> {
-    try {
-      const testPool = await sql.connect({
-        server: config.host,
-        port: config.port,
-        database: config.database,
-        user: config.username,
-        password: config.password,
-        options: {
-          encrypt: config.ssl ?? false,
-          trustServerCertificate: true,
-        },
-        connectionTimeout: 5000,
-      });
+    // Dedicated pool so closing it never affects an active connect() pool.
+    const testPool = new sql.ConnectionPool({
+      server: config.host,
+      port: config.port,
+      database: config.database,
+      user: config.username,
+      password: config.password,
+      options: {
+        encrypt: config.ssl ?? false,
+        trustServerCertificate: true,
+      },
+      connectionTimeout: 5000,
+    });
 
+    try {
+      await testPool.connect();
       await testPool.request().query('SELECT 1 AS ok');
-      await testPool.close();
       return true;
     } catch {
       return false;
+    } finally {
+      try {
+        await testPool.close();
+      } catch {
+        // ignore close errors
+      }
     }
   }
 
