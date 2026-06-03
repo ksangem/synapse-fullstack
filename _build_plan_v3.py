@@ -11,7 +11,8 @@ from openpyxl.formatting.rule import CellIsRule, DataBarRule
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-OUT = r"D:\Nalashaa_Work\AI_Work\synapse-fullstack\Synapse_Project_Plan_v3.xlsx"
+# Relative path -> writes next to this script, portable across machines.
+OUT = "Synapse_Project_Plan_v3.xlsx"
 
 # Brand
 NAVY="1B2A5B"; LIGHT_NAVY="E8ECF5"; ACCENT="F26B21"; GREEN="2E7D32"; RED="C62828"
@@ -107,13 +108,13 @@ SW={
 # (sprint, module, task, owner, effort, status, pct, done_date_or_None, notes)
 ROWS=[
 # Sprint 1
-("S1","Hub Engine","MessageEnvelope + SHA-256 checksum + topic model (Node/TS per LLD §6)","Dev A",24,"In Progress",0.25,None,"Team began 18 May. Immutable envelope, idempotency key."),
-("S1","Hub Engine","IntegrationBus + Router + Subscription registry (in-memory queue + fan-out)","Dev A",24,"Not Started",0,None,"Backpressure via bounded queue."),
+("S1","Hub Engine","MessageEnvelope + SHA-256 checksum + topic model (Node/TS per LLD §6)","Dev A",24,"Done",1.0,date(2026,6,3),"COMPLETE (T-01) — immutable envelope + SHA-256 checksum existed; added hub/topic.ts (canonical source.entity.event, validate/parse/build, centralized topicMatches), topic validation + idempotency-key-derived messageId in createEnvelope, router refactor. 59 hub tests pass."),
+("S1","Hub Engine","IntegrationBus + Router + Subscription registry (in-memory queue + fan-out)","Dev A",24,"Done",1.0,date(2026,6,3),"COMPLETE (T-02, direction A) — SubscriptionRegistry (org-scoped findMatching), BoundedQueue (FIFO + backpressure), InMemoryBus (publish->queue->router fan-out, checksum-validate, transform hook). 76 hub tests pass."),
 ("S1","Hub Engine","Persistence: Inbox / Outbox / DeadLetter / Idempotency tables + repos (Postgres)","Dev A",20,"Not Started",0,None,"LLD §8 schema, Drizzle."),
 ("S1","Reliability","Retry+backoff + circuit breaker + DLQ auto/manual replay","Dev A",20,"Not Started",0,None,"Per Architecture §11."),
 ("S1","Adapter","SharePoint -> Postgres (delta poll, schema introspect, DDL diff/apply, upsert)","Dev B",0,"Done",1.0,date(2026,5,17),"COMPLETE — tested locally before kickoff."),
-("S1","Adapter","SharePoint -> MSSQL (extend SP->PG: MERGE upsert + sys.columns introspect)","Dev B",24,"Not Started",0,None,"Reuse SP source + type mapper."),
-("S1","Frontend","Wire Dashboard + Registry to real APIs (remove mock data)","Dev B",16,"Not Started",0,None,"First real-data screens."),
+("S1","Adapter","SharePoint -> MSSQL (extend SP->PG: MERGE upsert + sys.columns introspect)","Dev B",24,"Done",1.0,date(2026,6,2),"COMPLETE (T-06) — SqlServerWriter smartUpsert + sys.columns introspect + hub MSSQL endpoints + wizard wiring. Tested."),
+("S1","Frontend","Wire Dashboard + Registry to real APIs (remove mock data)","Dev B",16,"In Progress",0.75,None,"T-07 code-complete: integrationMap.js shared mapper, live KPIs/tiles/charts off /api/connected, sample fallback, 0 diagnostics. Pending browser verify for M1."),
 # Sprint 2
 ("S2","Wizard","Connection Wizard 6-step backend + Step 4 (mapping) + Step 6 (test/deploy gate)","Dev A",28,"Not Started",0,None,"Hard test-before-publish gate."),
 ("S2","Mapping","Mapping Canvas + AI Auto-Map (Claude API) + confidence badges","Dev B",30,"Not Started",0,None,"Human-confirm required."),

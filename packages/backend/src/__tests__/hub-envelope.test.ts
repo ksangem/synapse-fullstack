@@ -50,4 +50,30 @@ describe('hub/envelope', () => {
     const b = createEnvelope({ topic: 't', sourceConnectorId: 's', orgId: 'o', sequenceNo: 2, payload: {} });
     expect(a.messageId).not.toBe(b.messageId);
   });
+
+  it('idempotencyKey yields a deterministic, UUID-shaped messageId', () => {
+    const mk = () => createEnvelope({
+      topic: 'sharepoint.projects.created', sourceConnectorId: 's',
+      orgId: 'org-1', sequenceNo: 1, payload: { id: 1 }, idempotencyKey: 'evt-42',
+    });
+    const a = mk();
+    const b = mk();
+    expect(a.messageId).toBe(b.messageId);
+    expect(a.messageId).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+
+  it('idempotencyKey is scoped by org + topic', () => {
+    const base = { sourceConnectorId: 's', sequenceNo: 1, payload: {}, idempotencyKey: 'k' };
+    const a = createEnvelope({ ...base, topic: 'a.b.c', orgId: 'org-1' });
+    const b = createEnvelope({ ...base, topic: 'a.b.c', orgId: 'org-2' });
+    const c = createEnvelope({ ...base, topic: 'a.b.d', orgId: 'org-1' });
+    expect(a.messageId).not.toBe(b.messageId);
+    expect(a.messageId).not.toBe(c.messageId);
+  });
+
+  it('createEnvelope rejects a malformed topic', () => {
+    expect(() => createEnvelope({
+      topic: 'bad topic!', sourceConnectorId: 's', orgId: 'o', sequenceNo: 1, payload: {},
+    })).toThrow(/Invalid topic/);
+  });
 });

@@ -8,6 +8,7 @@
 import { Queue, type ConnectionOptions } from 'bullmq';
 import type { MessageEnvelope, Subscription } from './interfaces';
 import { IntegrationBus } from './integration-bus';
+import { topicMatches } from './topic';
 import type { InboxRepository } from './inbox-repository';
 import type { OutboxRepository } from './outbox-repository';
 
@@ -31,7 +32,7 @@ export class RouterService {
     await this.inboxRepo.markProcessing(envelope.orgId, envelope.messageId);
 
     const matchingSubs = this.subscriptions.filter((sub) =>
-      this.topicMatches(sub.topic, envelope.topic),
+      topicMatches(sub.topic, envelope.topic),
     );
 
     let dispatched = 0;
@@ -70,30 +71,6 @@ export class RouterService {
     }
 
     return dispatched;
-  }
-
-  /**
-   * Simple topic matching with wildcard support.
-   * Supports: exact match, trailing wildcard (e.g., "sharepoint.*").
-   */
-  private topicMatches(pattern: string, topic: string): boolean {
-    if (pattern === topic) return true;
-    if (pattern === '*') return true;
-
-    // Support trailing wildcard: "sharepoint.projects.*"
-    if (pattern.endsWith('.*')) {
-      const prefix = pattern.slice(0, -2);
-      return topic.startsWith(prefix + '.') || topic === prefix;
-    }
-
-    // Support segment wildcard: "sharepoint.*.created"
-    const patternParts = pattern.split('.');
-    const topicParts = topic.split('.');
-    if (patternParts.length !== topicParts.length) return false;
-
-    return patternParts.every(
-      (part, i) => part === '*' || part === topicParts[i],
-    );
   }
 
   private getOrCreateQueue(subscriptionId: string): Queue {

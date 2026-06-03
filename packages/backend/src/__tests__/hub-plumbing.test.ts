@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { TransformPipeline } from '../hub/transform-pipeline';
 import { createEnvelope } from '../hub/envelope';
+import { topicMatches } from '../hub/topic';
 import type { MessageEnvelope, ITransformStep, Subscription } from '../hub/interfaces';
 
 // ─── TransformPipeline ─────────────────────────────────────
@@ -118,22 +119,8 @@ describe('TransformPipeline', () => {
 // ─── RouterService topic matching ───────────────────────────
 
 describe('RouterService topic matching', () => {
-  // We test the private topicMatches method indirectly through route(),
-  // but since route() needs DB repos, let's extract and test the logic directly.
-  // We replicate the matching logic here for unit testing.
-
-  function topicMatches(pattern: string, topic: string): boolean {
-    if (pattern === topic) return true;
-    if (pattern === '*') return true;
-    if (pattern.endsWith('.*')) {
-      const prefix = pattern.slice(0, -2);
-      return topic.startsWith(prefix + '.') || topic === prefix;
-    }
-    const patternParts = pattern.split('.');
-    const topicParts = topic.split('.');
-    if (patternParts.length !== topicParts.length) return false;
-    return patternParts.every((part, i) => part === '*' || part === topicParts[i]);
-  }
+  // Exercises the shared topicMatches() from hub/topic — the same function the
+  // RouterService uses to fan envelopes out to subscriptions.
 
   it('matches exact topic', () => {
     expect(topicMatches('sharepoint.projects.created', 'sharepoint.projects.created')).toBe(true);

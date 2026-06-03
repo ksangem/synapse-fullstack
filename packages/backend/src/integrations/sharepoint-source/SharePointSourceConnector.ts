@@ -33,7 +33,10 @@ export class SharePointSourceConnector implements ISourceConnector {
     this.connectorId = connectorId;
     this.orgId = orgId;
     this.reader = new SharePointGraphReader(config);
-    this.listSlug = listSlug.toLowerCase().replace(/[^a-z0-9]/g, '-');
+    // Slug must be a valid hub topic segment: lowercase alphanumerics with
+    // single internal hyphens, no leading/trailing hyphens. Collapse runs of
+    // non-alphanumerics to one hyphen and trim; fall back to "list" if empty.
+    this.listSlug = listSlug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'list';
   }
 
   /**
