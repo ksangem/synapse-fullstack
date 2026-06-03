@@ -6,12 +6,12 @@
 
 | Pipeline | Status |
 |----------|--------|
-| Frontend CI | [![Frontend CI](https://github.com/ksangem/synapse-fullstack/actions/workflows/frontend-ci.yml/badge.svg?branch=main)](https://github.com/ksangem/synapse-fullstack/actions/workflows/frontend-ci.yml) |
-| Backend CI | [![Backend CI](https://github.com/ksangem/synapse-fullstack/actions/workflows/backend-ci.yml/badge.svg?branch=main)](https://github.com/ksangem/synapse-fullstack/actions/workflows/backend-ci.yml) |
-| Frontend Deploy | [![Frontend Deploy](https://github.com/ksangem/synapse-fullstack/actions/workflows/frontend-deploy.yml/badge.svg?branch=main)](https://github.com/ksangem/synapse-fullstack/actions/workflows/frontend-deploy.yml) |
-| Backend Deploy | [![Backend Deploy](https://github.com/ksangem/synapse-fullstack/actions/workflows/backend-deploy.yml/badge.svg?branch=main)](https://github.com/ksangem/synapse-fullstack/actions/workflows/backend-deploy.yml) |
+| Frontend CI | [![Frontend CI](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/frontend-ci.yml/badge.svg?branch=master)](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/frontend-ci.yml) |
+| Backend CI | [![Backend CI](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/backend-ci.yml/badge.svg?branch=master)](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/backend-ci.yml) |
+| Frontend Deploy | [![Frontend Deploy](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/frontend-deploy.yml/badge.svg?branch=master)](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/frontend-deploy.yml) |
+| Backend Deploy | [![Backend Deploy](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/backend-deploy.yml/badge.svg?branch=master)](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/backend-deploy.yml) |
 
-**Dashboard:** [All Actions runs](https://github.com/ksangem/synapse-fullstack/actions) · [CI/CD Dashboard workflow](https://github.com/ksangem/synapse-fullstack/actions/workflows/ci-dashboard.yml) · [Deployments](https://github.com/ksangem/synapse-fullstack/deployments)
+**Dashboard:** [Actions (fork)](https://github.com/ranjanpradyot/synapse-fullstack/actions) · [CI/CD Dashboard](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/ci-dashboard.yml) · Upstream: [ksangem/synapse-fullstack](https://github.com/ksangem/synapse-fullstack)
 
 **Deploy to local VM:** [deploy/DEPLOY.md](deploy/DEPLOY.md) (self-hosted GitHub runner on the Windows server)
 

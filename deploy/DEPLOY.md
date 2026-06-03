@@ -1,14 +1,20 @@
 # Synapse CI/CD — Deploy to local VM
 
-Repository: [github.com/ksangem/synapse-fullstack](https://github.com/ksangem/synapse-fullstack)
+**CI/CD runs on the fork (you are owner):** [ranjanpradyot/synapse-fullstack](https://github.com/ranjanpradyot/synapse-fullstack)  
+**Upstream (read-only for you):** [ksangem/synapse-fullstack](https://github.com/ksangem/synapse-fullstack)
+
+```powershell
+# One-time: point git at your fork
+.\deploy\use-fork-remotes.ps1
+```
 
 ## Dashboard (builds, logs, success/failure)
 
 | View | URL |
 |------|-----|
-| **All pipeline runs** | https://github.com/ksangem/synapse-fullstack/actions |
+| **All pipeline runs** | https://github.com/ranjanpradyot/synapse-fullstack/actions |
 | **CI/CD Dashboard** (summary table) | Actions → **CI/CD Dashboard** → Run workflow |
-| **Production deployments** | https://github.com/ksangem/synapse-fullstack/deployments |
+| **Production deployments** | https://github.com/ranjanpradyot/synapse-fullstack/deployments |
 | **Frontend CI** | Actions → **Frontend CI** |
 | **Backend CI** | Actions → **Backend CI** |
 | **Frontend Deploy** | Actions → **Frontend Deploy** |
@@ -57,9 +63,10 @@ cd C:\inetpub\wwwroot\synapse-fullstack
 .\deploy\setup-github-runner.ps1
 ```
 
-Get a token from: **Repo → Settings → Actions → Runners → New self-hosted runner**
+Get a token from: **https://github.com/ranjanpradyot/synapse-fullstack/settings/actions/runners/new**
 
-Runner must show labels: `self-hosted`, `Windows`, `synapse`
+Runner must show labels: `self-hosted`, `Windows`, `synapse`  
+(Register on the **fork**, not `ksangem/synapse-fullstack`.)
 
 ### 4. GitHub repo settings
 

@@ -1,7 +1,7 @@
 #Requires -RunAsAdministrator
 # Registers GitHub Actions self-hosted runner using gh CLI (no interactive token paste)
 param(
-    [string]$Repo = 'ksangem/synapse-fullstack',
+    [string]$Repo = 'ranjanpradyot/synapse-fullstack',
     [string]$RunnerName = 'synapse-vm',
     [string]$InstallDir = 'C:\actions-runner'
 )
