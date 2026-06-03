@@ -34,6 +34,17 @@ GRANT ALL PRIVILEGES ON SCHEMA jira_data TO synapse;
 ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON TABLES TO synapse;
 ALTER DEFAULT PRIVILEGES IN SCHEMA jira_data GRANT ALL ON TABLES TO synapse;
 
+-- 6. Default organization (required for credentials / integrations FK)
+-- Run again after Drizzle creates tables, or use deploy/seed-default-org.sql
+INSERT INTO app.organizations (org_id, name, slug, plan)
+VALUES (
+  '00000000-0000-0000-0000-000000000001',
+  'Default Organization',
+  'default',
+  'free'
+)
+ON CONFLICT (org_id) DO NOTHING;
+
 -- Done! Tables will be created automatically by Drizzle when you run:
 --   cd packages/backend
 --   npx drizzle-kit push

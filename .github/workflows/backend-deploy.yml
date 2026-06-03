@@ -1,0 +1,92 @@
+# Backend Deploy — Node service on local VM (requires self-hosted runner: Windows + label "synapse")
+name: Backend Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or tag to deploy'
+        required: false
+        default: 'main'
+      run_db_seed:
+        description: 'Run seed-default-org.sql (safe, idempotent)'
+        required: false
+        type: boolean
+        default: false
+  workflow_run:
+    workflows: [Backend CI]
+    types: [completed]
+    branches: [main, master]
+
+concurrency:
+  group: backend-deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+  deployments: write
+
+env:
+  DEPLOY_BACKEND_PATH: ${{ vars.DEPLOY_BACKEND_PATH || 'C:\inetpub\wwwroot\synapse-fullstack\packages\backend' }}
+  BACKEND_SERVICE_NAME: ${{ vars.BACKEND_SERVICE_NAME || 'SynapseBackend' }}
+
+jobs:
+  deploy:
+    name: Deploy API (VM)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: [self-hosted, Windows, synapse]
+    environment:
+      name: production
+      url: https://synapse.nalashaa.com/health
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - name: Download CI artifact
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v4
+        with:
+          name: synapse-backend-release
+          path: _artifact/backend
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Deploy backend
+        shell: pwsh
+        env:
+          SYNAPSE_REPO_ROOT: ${{ github.workspace }}
+          SYNAPSE_BACKEND_PATH: ${{ env.DEPLOY_BACKEND_PATH }}
+          SYNAPSE_SERVICE_NAME: ${{ env.BACKEND_SERVICE_NAME }}
+          SYNAPSE_USE_ARTIFACT: ${{ github.event_name == 'workflow_run' }}
+          SYNAPSE_ARTIFACT_PATH: ${{ github.workspace }}/_artifact/backend
+          SYNAPSE_RUN_DB_SEED: ${{ github.event_name == 'workflow_dispatch' && inputs.run_db_seed }}
+        run: |
+          & "${{ github.workspace }}/deploy/deploy-backend.ps1"
+
+      - name: Health check
+        shell: pwsh
+        run: |
+          $r = Invoke-WebRequest -Uri 'http://127.0.0.1:4000/health' -UseBasicParsing -TimeoutSec 15
+          if ($r.Content -notmatch 'ok') { throw "Health check failed: $($r.Content)" }
+          "Backend health: $($r.Content)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Deployment summary
+        if: always()
+        shell: pwsh
+        run: |
+          $icon = if ('${{ job.status }}' -eq 'success') { '✅' } else { '❌' }
+          @"
+          ## Backend Deploy $icon
+          | Item | Value |
+          |------|-------|
+          | **Path** | ``${{ env.DEPLOY_BACKEND_PATH }}`` |
+          | **Service** | ``${{ env.BACKEND_SERVICE_NAME }}`` |
+          | **Health** | http://127.0.0.1:4000/health |
+          | **Commit** | ``${{ github.sha }}`` |
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8

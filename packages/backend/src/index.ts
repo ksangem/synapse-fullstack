@@ -16,7 +16,7 @@ app.get('/health', (_req: Request, res: Response) => {
 app.use('/api', apiRouter);
 
 // Serve React frontend in production/QA
-const frontendDist = path.resolve(__dirname, '../../../frontend/dist');
+const frontendDist = path.resolve(__dirname, '../../frontend/dist');
 app.use(express.static(frontendDist));
 app.use((_req: Request, res: Response) => {
   res.sendFile(path.join(frontendDist, 'index.html'));

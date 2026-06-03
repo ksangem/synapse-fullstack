@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api } from '../../services/api';
+import { api, apiBase } from '../../services/api';
 
 /* ─── Static Data ──────────────────────────────────────��── */
 const sourceCards = [
@@ -886,7 +886,7 @@ export default function WizardPage() {
     const maxAttempts = 60;
     const poll = async () => {
       attempts++;
-      const res = await fetch(`http://localhost:4000/api/sharepoint/runs/${pushRunId}`, {
+      const res = await fetch(`${apiBase}/api/sharepoint/runs/${pushRunId}`, {
         headers: { 'Content-Type': 'application/json' },
       }).then(r => r.json()).catch(() => null);
       if (!res?.success || !res?.data) { if (attempts < maxAttempts) setTimeout(poll, 3000); return; }

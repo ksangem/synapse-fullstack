@@ -8,11 +8,27 @@ import { credentials as mockCredentials } from '../data/credentials';
 import { alerts as mockAlerts } from '../data/alerts';
 import { dashboardTiles } from '../data/dashboardTiles';
 
-// Use whatever host the page was loaded from, on the backend's port 4000.
-// → On your PC (localhost:5173) it calls localhost:4000.
-// → On QA's PC (http://192.168.x.x:5173) it calls http://192.168.x.x:4000 — same host, no config.
-// Override with VITE_API_URL in an .env file if backend runs elsewhere.
-const API = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:4000`;
+// Override with VITE_API_URL in .env if needed (e.g. split Cloudflare tunnels).
+// IIS / HTTPS: same-origin — web.config proxies /api and /health to Node on localhost.
+// Vite dev (port 5173): call backend on :4000 directly.
+function resolveApiBase() {
+  const explicit = import.meta.env.VITE_API_URL;
+  if (explicit != null && explicit !== '') return explicit;
+
+  const port = window.location.port;
+  const isViteDev =
+    import.meta.env.DEV || port === '5173' || port === '4173';
+
+  if (isViteDev) {
+    return `http://${window.location.hostname}:4000`;
+  }
+
+  // HTTPS, IIS :80/:443, or Node serving UI+API on one port — never use :4000 in the browser
+  return '';
+}
+
+export const apiBase = resolveApiBase();
+const API = apiBase;
 
 async function fetchApi(path, options = {}) {
   try {
