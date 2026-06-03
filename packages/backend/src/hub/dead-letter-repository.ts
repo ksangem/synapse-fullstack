@@ -3,7 +3,7 @@
  * Includes auto-replay BackgroundService logic (5-min scan).
  */
 
-import { eq, and, lt, sql } from 'drizzle-orm';
+import { eq, and, lt, desc, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { deadLetterEntries } from '../db/schema';
 import type { MessageEnvelope } from './interfaces';
@@ -38,6 +38,37 @@ export class DeadLetterRepository {
       .returning({ id: deadLetterEntries.id });
 
     return row.id;
+  }
+
+  /**
+   * List recent dead-letter entries for display (newest first), all statuses.
+   */
+  async list(limit = 50): Promise<Array<{
+    id: string;
+    messageId: string;
+    topic: string;
+    destConnectorId: string;
+    error: string;
+    retryCount: number;
+    status: string;
+    createdAt: Date;
+    lastReplayedAt: Date | null;
+  }>> {
+    return this.db
+      .select({
+        id: deadLetterEntries.id,
+        messageId: deadLetterEntries.messageId,
+        topic: deadLetterEntries.topic,
+        destConnectorId: deadLetterEntries.destConnectorId,
+        error: deadLetterEntries.error,
+        retryCount: deadLetterEntries.retryCount,
+        status: deadLetterEntries.status,
+        createdAt: deadLetterEntries.createdAt,
+        lastReplayedAt: deadLetterEntries.lastReplayedAt,
+      })
+      .from(deadLetterEntries)
+      .orderBy(desc(deadLetterEntries.createdAt))
+      .limit(limit);
   }
 
   /**

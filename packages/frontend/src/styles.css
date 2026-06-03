@@ -38,8 +38,14 @@ html.dark-theme{
 --topbar-bg:var(--bg-sidebar);--topbar-text:var(--text);
 }
 
-html{font-size:14px}
+/* Fluid root type scale: the whole UI is sized in rem, so this one value drives
+   every font size. Scales with the viewport (standard ~15px on phones → 18px on
+   desktop) instead of the old fixed 14px that read too small. */
+html{font-size:clamp(15px, 0.5vw + 11px, 18px)}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg-main);color:var(--text);height:100vh;overflow:hidden;display:flex;flex-direction:column;transition:background .3s,color .3s}
+/* React mounts the whole app here; it must fill the viewport and lay its children
+   out as a column, otherwise the app collapses to content height (sidebar stops short). */
+#root{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 a{color:var(--primary);text-decoration:none}
 button{font-family:inherit;cursor:pointer;border:none;outline:none;font-size:.85rem}
 input,select,textarea{font-family:inherit;background:var(--bg-input);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);padding:6px 10px;font-size:.85rem;outline:none;transition:border var(--transition)}
@@ -118,13 +124,19 @@ input:focus,select:focus,textarea:focus{border-color:var(--primary)}
 .brand-text .brand-tagline{font-family:'Dancing Script',cursive;font-size:.78rem;color:var(--text-dim);font-style:italic}
 
 /* ===== MAIN CONTENT WRAPPER ===== */
-.main-content-wrapper{display:flex;flex:1;overflow:hidden;transition:all 0.25s ease}
-.main-content{flex:1;overflow-y:auto;padding:20px 24px;position:relative;transition:all 0.25s ease}
+/* The content area never scrolls itself; the active page is the single scroll
+   region (so the page fits the screen and content scrolls inside it, not the
+   whole document). min-height/min-width:0 keep the flex chain shrinkable. */
+.main-content-wrapper{display:flex;flex:1;min-width:0;overflow:hidden;transition:all 0.25s ease}
+.main-content{flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;overflow:hidden;position:relative;transition:all 0.25s ease}
 .page{display:none}
-.page.active{display:block;animation:pageFadeIn 0.15s ease;min-height:0}
+/* Page is the single scroll region and fills the full content width (containers
+   use all available space). It never grows past the viewport: it scrolls inside
+   itself, and min-height/min-width:0 + overflow keep it bounded to the screen. */
+.page.active{display:block;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:0 24px 24px;animation:pageFadeIn 0.15s ease}
 .wizard-content{min-height:0;padding-bottom:40px}
 @keyframes pageFadeIn{from{opacity:0}to{opacity:1}}
-.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.page-header{position:sticky;top:0;z-index:20;background:var(--bg-main);display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 0 12px;margin-bottom:8px}
 .page-title{font-size:1.4rem;font-weight:700}
 .page-subtitle{font-size:.85rem;color:var(--text-secondary);margin-top:2px}
 
@@ -516,3 +528,66 @@ html.dark-theme .json-bool{color:#c084fc}
 .wizard-loader{display:flex;flex-direction:column;align-items:center;gap:12px;padding:40px 20px}
 .wizard-loader .loader-spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
 .wizard-loader .loader-text{font-size:.88rem;color:var(--text-secondary)}
+
+/* ===== MOBILE NAV (hamburger + drawer backdrop) ===== */
+/* Hidden on desktop; revealed at the drawer breakpoint below. */
+.hamburger-btn{display:none;width:36px;height:36px;margin-right:6px;border-radius:var(--radius-sm);background:transparent;color:var(--topbar-text);font-size:1.2rem;align-items:center;justify-content:center;flex-shrink:0;border:none;transition:background var(--transition)}
+.hamburger-btn:hover{background:var(--bg-card-hover)}
+.sidebar-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:95;opacity:0;transition:opacity var(--transition)}
+
+/* ===== RESPONSIVE ===== */
+/* Cards/KPIs stop forcing 4-up before they get too narrow */
+@media (max-width:1200px){
+  .grid-4{grid-template-columns:repeat(2,1fr)}
+}
+
+/* Tablet & below: sidebar becomes an off-canvas drawer so content gets full width */
+@media (max-width:1024px){
+  .hamburger-btn{display:flex}
+  .sidebar{position:fixed;top:0;left:0;height:100vh;width:var(--sidebar-width);transform:translateX(-100%);transition:transform .25s ease;box-shadow:2px 0 16px rgba(0,0,0,.25);z-index:130}
+  .sidebar-backdrop{z-index:125}
+  .sidebar.collapsed{width:var(--sidebar-width)}              /* ignore desktop collapse inside the drawer */
+  .sidebar.collapsed .nav-label,
+  .sidebar.collapsed .nav-section span,
+  .sidebar.collapsed .brand-text{display:block}              /* always show labels in the drawer */
+  .sidebar.collapsed .nav-item{padding:9px 16px;justify-content:flex-start}
+  .sidebar.mobile-open{transform:translateX(0)}
+  .sidebar-backdrop.show{display:block;opacity:1}
+  .grid-3{grid-template-columns:repeat(2,1fr)}
+  .main-content{padding:16px}
+}
+
+/* Large phones / small tablets */
+@media (max-width:768px){
+  .topbar{padding:0 10px}
+  .topbar-brand{min-width:0;gap:6px}
+  .topbar-center{padding:0 8px}
+  .universal-search{width:100%}
+  .user-name{display:none}                                   /* keep the avatar, drop the name */
+  .topbar-actions{gap:6px}
+  .grid-2{grid-template-columns:1fr}
+  .page-header{flex-wrap:wrap;gap:8px}
+  .page-title{font-size:1.2rem}
+  /* Toolbars scroll horizontally instead of overflowing the viewport */
+  .toolbar{overflow-x:auto;justify-content:flex-start}
+  .toolbar-left,.toolbar-right{flex-shrink:0}
+  /* Detail pane takes the full screen as an overlay */
+  .detail-pane{position:fixed;top:0;right:0;height:100vh;z-index:120}
+  .detail-pane.open{width:100%;min-width:0}
+  /* Mapping/mapper layouts stack and grow with content rather than fixed heights */
+  .mapping-container,.mapper-layout{flex-direction:column;display:flex;height:auto;max-height:none;min-height:0}
+  .mapper-layout{grid-template-columns:1fr}
+  .mapping-panel,.mapper-col{min-height:240px}
+  .mapping-center-col{width:100%;flex-direction:row;flex-wrap:wrap;justify-content:center;padding-top:8px;border-left:none;border-right:none;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+  .mapper-col:not(:last-child){border-right:none;border-bottom:1px solid var(--border)}
+}
+
+/* Phones */
+@media (max-width:560px){
+  .topbar-center{display:none}                               /* search hidden; reachable via pages */
+  .grid-3,.grid-4{grid-template-columns:1fr}
+  .main-content{padding:12px}
+  .stepper{padding:0;gap:0;overflow-x:auto}
+  .step-line{width:32px}
+  .detail-pane.open{width:100%}
+}

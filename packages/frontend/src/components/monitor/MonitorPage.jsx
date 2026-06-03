@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useDetailPane } from '../../hooks/useDetailPane';
 import { useToast } from '../../hooks/useToast';
 import { monitorData } from '../../data/monitorData';
+import DeadLetterPanel from './DeadLetterPanel';
 
 const statusBadgeMap = {
   Success: 'badge-success',
@@ -123,6 +124,9 @@ export default function MonitorPage() {
           </label>
         </div>
       </div>
+
+      {/* Dead Letter Queue — live data + manual replay (T-04) */}
+      <DeadLetterPanel />
 
       <div className="flex gap-12 mb-16 items-center" style={{ flexWrap: 'wrap' }}>
         <select

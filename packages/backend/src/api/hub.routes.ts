@@ -13,18 +13,16 @@ import { SharePointFieldTypeMapper } from '../integrations/sharepoint-source/Sha
 import type { IDbWriter } from '../integrations/database/writers/IDbWriter';
 import type { DbConnectionConfig, DbColumnMapping, DbEngine } from '../integrations/database/types';
 import type { SharePointListConfig, SpFieldType, RawSpItem } from '../integrations/sharepoint-source/types';
-import { config } from '../config';
 
 const router = Router();
 
-/** Get Azure SP credentials — always from env, never from request body */
+/** Get Azure SP credentials strictly from the request/connection — no .env fallback.
+ *  Every SP credential must come from the saved connection (or be entered in the UI). */
 function getSpCreds(body?: Record<string, string>) {
-  // Wizard-supplied creds take precedence; .env is only a fallback.
-  // (Consistent with sharepoint.routes.ts — creds entered in the UI win.)
   return {
-    tenantId: body?.tenantId || config.AZURE_TENANT_ID || '',
-    clientId: body?.clientId || config.AZURE_CLIENT_ID || '',
-    clientSecret: body?.clientSecret || config.AZURE_CLIENT_SECRET || '',
+    tenantId: body?.tenantId || '',
+    clientId: body?.clientId || '',
+    clientSecret: body?.clientSecret || '',
   };
 }
 

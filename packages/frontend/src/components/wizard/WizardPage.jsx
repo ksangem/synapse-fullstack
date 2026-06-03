@@ -111,6 +111,14 @@ const PRESET_TRANSFORMS = [
 const PAIR_COLORS = ['#6366f1','#22c55e','#a855f7','#f59e0b','#ef4444','#3b82f6','#14b8a6','#ec4899','#84cc16','#06b6d4'];
 
 /* ─── Helpers ───────────────────────────────────────────── */
+// Safe hostname extraction — fm.endpointUrl/siteUrl may be missing or not a
+// fully-qualified URL, and a raw `new URL()` throws and crashes the render.
+function hostnameOf(url) {
+  if (!url) return '';
+  try { return new URL(url).hostname; }
+  catch { return String(url).replace(/^https?:\/\//, '').split('/')[0]; }
+}
+
 function typesCompatible(srcType, destType) {
   if (!srcType || !destType) return true;
   const src = srcType.toLowerCase();
@@ -609,44 +617,90 @@ export default function WizardPage() {
   // ─── Apply a saved connection ──────────────────────────
   const applySavedConnection = async (intg) => {
     const fm = intg.fieldMappings || {};
+    // Honor the saved source/destination types (e.g. SharePoint → SQL Server),
+    // instead of assuming every saved connection is Jira → SharePoint.
+    const srcType = fm.sourceType || 'Jira';
+    const destType = fm.destType || 'SharePoint';
 
-    // Auto-select source + dest systems
-    setSelectedSource('Jira');
-    setSelectedDest('SharePoint');
+    setSelectedSource(srcType);
+    setSelectedDest(destType);
 
-    // Fill Jira creds from integration
-    if (fm.credId) {
-      const credRes = await api.decryptCredential(fm.credId);
-      if (credRes.ok && credRes.data?.data?.payload) {
-        const payload = credRes.data.data.payload;
-        setSrcCreds({
-          connectionName: intg.name,
-          endpointUrl: fm.endpointUrl || '',
-          email: payload.email || '',
-          apiToken: payload.apiToken || '',
-        });
-        setSrcTestStatus('idle');
-        setSrcTestMsg('Credentials loaded from saved connection');
+    // ── Source prefill ──
+    if (srcType === 'Jira') {
+      if (fm.credId) {
+        const credRes = await api.decryptCredential(fm.credId);
+        if (credRes.ok && credRes.data?.data?.payload) {
+          const payload = credRes.data.data.payload;
+          setSrcCreds({
+            connectionName: intg.name,
+            endpointUrl: fm.endpointUrl || '',
+            email: payload.email || '',
+            apiToken: payload.apiToken || '',
+          });
+          setSrcTestStatus('idle');
+          setSrcTestMsg('Credentials loaded from saved connection');
+        }
+      } else if (fm.endpointUrl) {
+        setSrcCreds(prev => ({ ...prev, connectionName: intg.name, endpointUrl: fm.endpointUrl }));
       }
-    } else if (fm.endpointUrl) {
-      setSrcCreds(prev => ({ ...prev, connectionName: intg.name, endpointUrl: fm.endpointUrl }));
-    }
-
-    // Fill SharePoint creds from integration
-    // Use fm.siteUrl (SharePoint URL), NOT fm.endpointUrl (Jira URL)
-    if (fm.siteUrl || fm.listName) {
-      setDestCreds({
-        connectionName: intg.name + ' (SP)',
-        siteUrl: fm.siteUrl || '',
+    } else if (srcType === 'SharePoint') {
+      // Decrypt the stored Azure app-registration creds so the connection
+      // authenticates with its own creds (the test no longer falls back to env).
+      let azure = {};
+      if (fm.credId) {
+        const credRes = await api.decryptCredential(fm.credId);
+        if (credRes.ok && credRes.data?.data?.payload) azure = credRes.data.data.payload;
+      }
+      setSrcCreds(prev => ({
+        ...prev,
+        connectionName: intg.name,
+        siteUrl: fm.siteUrl || fm.endpointUrl || '',
         listName: fm.listName || '',
-      });
-      setDestTestStatus('idle');
-      if (fm.siteUrl) {
-        setDestTestMsg('SharePoint details loaded from saved connection');
-      }
+        tenantId: azure.tenantId || '',
+        clientId: azure.clientId || '',
+        clientSecret: azure.clientSecret || '',
+      }));
+      setSrcTestStatus('idle');
+      setSrcTestMsg(fm.credId
+        ? 'SharePoint source + Azure credentials loaded from saved connection'
+        : 'SharePoint source loaded — re-enter Azure credentials and save to store them');
     }
 
-    // Pre-select project
+    // ── Destination prefill ──
+    if (destType === 'SharePoint') {
+      if (fm.siteUrl || fm.listName) {
+        setDestCreds({
+          connectionName: intg.name + ' (SP)',
+          siteUrl: fm.siteUrl || '',
+          listName: fm.listName || '',
+        });
+        setDestTestStatus('idle');
+        if (fm.siteUrl) setDestTestMsg('SharePoint details loaded from saved connection');
+      }
+    } else if (isDbDest(destType)) {
+      // Decrypt the stored DB credential to restore username + password too.
+      let dbc = {};
+      if (fm.destCredId) {
+        const dRes = await api.decryptCredential(fm.destCredId);
+        if (dRes.ok && dRes.data?.data?.payload) dbc = dRes.data.data.payload;
+      }
+      setDestCreds(prev => ({
+        ...prev,
+        connectionName: intg.name,
+        host: dbc.host || fm.pgHost || 'localhost',
+        port: String(dbc.port || fm.pgPort || DB_DEST_CONFIG[destType]?.defaultPort || ''),
+        database: dbc.database || fm.pgDatabase || '',
+        schema: dbc.schema || fm.pgSchema || DB_DEST_CONFIG[destType]?.defaultSchema || '',
+        username: dbc.username || '',
+        password: dbc.password || '',
+      }));
+      setDestTestStatus('idle');
+      setDestTestMsg(fm.destCredId
+        ? 'Database destination + credentials loaded from saved connection'
+        : 'Database destination loaded — re-enter username/password and save to store them');
+    }
+
+    // Pre-select project (Jira only)
     if (fm.projectKey) setSelectedProject(fm.projectKey);
 
     // Track which integration is loaded
@@ -1122,12 +1176,18 @@ export default function WizardPage() {
         projectKey: selectedProject || undefined,
         siteUrl: selectedSource === 'SharePoint' ? srcCreds.siteUrl : (destCreds.siteUrl || undefined),
         listName: srcCreds.listName || destCreds.listName || undefined,
-        // PG dest fields
+        // SharePoint Azure creds — stored encrypted with the connection (no env fallback)
+        tenantId: srcCreds.tenantId || undefined,
+        clientId: srcCreds.clientId || undefined,
+        clientSecret: srcCreds.clientSecret || undefined,
+        // DB dest fields
         pgHost: destCreds.host || undefined,
         pgPort: destCreds.port || undefined,
         pgDatabase: destCreds.database || undefined,
         pgSchema: destCreds.schema || undefined,
         pgTable: destCreds.table || undefined,
+        pgUsername: destCreds.username || undefined,
+        pgPassword: destCreds.password || undefined,
       };
       const res = await api.saveConnection(body);
       if (res.ok && res.data?.success) {
@@ -1529,12 +1589,15 @@ export default function WizardPage() {
                         onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.background = ''; }}
                       >
                         <div style={{ fontWeight: 600, fontSize: '.88rem', marginBottom: 4 }}>{intg.name}</div>
-                        <div style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>
-                          {fm.projectKey && <span className="badge badge-primary" style={{ marginRight: 4, fontSize: '.65rem' }}>{fm.projectKey}</span>}
-                          {fm.listName && <span>&rarr; {fm.listName}</span>}
+                        <div style={{ fontSize: '.72rem', color: 'var(--text-secondary)', marginBottom: 4 }}>
+                          {fm.sourceType || 'Jira'} <span style={{ color: 'var(--text-dim)' }}>&rarr;</span> {fm.destType || 'SharePoint'}
+                        </div>
+                        <div style={{ fontSize: '.72rem', color: 'var(--text-dim)' }}>
+                          {fm.projectKey && <span className="badge badge-primary" style={{ marginRight: 4, fontSize: '.62rem' }}>{fm.projectKey}</span>}
+                          {fm.listName && <span>{fm.listName}</span>}
                         </div>
                         <div style={{ fontSize: '.7rem', color: 'var(--text-dim)', marginTop: 4 }}>
-                          {fm.endpointUrl ? new URL(fm.endpointUrl).hostname : ''}
+                          {hostnameOf(fm.siteUrl || fm.endpointUrl)}
                         </div>
                       </div>
                     );

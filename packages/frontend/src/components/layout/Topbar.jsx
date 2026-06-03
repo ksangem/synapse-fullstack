@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../../hooks/useTheme';
 import { searchData } from '../../data/searchData';
+import { SidebarContext } from '../../contexts/SidebarContext';
 
 const categoryRoutes = {
   connectors: '/studio',
@@ -19,6 +20,7 @@ const categoryIcons = {
 
 export default function Topbar({ onNotificationToggle, onHelpToggle }) {
   const { theme, toggleTheme } = useTheme();
+  const { toggleMobile } = useContext(SidebarContext);
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [showResults, setShowResults] = useState(false);
@@ -61,6 +63,9 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
 
   return (
     <div className="topbar">
+      <button className="hamburger-btn" onClick={toggleMobile} title="Menu" aria-label="Toggle navigation menu">
+        ☰
+      </button>
       <div className="topbar-brand">
         <svg viewBox="0 0 32 32" fill="none">
           <circle cx="6" cy="6" r="4" fill="#6366f1"/>

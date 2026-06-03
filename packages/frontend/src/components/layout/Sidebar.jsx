@@ -32,44 +32,52 @@ const navSections = [
 ];
 
 export default function Sidebar() {
-  const { collapsed, toggleSidebar } = useContext(SidebarContext);
+  const { collapsed, toggleSidebar, mobileOpen, closeMobile } = useContext(SidebarContext);
 
   return (
-    <div className={`sidebar${collapsed ? ' collapsed' : ''}`}>
-      <div className="sidebar-toggle" onClick={toggleSidebar}>
-        {collapsed ? '\u2630' : '\u2630'}
-        {!collapsed && <span>Menu</span>}
-      </div>
+    <>
+      {/* Backdrop for the mobile off-canvas drawer */}
+      <div
+        className={`sidebar-backdrop${mobileOpen ? ' show' : ''}`}
+        onClick={closeMobile}
+      />
+      <div className={`sidebar${collapsed ? ' collapsed' : ''}${mobileOpen ? ' mobile-open' : ''}`}>
+        <div className="sidebar-toggle" onClick={toggleSidebar}>
+          {collapsed ? '\u2630' : '\u2630'}
+          {!collapsed && <span>Menu</span>}
+        </div>
 
-      <nav className="sidebar-nav">
-        {navSections.map((section) => (
-          <div key={section.label}>
-            <div className="nav-section">
-              <span>{section.label}</span>
+        <nav className="sidebar-nav">
+          {navSections.map((section) => (
+            <div key={section.label}>
+              <div className="nav-section">
+                <span>{section.label}</span>
+              </div>
+              {section.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  onClick={closeMobile}
+                  className={({ isActive }) =>
+                    `nav-item${isActive ? ' active' : ''}`
+                  }
+                >
+                  <span className="nav-icon">{item.icon}</span>
+                  <span className="nav-label">{item.label}</span>
+                </NavLink>
+              ))}
             </div>
-            {section.items.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) =>
-                  `nav-item${isActive ? ' active' : ''}`
-                }
-              >
-                <span className="nav-icon">{item.icon}</span>
-                <span className="nav-label">{item.label}</span>
-              </NavLink>
-            ))}
-          </div>
-        ))}
-      </nav>
+          ))}
+        </nav>
 
-      <div className="sidebar-branding">
-        <div className="nalashaa-logo">N</div>
-        <div className="brand-text">
-          <div className="brand-name">Nalashaa</div>
-          <div className="brand-tagline">Digital Solutions</div>
+        <div className="sidebar-branding">
+          <div className="nalashaa-logo">N</div>
+          <div className="brand-text">
+            <div className="brand-name">Nalashaa</div>
+            <div className="brand-tagline">Digital Solutions</div>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

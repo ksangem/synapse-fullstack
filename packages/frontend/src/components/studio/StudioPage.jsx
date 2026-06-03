@@ -170,7 +170,7 @@ export default function StudioPage() {
         </div>
       )}
 
-      <div className="card" style={{ maxWidth: 900 }}>
+      <div className="card">
         <div style={{ fontWeight: 700, fontSize: '1rem', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
           &#127760; New REST API Connector <span className="badge badge-info">Draft</span>
         </div>

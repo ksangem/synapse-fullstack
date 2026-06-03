@@ -56,12 +56,25 @@ const saveConnectionSchema = z.object({
   projectKey: z.string().optional(),
   siteUrl: z.string().optional(),
   listName: z.string().optional(),
+  // SharePoint Azure app-registration creds (stored encrypted with the connection)
+  tenantId: z.string().optional(),
+  clientId: z.string().optional(),
+  clientSecret: z.string().optional(),
   pgHost: z.string().optional(),
   pgPort: z.string().optional(),
   pgDatabase: z.string().optional(),
   pgSchema: z.string().optional(),
   pgTable: z.string().optional(),
+  pgUsername: z.string().optional(),
+  pgPassword: z.string().optional(),
 });
+
+// destType label → DB writer engine id used by the credential payload
+const DEST_ENGINE: Record<string, 'postgres' | 'mysql' | 'sqlserver'> = {
+  PostgreSQL: 'postgres',
+  MySQL: 'mysql',
+  'SQL Server': 'sqlserver',
+};
 
 router.post('/save-connection', async (req: Request, res: Response) => {
   try {
@@ -101,34 +114,59 @@ router.post('/save-connection', async (req: Request, res: Response) => {
         encryptedPayload: encPayload,
       }).returning();
       credId = cred.credId;
-    } else if (sourceType === 'SharePoint') {
-      // SP source doesn't need separate credential — uses Azure env creds
+    } else if (sourceType === 'SharePoint' && body.tenantId && body.clientId && body.clientSecret) {
+      // Store the SharePoint Azure app-registration creds with the connection
+      // (encrypted) so the connection authenticates with its own creds, not env.
+      const spPayload = credentialService.encrypt(JSON.stringify({
+        tenantId: body.tenantId,
+        clientId: body.clientId,
+        clientSecret: body.clientSecret,
+      }));
+
       if (existing) {
         const oldFm = existing.fieldMappings as Record<string, string> | null;
         if (oldFm?.credId) {
           await db.delete(credentials).where(eq(credentials.credId, oldFm.credId));
         }
       }
+
+      const [cred] = await db.insert(credentials).values({
+        orgId: '00000000-0000-0000-0000-000000000001',
+        systemName: 'SharePoint',
+        authType: 'azure_app',
+        encryptedPayload: spPayload,
+      }).returning();
+      credId = cred.credId;
     }
 
-    // Store PG destination credentials if present
+    // Store DB destination credentials (any engine) encrypted with the connection,
+    // including the real username + password so the connection owns its own creds.
     let destCredId: string | null = null;
-    if (destType === 'PostgreSQL' && body.pgHost && body.pgDatabase) {
-      const pgPayload = credentialService.encrypt(JSON.stringify({
-        engine: 'postgres',
+    const destEngine = DEST_ENGINE[destType];
+    if (destEngine && body.pgHost && body.pgDatabase) {
+      const dbPayload = credentialService.encrypt(JSON.stringify({
+        engine: destEngine,
         host: body.pgHost,
-        port: Number(body.pgPort) || 5432,
+        port: Number(body.pgPort) || undefined,
         database: body.pgDatabase,
-        username: body.pgSchema || 'synapse', // fallback
-        password: '', // password not stored in save-connection for safety
-        schema: body.pgSchema || 'public',
+        username: body.pgUsername || '',
+        password: body.pgPassword || '',
+        schema: body.pgSchema || undefined,
       }));
+
+      // Replace any prior destination credential when updating
+      if (existing) {
+        const oldFm = existing.fieldMappings as Record<string, string> | null;
+        if (oldFm?.destCredId) {
+          await db.delete(credentials).where(eq(credentials.credId, oldFm.destCredId));
+        }
+      }
 
       const [destCred] = await db.insert(credentials).values({
         orgId: '00000000-0000-0000-0000-000000000001',
-        systemName: 'PostgreSQL',
+        systemName: destType,
         authType: 'database_connection',
-        encryptedPayload: pgPayload,
+        encryptedPayload: dbPayload,
       }).returning();
       destCredId = destCred.credId;
     }

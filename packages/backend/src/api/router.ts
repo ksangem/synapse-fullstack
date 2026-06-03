@@ -8,6 +8,7 @@ import pushRoutes from './push.routes';
 import syncRoutes from './sync.routes';
 import connectedRoutes from './connectedInstances.routes';
 import hubRoutes from './hub.routes';
+import dlqRoutes from './dlq.routes';
 
 const apiRouter = Router();
 
@@ -19,6 +20,7 @@ apiRouter.use('/sharepoint', sharepointRoutes);
 apiRouter.use('/push', pushRoutes);
 apiRouter.use('/sync', syncRoutes);
 apiRouter.use('/connected', connectedRoutes);
+apiRouter.use('/hub/dlq', dlqRoutes); // mount before /hub so the specific path wins
 apiRouter.use('/hub', hubRoutes);
 
 export default apiRouter;

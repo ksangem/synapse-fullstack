@@ -296,6 +296,20 @@ export const api = {
     return fetchApi('/api/hub/mssql-quick-view', { method: 'POST', body: JSON.stringify(params) });
   },
 
+  // ── Hub: Dead Letter Queue (manual replay) ──
+  getDeadLetters: async (limit = 50) => {
+    return fetchApi(`/api/hub/dlq?limit=${limit}`);
+  },
+  replayDeadLetter: async (id) => {
+    return fetchApi(`/api/hub/dlq/replay/${id}`, { method: 'POST' });
+  },
+  replayAllDeadLetters: async () => {
+    return fetchApi('/api/hub/dlq/replay', { method: 'POST' });
+  },
+  seedDeadLetter: async () => {
+    return fetchApi('/api/hub/dlq/_seed', { method: 'POST' });
+  },
+
   // ── Health check ──
   healthCheck: async () => {
     return fetchApi('/health');

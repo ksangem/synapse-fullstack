@@ -110,11 +110,11 @@ ROWS=[
 # Sprint 1
 ("S1","Hub Engine","MessageEnvelope + SHA-256 checksum + topic model (Node/TS per LLD §6)","Dev A",24,"Done",1.0,date(2026,6,3),"COMPLETE (T-01) — immutable envelope + SHA-256 checksum existed; added hub/topic.ts (canonical source.entity.event, validate/parse/build, centralized topicMatches), topic validation + idempotency-key-derived messageId in createEnvelope, router refactor. 59 hub tests pass."),
 ("S1","Hub Engine","IntegrationBus + Router + Subscription registry (in-memory queue + fan-out)","Dev A",24,"Done",1.0,date(2026,6,3),"COMPLETE (T-02, direction A) — SubscriptionRegistry (org-scoped findMatching), BoundedQueue (FIFO + backpressure), InMemoryBus (publish->queue->router fan-out, checksum-validate, transform hook). 76 hub tests pass."),
-("S1","Hub Engine","Persistence: Inbox / Outbox / DeadLetter / Idempotency tables + repos (Postgres)","Dev A",20,"Not Started",0,None,"LLD §8 schema, Drizzle."),
-("S1","Reliability","Retry+backoff + circuit breaker + DLQ auto/manual replay","Dev A",20,"Not Started",0,None,"Per Architecture §11."),
+("S1","Hub Engine","Persistence: Inbox / Outbox / DeadLetter / Idempotency tables + repos (Postgres)","Dev A",20,"Done",1.0,date(2026,6,3),"COMPLETE (T-03) — 4 Drizzle tables + repos existed; added hub/durable-bus.ts orchestrating store-and-forward (inbox checkpoint -> idempotency dedup -> outbox -> dispatch -> markDone/dead-letter) over T-02 fan-out, + createDurablePorts factory. 85 hub tests pass."),
+("S1","Reliability","Retry+backoff + circuit breaker + DLQ auto/manual replay","Dev A",20,"Done",1.0,date(2026,6,3),"COMPLETE (T-04) — hub/retry.ts (exp backoff + jitter, withRetry), hub/circuit-breaker.ts (closed/open/half-open), hub/dlq-replay-service.ts (auto+manual replay -> resolve/retry/poison); retry+per-dest breaker wired into DurableBus (opt-in). 100 hub tests pass."),
 ("S1","Adapter","SharePoint -> Postgres (delta poll, schema introspect, DDL diff/apply, upsert)","Dev B",0,"Done",1.0,date(2026,5,17),"COMPLETE — tested locally before kickoff."),
 ("S1","Adapter","SharePoint -> MSSQL (extend SP->PG: MERGE upsert + sys.columns introspect)","Dev B",24,"Done",1.0,date(2026,6,2),"COMPLETE (T-06) — SqlServerWriter smartUpsert + sys.columns introspect + hub MSSQL endpoints + wizard wiring. Tested."),
-("S1","Frontend","Wire Dashboard + Registry to real APIs (remove mock data)","Dev B",16,"In Progress",0.75,None,"T-07 code-complete: integrationMap.js shared mapper, live KPIs/tiles/charts off /api/connected, sample fallback, 0 diagnostics. Pending browser verify for M1."),
+("S1","Frontend","Wire Dashboard + Registry to real APIs (remove mock data)","Dev B",16,"Done",1.0,date(2026,6,3),"COMPLETE (T-07) — integrationMap.js shared mapper, live KPIs/tiles/charts off /api/connected, sample fallback, 0 diagnostics. Browser-verified headless (verify-t07.mjs): Dashboard + Registry render the 'Live' badge with real adapters (SP->SQL Server, SP->MySQL)."),
 # Sprint 2
 ("S2","Wizard","Connection Wizard 6-step backend + Step 4 (mapping) + Step 6 (test/deploy gate)","Dev A",28,"Not Started",0,None,"Hard test-before-publish gate."),
 ("S2","Mapping","Mapping Canvas + AI Auto-Map (Claude API) + confidence badges","Dev B",30,"Not Started",0,None,"Human-confirm required."),
@@ -218,10 +218,13 @@ MIL=[
 ("M6","UAT signoff & go-live readiness",date(2026,8,14),"BA + Stakeholders",
  "UAT cycles 1-2 complete; all signoff scenarios passed; go-live checklist approved."),
 ]
+# Milestone status overrides (id -> (status, actual date)). All M1 tasks Done + browser-verified.
+MIL_STATUS={"M1":("Achieved",date(2026,6,3))}
 for i,(mid,m,tgt,owner,ac) in enumerate(MIL,2):
+    mstat,mactual=MIL_STATUS.get(mid,("Not Started",None))
     ms.cell(i,1,mid).font=BB; ms.cell(i,2,m).font=BF; ms.cell(i,3,tgt).number_format="yyyy-mm-dd"
-    ms.cell(i,4,"Not Started").font=BF; ms.cell(i,5,owner).font=BF; ms.cell(i,6,ac).font=BF
-    ms.cell(i,7,None).number_format="yyyy-mm-dd"
+    ms.cell(i,4,mstat).font=BF; ms.cell(i,5,owner).font=BF; ms.cell(i,6,ac).font=BF
+    ms.cell(i,7,mactual).number_format="yyyy-mm-dd"
     ms.cell(i,8,f'=IF(G{i}="","",NETWORKDAYS(C{i},G{i})-1)').font=BF
     for col in range(1,9):
         ms.cell(i,col).border=BORDER; ms.cell(i,col).alignment=LT if col in (2,6) else C

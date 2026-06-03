@@ -115,7 +115,7 @@ export default function CatalogPage() {
   const formatLabel = (f) => f.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase());
 
   return (
-    <div className="page active">
+    <div className="page active" style={{ display: 'flex', flexDirection: 'column' }}>
       <div className="page-header">
         <div>
           <div className="page-title">Master Entity Catalog</div>
@@ -123,7 +123,7 @@ export default function CatalogPage() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 20, height: 'calc(100vh - 200px)' }}>
+      <div style={{ display: 'flex', gap: 20, flex: 1, minHeight: 0 }}>
         {/* Tree nav */}
         <div className="card tree-nav" style={{ overflowY: 'auto', flexShrink: 0, padding: 12 }}>
           <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginBottom: 8, fontWeight: 600 }}>Departments</div>
@@ -149,9 +149,9 @@ export default function CatalogPage() {
           ))}
         </div>
 
-        {/* Entity detail panel */}
-        <div style={{ flex: 1, overflowY: 'auto' }} id="entityDetailPanel">
-          <div className="card mb-16">
+        {/* Entity detail panel — two stacked cards sharing the height 80 : 20 */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 16, minHeight: 0 }} id="entityDetailPanel">
+          <div className="card" style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto', marginBottom: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <div>
                 <span style={{ fontWeight: 700, fontSize: '1.1rem' }}>{selectedEntity.name}</span>{' '}
@@ -195,7 +195,7 @@ export default function CatalogPage() {
             </table>
           </div>
 
-          <div className="card">
+          <div className="card" style={{ flex: '0 0 auto' }}>
             <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 12 }}>Cross-References</div>
             <div className="grid-2">
               <div>
