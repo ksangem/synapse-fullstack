@@ -74,7 +74,7 @@ if ($svc) {
     else { Start-Service $ServiceName }
     Write-Host "    Service restarted: $ServiceName"
 } else {
-    Write-Host "    No service '$ServiceName' — restarting node on port 4000"
+    Write-Host "    No service '$ServiceName' - restarting node on port 4000"
     Get-NetTCPConnection -LocalPort 4000 -State Listen -ErrorAction SilentlyContinue |
         ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
     Start-Sleep 2

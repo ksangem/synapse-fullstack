@@ -31,9 +31,13 @@ if ($UseArtifact -and $ArtifactPath -and (Test-Path $ArtifactPath)) {
     if (Test-Path package-lock.json) { npm ci } else { npm install }
     npm run build
     Pop-Location
-    $built = Join-Path $RepoRoot 'packages\frontend\dist'
-    Get-ChildItem $FrontendPath -Exclude 'web.config' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
-    Copy-Item -Path (Join-Path $built '*') -Destination $FrontendPath -Recurse -Force
+    $built = (Resolve-Path (Join-Path $RepoRoot 'packages\frontend\dist')).Path
+    $targetResolved = Resolve-Path $FrontendPath -ErrorAction SilentlyContinue
+    if ($targetResolved) { $target = $targetResolved.Path } else { $target = (New-Item -ItemType Directory -Force -Path $FrontendPath).FullName }
+    if ($built.TrimEnd('\') -ne $target.TrimEnd('\')) {
+        Get-ChildItem $target -Exclude 'web.config' -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+        Copy-Item -Path (Join-Path $built '*') -Destination $target -Recurse -Force
+    }
 }
 
 Copy-Item $webConfigSrc (Join-Path $FrontendPath 'web.config') -Force
@@ -50,7 +54,7 @@ try {
         Write-Host "    Recycled app pool for site: $IisSite"
     }
 } catch {
-    Write-Host "    (IIS recycle skipped — run iisreset as Administrator if needed)"
+    Write-Host '    (IIS recycle skipped - run iisreset as Administrator if needed)'
 }
 
 Write-Host "==> Frontend deploy complete"
