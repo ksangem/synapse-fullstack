@@ -1,0 +1,141 @@
+# Backend CI — test, build, artifact (runs on GitHub cloud)
+# Dashboard: https://github.com/ksangem/synapse-fullstack/actions/workflows/backend-ci.yml
+name: Backend CI
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'packages/backend/**'
+      - 'deploy/**'
+      - '.github/workflows/backend-*.yml'
+  push:
+    branches: [main, master]
+    paths:
+      - 'packages/backend/**'
+      - 'deploy/**'
+      - '.github/workflows/backend-*.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  ci:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      success: ${{ steps.ci-result.outputs.success }}
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: synapse
+          POSTGRES_PASSWORD: synapse
+          POSTGRES_DB: synapse_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U synapse -d synapse_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://synapse:synapse@localhost:5432/synapse_db
+      REDIS_URL: redis://localhost:6379
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      NODE_ENV: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: packages/backend
+        run: npm ci
+
+      - name: Prepare database schemas
+        run: |
+          PGPASSWORD=synapse psql -h localhost -U synapse -d synapse_db -c "CREATE SCHEMA IF NOT EXISTS app;"
+          PGPASSWORD=synapse psql -h localhost -U synapse -d synapse_db -c "CREATE SCHEMA IF NOT EXISTS jira_data;"
+
+      - name: Push Drizzle schema
+        working-directory: packages/backend
+        run: npx drizzle-kit push --force
+
+      - name: Seed default organization
+        run: PGPASSWORD=synapse psql -h localhost -U synapse -d synapse_db -f deploy/seed-default-org.sql
+
+      - name: Run tests
+        working-directory: packages/backend
+        run: npm run test
+
+      - name: Build TypeScript
+        working-directory: packages/backend
+        run: npm run build
+
+      - name: Install production dependencies
+        working-directory: packages/backend
+        run: |
+          rm -rf node_modules
+          npm ci --omit=dev
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: synapse-backend-release
+          path: |
+            packages/backend/dist/
+            packages/backend/node_modules/
+            packages/backend/package.json
+            packages/backend/package-lock.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: CI result
+        id: ci-result
+        if: always()
+        run: echo "success=${{ job.status == 'success' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Backend CI"
+            echo ""
+            echo "| Item | Value |"
+            echo "|------|-------|"
+            echo "| **Status** | ${{ job.status == 'success' && '✅ Success' || '❌ Failed' }} |"
+            echo "| **Branch** | \`${{ github.ref_name }}\` |"
+            echo "| **Commit** | [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) |"
+            echo "| **Tests** | Vitest + Postgres/Redis services |"
+            echo "| **Artifact** | \`synapse-backend-release\` |"
+            echo ""
+            if [ "${{ job.status }}" = "success" ]; then
+              echo "Ready for **Backend Deploy** on the Windows VM."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

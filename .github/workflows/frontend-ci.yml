@@ -1,0 +1,98 @@
+# Frontend CI — lint, build, artifact (runs on GitHub cloud)
+# Dashboard: https://github.com/ksangem/synapse-fullstack/actions/workflows/frontend-ci.yml
+name: Frontend CI
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'packages/frontend/**'
+      - 'deploy/web.config'
+      - '.github/workflows/frontend-*.yml'
+  push:
+    branches: [main, master]
+    paths:
+      - 'packages/frontend/**'
+      - 'deploy/web.config'
+      - '.github/workflows/frontend-*.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: frontend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  ci:
+    name: Lint & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      success: ${{ steps.ci-result.outputs.success }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: packages/frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: packages/frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: packages/frontend
+        run: npm run lint
+
+      - name: Build
+        working-directory: packages/frontend
+        run: npm run build
+
+      - name: Attach IIS web.config
+        run: cp deploy/web.config packages/frontend/dist/web.config
+
+      - name: Verify build output
+        run: test -f packages/frontend/dist/index.html
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: synapse-frontend-dist
+          path: packages/frontend/dist/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: CI result
+        id: ci-result
+        if: always()
+        run: echo "success=${{ job.status == 'success' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Frontend CI"
+            echo ""
+            echo "| Item | Value |"
+            echo "|------|-------|"
+            echo "| **Status** | ${{ job.status == 'success' && '✅ Success' || '❌ Failed' }} |"
+            echo "| **Branch** | \`${{ github.ref_name }}\` |"
+            echo "| **Commit** | [\`${{ github.sha }}\`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) |"
+            echo "| **Triggered by** | ${{ github.event_name }} |"
+            echo "| **Artifact** | \`synapse-frontend-dist\` (30 day retention) |"
+            echo ""
+            if [ "${{ job.status }}" = "success" ]; then
+              echo "### Next step"
+              echo "Merge to \`main\` and run **Frontend Deploy** (or auto-deploy if runner is online)."
+            else
+              echo "### Fix failures above, then re-run workflow."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -2,6 +2,19 @@
 
 **Jira-to-SharePoint data synchronization platform.** Pulls issue data from Jira (via API or browser scraping), normalizes it, and pushes it to SharePoint lists via Microsoft Graph API. Includes scheduling, deduplication, credential management, and a monitoring dashboard.
 
+## CI/CD status
+
+| Pipeline | Status |
+|----------|--------|
+| Frontend CI | [![Frontend CI](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/frontend-ci.yml/badge.svg?branch=master)](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/frontend-ci.yml) |
+| Backend CI | [![Backend CI](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/backend-ci.yml/badge.svg?branch=master)](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/backend-ci.yml) |
+| Frontend Deploy | [![Frontend Deploy](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/frontend-deploy.yml/badge.svg?branch=master)](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/frontend-deploy.yml) |
+| Backend Deploy | [![Backend Deploy](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/backend-deploy.yml/badge.svg?branch=master)](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/backend-deploy.yml) |
+
+**Dashboard:** [Actions (fork)](https://github.com/ranjanpradyot/synapse-fullstack/actions) · [CI/CD Dashboard](https://github.com/ranjanpradyot/synapse-fullstack/actions/workflows/ci-dashboard.yml) · Upstream: [ksangem/synapse-fullstack](https://github.com/ksangem/synapse-fullstack)
+
+**Deploy to local VM:** [deploy/DEPLOY.md](deploy/DEPLOY.md) (self-hosted GitHub runner on the Windows server)
+
 ## Tech Stack
 
 | Layer | Technology |

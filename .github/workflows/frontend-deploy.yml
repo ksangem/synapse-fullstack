@@ -1,0 +1,80 @@
+# Frontend Deploy — IIS on local VM (requires self-hosted runner: Windows + label "synapse")
+name: Frontend Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or tag to deploy'
+        required: false
+        default: 'main'
+  workflow_run:
+    workflows: [Frontend CI]
+    types: [completed]
+    branches: [main, master]
+
+concurrency:
+  group: frontend-deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+  deployments: write
+
+env:
+  DEPLOY_FRONTEND_PATH: ${{ vars.DEPLOY_FRONTEND_PATH || 'C:\inetpub\wwwroot\synapse-fullstack\packages\frontend\dist' }}
+  IIS_SITE_NAME: ${{ vars.IIS_SITE_NAME || 'Synapse-Integration-Hub' }}
+
+jobs:
+  deploy:
+    name: Deploy to IIS (VM)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: [self-hosted, Windows, synapse]
+    environment:
+      name: production
+      url: https://synapse.nalashaa.com
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - name: Download CI artifact
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v4
+        with:
+          name: synapse-frontend-dist
+          path: _artifact/frontend
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Deploy frontend
+        shell: pwsh
+        env:
+          SYNAPSE_REPO_ROOT: ${{ github.workspace }}
+          SYNAPSE_FRONTEND_PATH: ${{ env.DEPLOY_FRONTEND_PATH }}
+          SYNAPSE_IIS_SITE: ${{ env.IIS_SITE_NAME }}
+          SYNAPSE_USE_ARTIFACT: ${{ github.event_name == 'workflow_run' }}
+          SYNAPSE_ARTIFACT_PATH: ${{ github.workspace }}/_artifact/frontend
+        run: |
+          & "${{ github.workspace }}/deploy/deploy-frontend.ps1"
+
+      - name: Deployment summary
+        if: always()
+        shell: pwsh
+        run: |
+          $ok = '${{ job.status }}' -eq 'success'
+          $icon = if ($ok) { '✅' } else { '❌' }
+          @"
+          ## Frontend Deploy $icon
+          | Item | Value |
+          |------|-------|
+          | **IIS path** | ``${{ env.DEPLOY_FRONTEND_PATH }}`` |
+          | **Site** | ``${{ env.IIS_SITE_NAME }}`` |
+          | **Live URL** | https://synapse.nalashaa.com |
+          | **Commit** | ``${{ github.sha }}`` |
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8

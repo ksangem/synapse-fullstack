@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Emergency config when URL Rewrite is NOT installed (fixes 500.19 / 0x8007000d).
+     Replace with deploy/web.config after running deploy/install-iis-modules.ps1 -->
+<configuration>
+  <system.webServer>
+    <defaultDocument enabled="true">
+      <files>
+        <clear />
+        <add value="index.html" />
+      </files>
+    </defaultDocument>
+  </system.webServer>
+</configuration>
