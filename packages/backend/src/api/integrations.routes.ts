@@ -5,6 +5,7 @@ import { integrations, runs, credentials, pushLog, syncState, runMessages, jiraT
 import { eq, desc, and } from 'drizzle-orm';
 import { integrationRunnerQueue } from '../queues';
 import { CredentialService } from '../services/CredentialService';
+import { mappingAIService } from '../services/MappingAIService';
 
 const credentialService = new CredentialService();
 
@@ -51,6 +52,11 @@ const saveConnectionSchema = z.object({
   endpointUrl: z.string().min(1),
   sourceType: z.string().optional(),
   destType: z.string().optional(),
+  // Connector-registry pins (template-driven wizard)
+  sourceConnectorId: z.string().optional(),
+  destConnectorId: z.string().optional(),
+  sourceConnectorVersionId: z.string().optional(),
+  destConnectorVersionId: z.string().optional(),
   email: z.string().optional(),
   apiToken: z.string().optional(),
   projectKey: z.string().optional(),
@@ -187,6 +193,9 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       if (body.pgDatabase) fm.pgDatabase = body.pgDatabase;
       if (body.pgSchema) fm.pgSchema = body.pgSchema;
       if (body.pgTable) fm.pgTable = body.pgTable;
+      // Connector version pins (kept in fieldMappings JSONB; FK columns set below)
+      if (body.sourceConnectorVersionId) fm.sourceConnectorVersionId = body.sourceConnectorVersionId;
+      if (body.destConnectorVersionId) fm.destConnectorVersionId = body.destConnectorVersionId;
       return fm;
     };
 
@@ -195,6 +204,8 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       const [result] = await db.update(integrations).set({
         name: body.name,
         fieldMappings: buildFm(oldFm),
+        sourceConnectorId: body.sourceConnectorId ?? existing.sourceConnectorId,
+        destConnectorId: body.destConnectorId ?? existing.destConnectorId,
         updatedAt: new Date(),
       }).where(eq(integrations.integrationId, existing.integrationId)).returning();
 
@@ -204,6 +215,8 @@ router.post('/save-connection', async (req: Request, res: Response) => {
         orgId: '00000000-0000-0000-0000-000000000001',
         name: body.name,
         status: 'active',
+        sourceConnectorId: body.sourceConnectorId ?? null,
+        destConnectorId: body.destConnectorId ?? null,
         fieldMappings: buildFm(),
       }).returning();
 
@@ -361,6 +374,73 @@ router.get('/:id/runs', async (req: Request, res: Response) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ success: false, error: message });
+  }
+});
+
+// ─── Mapping persistence + AI (Mapping Canvas) ─────────────
+
+// GET /api/integrations/:id/mappings — load saved field mappings
+router.get('/:id/mappings', async (req: Request, res: Response) => {
+  try {
+    const [intg] = await db.select().from(integrations).where(eq(integrations.integrationId, req.params.id as string));
+    if (!intg) {
+      res.status(404).json({ success: false, error: 'Integration not found' });
+      return;
+    }
+    const fm = (intg.fieldMappings as Record<string, unknown> | null) ?? {};
+    res.json({ success: true, data: { mappings: fm.mappings ?? [], sourceType: fm.sourceType, destType: fm.destType } });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : 'Unknown error' });
+  }
+});
+
+// PUT /api/integrations/:id/mappings — persist field mappings into fieldMappings.mappings
+router.put('/:id/mappings', async (req: Request, res: Response) => {
+  try {
+    const body = z.object({ mappings: z.array(z.unknown()) }).parse(req.body);
+    const [intg] = await db.select().from(integrations).where(eq(integrations.integrationId, req.params.id as string));
+    if (!intg) {
+      res.status(404).json({ success: false, error: 'Integration not found' });
+      return;
+    }
+    const fm = { ...((intg.fieldMappings as Record<string, unknown> | null) ?? {}), mappings: body.mappings };
+    const [updated] = await db.update(integrations)
+      .set({ fieldMappings: fm, updatedAt: new Date() })
+      .where(eq(integrations.integrationId, req.params.id as string))
+      .returning();
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err instanceof Error ? err.message : 'Unknown error' });
+  }
+});
+
+// POST /api/integrations/:id/mappings/auto-map — AI (or deterministic) suggestions
+router.post('/:id/mappings/auto-map', async (req: Request, res: Response) => {
+  try {
+    const { srcFields, destFields } = req.body ?? {};
+    if (!Array.isArray(srcFields) || !Array.isArray(destFields)) {
+      res.status(400).json({ success: false, error: 'srcFields and destFields arrays are required' });
+      return;
+    }
+    const result = await mappingAIService.autoMap(srcFields, destFields);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : 'Unknown error' });
+  }
+});
+
+// POST /api/integrations/:id/mappings/transform/nl — natural-language → JS transform
+router.post('/:id/mappings/transform/nl', async (req: Request, res: Response) => {
+  try {
+    const { description, sourceFields } = req.body ?? {};
+    if (!description) {
+      res.status(400).json({ success: false, error: 'description is required' });
+      return;
+    }
+    const result = await mappingAIService.nlTransform(description, Array.isArray(sourceFields) ? sourceFields : []);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : 'Unknown error' });
   }
 });
 

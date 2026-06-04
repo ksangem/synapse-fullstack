@@ -9,9 +9,13 @@ import syncRoutes from './sync.routes';
 import connectedRoutes from './connectedInstances.routes';
 import hubRoutes from './hub.routes';
 import dlqRoutes from './dlq.routes';
+import connectorsRoutes from './connectors.routes';
+import entitiesRoutes from './entities.routes';
 
 const apiRouter = Router();
 
+apiRouter.use('/connectors', connectorsRoutes);
+apiRouter.use('/entities', entitiesRoutes);
 apiRouter.use('/integrations', integrationsRoutes);
 apiRouter.use('/runs', runsRoutes);
 apiRouter.use('/credentials', credentialsRoutes);
@@ -22,5 +26,10 @@ apiRouter.use('/sync', syncRoutes);
 apiRouter.use('/connected', connectedRoutes);
 apiRouter.use('/hub/dlq', dlqRoutes); // mount before /hub so the specific path wins
 apiRouter.use('/hub', hubRoutes);
+
+// JSON 404 for unmatched /api/* routes (so API clients get JSON, not the SPA shell).
+apiRouter.use((_req, res) => {
+  res.status(404).json({ success: false, error: 'Route not found' });
+});
 
 export default apiRouter;

@@ -3,100 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 
 /* ─── Static Data ──────────────────────────────────────��── */
-const sourceCards = [
-  { icon: '\u{1F3E2}', label: 'Dynamics 365' },
-  { icon: '\u{1F4CB}', label: 'Jira' },
-  { icon: '\u{1F4C1}', label: 'SharePoint' },
-  { icon: '\u{1F4DD}', label: 'TARA' },
-  { icon: '\u{1F5C3}', label: 'PostgreSQL' },
-  { icon: '\u{1F4CA}', label: 'Excel' },
-  { icon: '\u{1F465}', label: 'Keka' },
-];
-const destCards = [
-  { icon: '\u2699', label: 'TFS' },
-  { icon: '\u{1F4C1}', label: 'SharePoint' },
-  { icon: '\u{1F5C3}', label: 'PostgreSQL' },
-  { icon: '\u{1F42C}', label: 'MySQL' },
-  { icon: '\u{1F5A5}', label: 'SQL Server' },
-  { icon: '\u{1F4C5}', label: 'Holiday Tracker' },
-  { icon: '\u{1F517}', label: 'Ahrefs' },
-  { icon: '\u{1F50D}', label: 'GSC' },
-  { icon: '\u{1F4E2}', label: 'Google Adwords' },
-];
 const stepLabels = ['Select Systems', 'Credentials', 'Entities', 'Mapping', 'Fetch & Review', 'Push & Sync'];
-const credentialFields = {
-  Jira: [
-    { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'e.g. Jira Production' },
-    { key: 'endpointUrl', label: 'API Base URL', type: 'text', placeholder: 'https://yourorg.atlassian.net' },
-    { key: 'apiToken', label: 'API Token', type: 'password', placeholder: 'Your Jira API token' },
-    { key: 'email', label: 'Email / Username', type: 'text', placeholder: 'admin@yourorg.com' },
-  ],
-  SharePoint: [
-    { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'e.g. SharePoint Production' },
-    { key: 'siteUrl', label: 'Site URL', type: 'text', placeholder: 'https://yourorg.sharepoint.com/sites/projects' },
-    { key: 'listName', label: 'List Name', type: 'text', placeholder: 'e.g. Invoice' },
-    { key: 'tenantId', label: 'Azure Tenant ID', type: 'text', placeholder: 'Directory (tenant) ID' },
-    { key: 'clientId', label: 'Azure Client ID', type: 'text', placeholder: 'Application (client) ID' },
-    { key: 'clientSecret', label: 'Azure Client Secret', type: 'password', placeholder: 'App registration client secret' },
-  ],
-  PostgreSQL: [
-    { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'e.g. Synapse Postgres' },
-    { key: 'host', label: 'Host', type: 'text', placeholder: 'localhost', defaultValue: 'localhost' },
-    { key: 'port', label: 'Port', type: 'text', placeholder: '5555', defaultValue: '5555' },
-    { key: 'database', label: 'Database', type: 'text', placeholder: 'synapse_db', defaultValue: 'synapse_db' },
-    { key: 'username', label: 'Username', type: 'text', placeholder: 'synapse', defaultValue: 'synapse' },
-    { key: 'password', label: 'Password', type: 'password', placeholder: 'Database password', defaultValue: 'synapse' },
-    { key: 'schema', label: 'Schema', type: 'text', placeholder: 'public', defaultValue: 'public' },
-    { key: 'table', label: 'Target Table', type: 'text', placeholder: 'e.g. sp_invoice (auto-created if missing)' },
-  ],
-  MySQL: [
-    { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'e.g. MySQL Production' },
-    { key: 'host', label: 'Host', type: 'text', placeholder: 'localhost', defaultValue: 'localhost' },
-    { key: 'port', label: 'Port', type: 'text', placeholder: '3307', defaultValue: '3307' },
-    { key: 'database', label: 'Database', type: 'text', placeholder: 'synapse_db', defaultValue: 'synapse_db' },
-    { key: 'username', label: 'Username', type: 'text', placeholder: 'synapse', defaultValue: 'synapse' },
-    { key: 'password', label: 'Password', type: 'password', placeholder: 'Database password', defaultValue: 'synapse' },
-    { key: 'table', label: 'Target Table', type: 'text', placeholder: 'e.g. sp_invoice (auto-created if missing)' },
-  ],
-  'SQL Server': [
-    { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'e.g. SQL Server Production' },
-    { key: 'host', label: 'Host', type: 'text', placeholder: 'localhost', defaultValue: 'localhost' },
-    { key: 'port', label: 'Port', type: 'text', placeholder: '1433', defaultValue: '1433' },
-    { key: 'database', label: 'Database', type: 'text', placeholder: 'master', defaultValue: 'master' },
-    { key: 'username', label: 'Username', type: 'text', placeholder: 'sa', defaultValue: 'sa' },
-    { key: 'password', label: 'Password', type: 'password', placeholder: 'Database password' },
-    { key: 'schema', label: 'Schema', type: 'text', placeholder: 'dbo', defaultValue: 'dbo' },
-    { key: 'table', label: 'Target Table', type: 'text', placeholder: 'e.g. sp_invoice (auto-created if missing)' },
-  ],
-};
-
-/* DB destination engine config — keeps the SP→DB flow engine-agnostic (T-06). */
-const DB_DEST_CONFIG = {
-  PostgreSQL: { defaultPort: 5555, hasSchema: true, defaultSchema: 'public',
-    test: 'testPgDest', tables: 'getPgTables', columns: 'getPgTableColumns', push: 'pushToPg', quickView: 'pgQuickView' },
-  MySQL: { defaultPort: 3307, hasSchema: false, defaultSchema: undefined,
-    test: 'testMysqlDest', tables: 'getMysqlTables', columns: 'getMysqlTableColumns', push: 'pushToMysql', quickView: 'mysqlQuickView' },
-  'SQL Server': { defaultPort: 1433, hasSchema: true, defaultSchema: 'dbo',
-    test: 'testMssqlDest', tables: 'getMssqlTables', columns: 'getMssqlTableColumns', push: 'pushToMssql', quickView: 'mssqlQuickView' },
-};
-const isDbDest = (dest) => !!DB_DEST_CONFIG[dest];
-const genericCredFields = [
-  { key: 'connectionName', label: 'Connection Name', type: 'text', placeholder: 'Connection name' },
-  { key: 'endpoint', label: 'Endpoint URL', type: 'text', placeholder: 'https://...' },
-  { key: 'apiKey', label: 'API Key / Token', type: 'password', placeholder: 'Your API key' },
-  { key: 'username', label: 'Username', type: 'text', placeholder: 'Username or email' },
-];
-
-const entityDescriptions = {
-  issues: 'Bugs, stories, tasks, epics \u2014 the core Jira work items',
-  projects: 'Project metadata, lead, category',
-  users: 'Team members, assignees, reporters',
-  sprints: 'Sprint names, dates, goals',
-  components: 'Project components / modules',
-  comments: 'Issue comments and discussions',
-  attachments: 'Files attached to issues',
-  worklogs: 'Time tracking entries',
-};
+const DEFAULT_ICON = '\u{1F50C}'; // fallback card icon for registry connectors without one
+/* Connector cards, credential field schemas, DB engine config, and entity
+   descriptions are loaded at runtime from the connector registry
+   (`/api/connectors`) into component state — see the connector-metadata effect
+   inside WizardPage. `isDbDest` / `getFields` / `dbCfg` are registry-driven. */
 
 const PRESET_TRANSFORMS = [
   { value: 'dateFormat', label: 'Date Format (YYYY-MM-DD)', desc: 'Extracts date portion' },
@@ -533,6 +445,12 @@ export default function WizardPage() {
   const [selectedDest, setSelectedDest] = useState(null);
   const navigate = useNavigate();
 
+  // Connector registry (replaces the old hardcoded sourceCards / destCards /
+  // credentialFields / DB_DEST_CONFIG / entityDescriptions). Loaded on mount.
+  const [sourceCards, setSourceCards] = useState([]); // [{ icon, label, connectorId }]
+  const [destCards, setDestCards] = useState([]);
+  const [connectorMeta, setConnectorMeta] = useState({}); // label → { connectorId, latestVersionId, credFields, runtimeConfig, entityDescriptions }
+
   // Saved connections (loaded on mount)
   const [savedConnections, setSavedConnections] = useState([]);
   const [savedLoading, setSavedLoading] = useState(false);
@@ -600,7 +518,16 @@ export default function WizardPage() {
 
   const updateSrcCred = (key, val) => setSrcCreds(prev => ({ ...prev, [key]: val }));
   const updateDestCred = (key, val) => setDestCreds(prev => ({ ...prev, [key]: val }));
-  const getFields = (system) => credentialFields[system] || genericCredFields;
+
+  // ─── Registry-driven helpers (replace the old hardcoded lookups) ───
+  const getFields = (label) => connectorMeta[label]?.credFields || [];
+  const dbCfg = (label) => connectorMeta[label]?.runtimeConfig || null;
+  const isDbDest = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'database';
+  const isRest = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'rest';
+  // Recognize a SharePoint connector by runtime kind (covers the built-in AND clones like "sp1").
+  const isSpSource = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'sharepoint';
+  const connectorIdOf = (label) => connectorMeta[label]?.connectorId;
+  const versionIdOf = (label) => connectorMeta[label]?.latestVersionId;
 
   // ─── Load saved connections on mount ───────────────────
   useEffect(() => {
@@ -611,6 +538,43 @@ export default function WizardPage() {
         setSavedConnections(res.data.data.filter(c => c.status === 'active'));
       }
       setSavedLoading(false);
+    })();
+  }, []);
+
+  // ─── Load connector registry on mount ──────────────────
+  useEffect(() => {
+    (async () => {
+      const [srcRes, dstRes] = await Promise.all([
+        api.getConnectors('source'),
+        api.getConnectors('destination'),
+      ]);
+      const srcList = (srcRes.ok && srcRes.data?.data) || [];
+      const dstList = (dstRes.ok && dstRes.data?.data) || [];
+      setSourceCards(srcList.map(c => ({ icon: c.icon || DEFAULT_ICON, label: c.name, connectorId: c.connectorId })));
+      setDestCards(dstList.map(c => ({ icon: c.icon || DEFAULT_ICON, label: c.name, connectorId: c.connectorId })));
+
+      // Dedup (SharePoint is in both lists), then fetch each connector's schema/config/entities.
+      const byId = {};
+      [...srcList, ...dstList].forEach(c => { byId[c.connectorId] = c; });
+      const metas = await Promise.all(Object.values(byId).map(async (c) => {
+        const [credRes, rcRes, entRes] = await Promise.all([
+          api.getConnectorCredentialSchema(c.connectorId),
+          api.getConnectorRuntimeConfig(c.connectorId),
+          api.getConnectorEntities(c.connectorId),
+        ]);
+        const descriptions = {};
+        const entities = (entRes.ok && entRes.data?.data?.entities) || [];
+        entities.forEach(e => { descriptions[e.key] = e.description || ''; });
+        return [c.name, {
+          connectorId: c.connectorId,
+          latestVersionId: c.latestVersionId,
+          credFields: (credRes.ok && credRes.data?.data?.fields) || [],
+          runtimeConfig: (rcRes.ok && rcRes.data?.data) || null,
+          entityDescriptions: descriptions,
+          entities, // full entity defs (key/name/description/fields) — used by REST source steps
+        }];
+      }));
+      setConnectorMeta(Object.fromEntries(metas));
     })();
   }, []);
 
@@ -688,9 +652,9 @@ export default function WizardPage() {
         ...prev,
         connectionName: intg.name,
         host: dbc.host || fm.pgHost || 'localhost',
-        port: String(dbc.port || fm.pgPort || DB_DEST_CONFIG[destType]?.defaultPort || ''),
+        port: String(dbc.port || fm.pgPort || connectorMeta[destType]?.runtimeConfig?.defaultPort || ''),
         database: dbc.database || fm.pgDatabase || '',
-        schema: dbc.schema || fm.pgSchema || DB_DEST_CONFIG[destType]?.defaultSchema || '',
+        schema: dbc.schema || fm.pgSchema || connectorMeta[destType]?.runtimeConfig?.defaultSchema || '',
         username: dbc.username || '',
         password: dbc.password || '',
       }));
@@ -719,8 +683,10 @@ export default function WizardPage() {
     if (wizardStep === 1 && (!selectedSource || !selectedDest)) return;
     if (wizardStep === 2 && (srcTestStatus !== 'connected' || destTestStatus !== 'connected')) return;
     if (wizardStep === 3 && !selectedEntity) return;
-    // Sync PG table selection to destCreds before moving to step 4
-    if (wizardStep === 3 && (isDbDest(selectedDest))) {
+    // Sync PG table selection to destCreds before moving to step 4.
+    // (Skipped for REST sources, which don't run the SharePoint table-discovery step —
+    //  they use the Target Table from the destination credential form, defaulting on push.)
+    if (wizardStep === 3 && isDbDest(selectedDest) && !isRest(selectedSource)) {
       const tbl = createNewTable ? newTableName : selectedPgTable;
       if (!tbl) return; // must pick a table
       setDestCreds(prev => ({ ...prev, table: tbl }));
@@ -755,7 +721,7 @@ export default function WizardPage() {
           setFetchResult({ runId, tickets, totalCount });
           setFetchStatus('done');
         } else { setFetchError(result.data?.error || 'Fetch failed'); setFetchStatus('error'); }
-      } else if (selectedSource === 'SharePoint') {
+      } else if (isSpSource(selectedSource)) {
         const result = await api.fetchSpItems({
           siteId: srcConnectionData?.siteId,
           listId: selectedEntity,
@@ -764,6 +730,14 @@ export default function WizardPage() {
         if (result.ok && result.data?.success) {
           const items = result.data.data?.items || [];
           setFetchResult({ runId: 'sp-fetch-' + Date.now(), tickets: items, totalCount: items.length });
+          setFetchStatus('done');
+        } else { setFetchError(result.data?.error || 'Fetch failed'); setFetchStatus('error'); }
+      } else if (isRest(selectedSource)) {
+        const meta = connectorMeta[selectedSource];
+        const result = await api.call('/api/connectors/runtime/fetch', { connectorId: meta.connectorId, versionId: meta.latestVersionId, creds: srcCreds, entity: selectedEntity });
+        if (result.ok && result.data?.success) {
+          const records = result.data.data?.records || [];
+          setFetchResult({ runId: 'rest-fetch-' + Date.now(), tickets: records, totalCount: records.length });
           setFetchStatus('done');
         } else { setFetchError(result.data?.error || 'Fetch failed'); setFetchStatus('error'); }
       }
@@ -775,6 +749,14 @@ export default function WizardPage() {
 
   // ─── Step 6: Push to destination ───────────────────────
   const handlePush = async () => {
+    // REST source → its own dispatch (the SP/DB push paths fetch from SharePoint).
+    if (isRest(selectedSource)) {
+      if (isRest(selectedDest)) return handleRestPush();
+      if (isDbDest(selectedDest)) return handleRestToDbPush();
+      setPushError(`Pushing a REST source into ${selectedDest} isn't supported yet — use a database or REST destination.`);
+      setPushStatus('error');
+      return;
+    }
     if (selectedDest === 'PostgreSQL') {
       handlePushToPg();
     } else if (selectedDest === 'MySQL') {
@@ -786,13 +768,68 @@ export default function WizardPage() {
     }
   };
 
+  // Map the fetched source records to destination shape using the wizard mappings
+  // (direct field copy — consistent with the existing SP→DB push path).
+  const mapRecordsToDest = () => (fetchResult?.tickets || []).map((rec) => {
+    const out = {};
+    for (const m of mappings) {
+      const src = m.sources?.[0];
+      const dest = m.destinations?.[0];
+      if (src && dest) out[dest] = rec[src];
+    }
+    return out;
+  });
+
+  const handleRestPush = async () => {
+    if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
+    setPushStatus('pushing'); setPushError(''); setPushResult(null);
+    try {
+      const destMeta = connectorMeta[selectedDest];
+      const entity = (destMeta?.entities || [])[0]?.key;
+      const records = mapRecordsToDest();
+      const result = await api.call('/api/connectors/runtime/push', {
+        connectorId: destMeta.connectorId, versionId: destMeta.latestVersionId, creds: destCreds, entity, records,
+      });
+      if (result.ok && result.data?.success) {
+        const d = result.data.data;
+        setPushResult({ pushRunId: 'rest-' + Date.now(), total: records.length, status: 'success', created: d.created, updated: 0, failed: d.failed });
+        setPushStatus('done');
+      } else { setPushError(result.data?.error || 'Push failed'); setPushStatus('error'); }
+    } catch { setPushError('Network error during push'); setPushStatus('error'); }
+  };
+
+  const handleRestToDbPush = async () => {
+    if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
+    setPushStatus('pushing'); setPushError(''); setPushResult(null);
+    try {
+      const cfg = dbCfg(selectedDest);
+      const dbMappings = mappings.map((m) => ({ from: m.sources?.[0], to: m.destinations?.[0], type: m.srcTypes?.[0] || 'string' })).filter((m) => m.from && m.to);
+      const result = await api.call('/api/connectors/runtime/push-to-db', {
+        engine: cfg.engine,
+        conn: {
+          host: destCreds.host, port: Number(destCreds.port) || cfg.defaultPort, database: destCreds.database,
+          username: destCreds.username, password: destCreds.password,
+          schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
+        },
+        table: destCreds.table || 'rest_data',
+        records: fetchResult.tickets,
+        mappings: dbMappings,
+      });
+      if (result.ok && result.data?.success) {
+        const d = result.data.data;
+        setPushResult({ pushRunId: 'restdb-' + Date.now(), total: fetchResult.tickets.length, status: 'success', created: d.inserted, updated: d.updated, failed: d.failed, tableCreated: d.tableCreated });
+        setPushStatus('done');
+      } else { setPushError(result.data?.error || 'Push failed'); setPushStatus('error'); }
+    } catch { setPushError('Network error during push'); setPushStatus('error'); }
+  };
+
   const handleQuickView = async () => {
     setQuickViewLoading(true);
     setQuickViewError('');
     setQuickView(null);
     try {
-      const cfg = DB_DEST_CONFIG[selectedDest] || DB_DEST_CONFIG.PostgreSQL;
-      const apiFn = api[cfg.quickView];
+      const cfg = dbCfg(selectedDest);
+      const apiFn = (body) => api.call(cfg?.handlers?.quickView, body);
       const res = await apiFn({
         host: destCreds.host || 'localhost',
         port: Number(destCreds.port) || cfg.defaultPort,
@@ -1077,13 +1114,21 @@ export default function WizardPage() {
           setSrcTestMsg(`Connected as ${result.data.data?.displayName || 'verified user'}`);
           setSrcConnectionData(result.data.data);
         } else { setSrcTestStatus('error'); setSrcTestMsg(result.data?.error || 'Connection failed'); }
-      } else if (selectedSource === 'SharePoint') {
+      } else if (isSpSource(selectedSource)) {
         const { siteUrl } = srcCreds;
         if (!siteUrl) { setSrcTestStatus('error'); setSrcTestMsg('Please fill in the Site URL'); return; }
         const result = await api.testSpSource({ siteUrl, tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret });
         if (result.ok && result.data?.success) {
           setSrcTestStatus('connected');
           setSrcTestMsg(`Connected to "${result.data.data?.siteDisplayName}" (${result.data.data?.hostname})`);
+          setSrcConnectionData(result.data.data);
+        } else { setSrcTestStatus('error'); setSrcTestMsg(result.data?.error || 'Connection failed'); }
+      } else if (isRest(selectedSource)) {
+        const meta = connectorMeta[selectedSource];
+        const result = await api.call('/api/connectors/runtime/test', { connectorId: meta.connectorId, versionId: meta.latestVersionId, creds: srcCreds });
+        if (result.ok && result.data?.success) {
+          setSrcTestStatus('connected');
+          setSrcTestMsg(`Connected (HTTP ${result.data.data.status}) — ${result.data.data.sampleCount} sample records`);
           setSrcConnectionData(result.data.data);
         } else { setSrcTestStatus('error'); setSrcTestMsg(result.data?.error || 'Connection failed'); }
       } else { setSrcTestStatus('error'); setSrcTestMsg(`${selectedSource} not yet supported.`); }
@@ -1129,6 +1174,14 @@ export default function WizardPage() {
           setDestTestMsg(`Connected to ${host}:${port || 1433}/${database}`);
           setDestConnectionData({ host, port: Number(port) || 1433, database, username, password, schema: destCreds.schema || 'dbo', table: destCreds.table });
         } else { setDestTestStatus('error'); setDestTestMsg('Connection failed \u2014 check credentials'); }
+      } else if (isRest(selectedDest)) {
+        const meta = connectorMeta[selectedDest];
+        const result = await api.call('/api/connectors/runtime/test', { connectorId: meta.connectorId, versionId: meta.latestVersionId, creds: destCreds });
+        if (result.ok && result.data?.success) {
+          setDestTestStatus('connected');
+          setDestTestMsg(`Connected (HTTP ${result.data.data.status})`);
+          setDestConnectionData({ ...destCreds });
+        } else { setDestTestStatus('error'); setDestTestMsg(result.data?.error || 'Connection failed'); }
       } else { setDestTestStatus('error'); setDestTestMsg(`${selectedDest} not yet supported.`); }
     } catch { setDestTestStatus('error'); setDestTestMsg('Connection failed.'); }
   };
@@ -1139,7 +1192,7 @@ export default function WizardPage() {
   };
   const handleDestSelect = (label) => {
     // Pre-fill defaults for the destination
-    const fields = credentialFields[label] || [];
+    const fields = getFields(label);
     const defaults = {};
     fields.forEach(f => { if (f.defaultValue) defaults[f.key] = f.defaultValue; });
     setSelectedDest(label); setDestCreds(defaults); setDestTestStatus('idle'); setDestTestMsg(''); setDestConnectionData(null);
@@ -1153,7 +1206,7 @@ export default function WizardPage() {
       setSaveStatus('error');
       return;
     }
-    if (selectedSource === 'SharePoint' && !srcCreds.siteUrl) {
+    if (isSpSource(selectedSource) && !srcCreds.siteUrl) {
       setSaveMsg('Fill in the SharePoint Site URL first');
       setSaveStatus('error');
       return;
@@ -1170,11 +1223,16 @@ export default function WizardPage() {
         name: srcCreds.connectionName || `${selectedSource} → ${selectedDest}`,
         sourceType: selectedSource,
         destType: selectedDest,
+        // Connector-registry pins (template-driven wizard)
+        sourceConnectorId: connectorIdOf(selectedSource),
+        destConnectorId: connectorIdOf(selectedDest),
+        sourceConnectorVersionId: versionIdOf(selectedSource),
+        destConnectorVersionId: versionIdOf(selectedDest),
         endpointUrl: srcCreds.endpointUrl || srcCreds.siteUrl || '',
         email: srcCreds.email || undefined,
         apiToken: srcCreds.apiToken || undefined,
         projectKey: selectedProject || undefined,
-        siteUrl: selectedSource === 'SharePoint' ? srcCreds.siteUrl : (destCreds.siteUrl || undefined),
+        siteUrl: isSpSource(selectedSource) ? srcCreds.siteUrl : (destCreds.siteUrl || undefined),
         listName: srcCreds.listName || destCreds.listName || undefined,
         // SharePoint Azure creds — stored encrypted with the connection (no env fallback)
         tenantId: srcCreds.tenantId || undefined,
@@ -1202,14 +1260,24 @@ export default function WizardPage() {
         if (connRes.ok && connRes.data?.data) {
           setSavedConnections(connRes.data.data.filter(c => c.status === 'active'));
         }
+        return intg.integrationId;
       } else {
         setSaveStatus('error');
         setSaveMsg(res.data?.error || 'Failed to save');
+        return null;
       }
     } catch {
       setSaveStatus('error');
       setSaveMsg('Network error while saving');
+      return null;
     }
+  };
+
+  // ─── Hand off the current mapping to the Mapping Canvas ──
+  const openInCanvas = async () => {
+    let id = activeIntegrationId;
+    if (!id) id = await handleSaveConnection(); // persist first so Canvas has a target
+    navigate('/canvas', { state: { integrationId: id || null, srcFields, destFields, mappings } });
   };
 
   // ─── Delete saved connection ───────────────────────────
@@ -1267,7 +1335,7 @@ export default function WizardPage() {
         }
       };
       loadProjects();
-    } else if (selectedSource === 'SharePoint') {
+    } else if (isSpSource(selectedSource)) {
       // Discover lists on the SP site — each list is an "entity"
       const loadLists = async () => {
         setEntitiesLoading(true);
@@ -1296,8 +1364,8 @@ export default function WizardPage() {
           const dbCfg = destConnectionData || destCreds;
           if (dbCfg.host && dbCfg.database) {
             setPgTablesLoading(true);
-            const cfg = DB_DEST_CONFIG[selectedDest];
-            const apiFn = api[cfg.tables];
+            const cfg = connectorMeta[selectedDest]?.runtimeConfig;
+            const apiFn = (body) => api.call(cfg?.handlers?.listTables, body);
             const dbResult = await apiFn({
               host: dbCfg.host, port: Number(dbCfg.port) || cfg.defaultPort,
               database: dbCfg.database, username: dbCfg.username, password: dbCfg.password,
@@ -1316,6 +1384,16 @@ export default function WizardPage() {
         }
       };
       loadLists();
+    } else if (isRest(selectedSource)) {
+      // REST source: entities come from the connector template (no live discovery call).
+      const ents = (connectorMeta[selectedSource]?.entities || []).map((e) => ({
+        id: e.key, name: e.name, fieldCount: (e.fields || []).length, available: true, defaultOn: e.defaultOn,
+      }));
+      setEntities(ents);
+      setProjects([{ key: 'api', name: selectedSource }]);
+      setSelectedProject('api');
+      const def = ents.find((e) => e.defaultOn) || ents[0];
+      if (def) setSelectedEntity(def.id);
     }
   }, [wizardStep]);
 
@@ -1342,6 +1420,31 @@ export default function WizardPage() {
     const loadFields = async () => {
       setFieldsLoading(true);
 
+      if (isRest(selectedSource)) {
+        // REST source: source fields come from the connector's entity definition.
+        const srcEnt = (connectorMeta[selectedSource]?.entities || []).find((e) => e.key === selectedEntity);
+        const sf = (srcEnt?.fields || []).map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'string', required: !!f.required }));
+        setSrcFields(sf);
+
+        if (isRest(selectedDest)) {
+          const destEnt = (connectorMeta[selectedDest]?.entities || [])[0];
+          setDestFields((destEnt?.fields || []).map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'string', required: !!f.required })));
+        } else if (isDbDest(selectedDest)) {
+          // DB destination: derive columns from the source fields (table auto-created on push).
+          setDestFields(sf.map((f) => {
+            const col = f.name.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '').replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_');
+            return { name: col, displayName: col, type: f.type, required: false };
+          }));
+        } else if (selectedDest === 'SharePoint') {
+          const destResult = await api.getSharePointListFields({ siteUrl: destCreds.siteUrl, listName: destCreds.listName, siteId: destConnectionData?.siteId });
+          if (destResult.ok && destResult.data?.success) {
+            setDestFields((destResult.data.data?.spFields || []).map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: f.required || false })));
+          }
+        }
+        setFieldsLoading(false);
+        return;
+      }
+
       if (selectedSource === 'Jira' && selectedDest === 'SharePoint') {
         // Original Jira → SP flow
         const { endpointUrl, email, apiToken } = srcCreds;
@@ -1357,7 +1460,7 @@ export default function WizardPage() {
           }));
           setDestFields(spf);
         }
-      } else if (selectedSource === 'SharePoint' && (isDbDest(selectedDest))) {
+      } else if (isSpSource(selectedSource) && (isDbDest(selectedDest))) {
         // SP → DB flow: source = SP list fields, dest = DB table columns (or empty for auto-create)
         const srcResult = await api.getSpListFields({
           siteId: srcConnectionData?.siteId, listId: selectedEntity,
@@ -1370,8 +1473,8 @@ export default function WizardPage() {
         // Try to load existing DB table columns (if table exists)
         const dbCfg = destConnectionData || destCreds;
         if (dbCfg.host && dbCfg.database && destCreds.table) {
-          const cfg = DB_DEST_CONFIG[selectedDest];
-          const colApiFn = api[cfg.columns];
+          const cfg = connectorMeta[selectedDest]?.runtimeConfig;
+          const colApiFn = (body) => api.call(cfg?.handlers?.columns, body);
           const destResult = await colApiFn({
             host: dbCfg.host, port: Number(dbCfg.port) || cfg.defaultPort,
             database: dbCfg.database, username: dbCfg.username, password: dbCfg.password,
@@ -1736,7 +1839,7 @@ export default function WizardPage() {
             <div className="entity-header-bar">
               <div>
                 <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: 4 }}>
-                  {selectedSource === 'SharePoint' ? 'Select Source List & Destination Table' : 'Choose what to sync'}
+                  {isSpSource(selectedSource) ? 'Select Source List & Destination Table' : 'Choose what to sync'}
                 </div>
                 <div className="conn-summary">
                   <strong>{srcCreds.connectionName || selectedSource}</strong> ({srcCreds.siteUrl || srcCreds.endpointUrl})
@@ -1765,7 +1868,7 @@ export default function WizardPage() {
             {entitiesLoading ? (
               <div className="wizard-loader">
                 <div className="loader-spinner"></div>
-                <div className="loader-text">Loading {selectedSource === 'SharePoint' ? 'lists' : 'entities'} from {selectedSource}...</div>
+                <div className="loader-text">Loading {isSpSource(selectedSource) ? 'lists' : 'entities'} from {selectedSource}...</div>
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: (isDbDest(selectedDest)) ? '1fr 1fr' : '1fr', gap: 20 }}>
@@ -1773,13 +1876,13 @@ export default function WizardPage() {
                 {/* ── LEFT: Source list/entity picker ── */}
                 <div className="card" style={{ padding: 16 }}>
                   <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 10 }}>
-                    {selectedSource === 'SharePoint' ? `SharePoint Lists (${entities.length})` : `${selectedSource} Entities`}
+                    {isSpSource(selectedSource) ? `SharePoint Lists (${entities.length})` : `${selectedSource} Entities`}
                   </div>
 
                   {/* Search bar */}
                   <input
                     type="text"
-                    placeholder={`Search ${selectedSource === 'SharePoint' ? 'lists' : 'entities'}...`}
+                    placeholder={`Search ${isSpSource(selectedSource) ? 'lists' : 'entities'}...`}
                     value={entitySearch}
                     onChange={e => setEntitySearch(e.target.value)}
                     style={{ width: '100%', padding: '7px 12px', borderRadius: 6, border: '1px solid var(--border)', marginBottom: 10, fontSize: '.85rem' }}
@@ -1806,7 +1909,7 @@ export default function WizardPage() {
                           <div>
                             <div style={{ fontWeight: selectedEntity === ent.id ? 700 : 500, fontSize: '.88rem' }}>{ent.name}</div>
                             <div style={{ fontSize: '.72rem', color: 'var(--text-dim)' }}>
-                              {entityDescriptions[ent.id] || (selectedSource === 'SharePoint' ? 'SharePoint List' : '')}
+                              {connectorMeta[selectedSource]?.entityDescriptions?.[ent.id] || (isSpSource(selectedSource) ? 'SharePoint List' : '')}
                             </div>
                           </div>
                           <div style={{ display: 'flex', gap: 6 }}>
@@ -1947,6 +2050,7 @@ export default function WizardPage() {
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button className="btn btn-primary btn-sm" onClick={handleAutoMap}>Auto-Map</button>
                     <button className="btn btn-outline btn-sm" onClick={() => { setMappings([]); setExpandedMapping(-1); }}>Clear All</button>
+                    <button className="btn btn-outline btn-sm" onClick={openInCanvas} title="Open these fields + mappings in the full Mapping Canvas (AI auto-map, transforms)">&#10138; Edit in Mapping Canvas</button>
                   </div>
                   <div className="mapper-stats">
                     <strong>{mappings.length}</strong> mapped &nbsp;|&nbsp;
@@ -2075,8 +2179,8 @@ export default function WizardPage() {
                   <input type="text" value={selectedProject} readOnly style={{ background: 'var(--bg-main)' }} />
                 </div>
                 <div className="form-group">
-                  <label>{selectedSource === 'SharePoint' ? 'List' : 'Entity'}</label>
-                  <input type="text" value={selectedSource === 'SharePoint' ? (entities.find(e => e.id === selectedEntity)?.name || selectedEntity) : (selectedEntity || '')} readOnly style={{ background: 'var(--bg-main)' }} />
+                  <label>{isSpSource(selectedSource) ? 'List' : 'Entity'}</label>
+                  <input type="text" value={isSpSource(selectedSource) ? (entities.find(e => e.id === selectedEntity)?.name || selectedEntity) : (selectedEntity || '')} readOnly style={{ background: 'var(--bg-main)' }} />
                 </div>
                 {selectedSource !== 'SharePoint' && (
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -2090,7 +2194,7 @@ export default function WizardPage() {
                     </div>
                   </div>
                 )}
-                {selectedSource === 'SharePoint' && (
+                {isSpSource(selectedSource) && (
                   <div style={{ padding: '8px 12px', background: 'var(--info-dim)', border: '1px solid var(--info)', borderRadius: 6, fontSize: '.78rem', color: 'var(--info)', marginBottom: 8 }}>
                     All items from the SharePoint list will be fetched (delta query).
                   </div>
@@ -2134,7 +2238,7 @@ export default function WizardPage() {
                   <div>
                     <div style={{ padding: '10px 14px', background: 'var(--success-dim)', border: '1px solid var(--success)', borderRadius: 8, marginBottom: 12 }}>
                       <div style={{ fontWeight: 700, color: 'var(--success)', fontSize: '.88rem' }}>
-                        &#9989; Fetched {fetchResult.totalCount} {selectedSource === 'SharePoint' ? 'items' : 'issues'}
+                        &#9989; Fetched {fetchResult.totalCount} {isSpSource(selectedSource) ? 'items' : 'issues'}
                       </div>
                       <div style={{ fontSize: '.78rem', color: 'var(--text-secondary)', marginTop: 2 }}>
                         Run ID: <span style={{ fontFamily: 'monospace' }}>{fetchResult.runId}</span>
@@ -2147,7 +2251,7 @@ export default function WizardPage() {
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.78rem' }}>
                         <thead>
                           <tr style={{ background: 'var(--bg-main)' }}>
-                            {selectedSource === 'SharePoint' ? (
+                            {isSpSource(selectedSource) ? (
                               <>
                                 <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Item ID</th>
                                 {srcFields.slice(0, 3).map(f => (
@@ -2166,7 +2270,7 @@ export default function WizardPage() {
                         <tbody>
                           {fetchResult.tickets.slice(0, 5).map((t, i) => (
                             <tr key={i}>
-                              {selectedSource === 'SharePoint' ? (
+                              {isSpSource(selectedSource) ? (
                                 <>
                                   <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                                     {t.spItemId || t.id || '--'}

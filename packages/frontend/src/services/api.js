@@ -28,6 +28,23 @@ async function fetchApi(path, options = {}) {
 }
 
 export const api = {
+  // ── Generic call (used to dispatch to runtime-config handler paths) ──
+  call: async (path, body, method = 'POST') =>
+    fetchApi(path, { method, body: method === 'GET' ? undefined : JSON.stringify(body || {}) }),
+
+  // ── Connector registry (Connector Studio templates) ──
+  getConnectors: async (category) =>
+    fetchApi(`/api/connectors${category ? `?category=${encodeURIComponent(category)}` : ''}`),
+  getConnector: async (id) => fetchApi(`/api/connectors/${id}`),
+  getConnectorCredentialSchema: async (id) => fetchApi(`/api/connectors/${id}/credential-schema`),
+  getConnectorRuntimeConfig: async (id) => fetchApi(`/api/connectors/${id}/runtime-config`),
+  getConnectorEntities: async (id) => fetchApi(`/api/connectors/${id}/entities`),
+  getConnectorOperations: async (id) => fetchApi(`/api/connectors/${id}/operations`),
+  getConnectorVersions: async (id) => fetchApi(`/api/connectors/${id}/versions`),
+
+  // ── Entity Catalog ──
+  getEntityCatalog: async () => fetchApi('/api/entities'),
+
   // ── Mock data (always available) ──
   getIntegrations: async () => integrations,
   getMonitorData: async () => monitorData,

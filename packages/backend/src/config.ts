@@ -34,6 +34,10 @@ const envSchema = z.object({
   AZURE_TENANT_ID: z.string().optional(),
   AZURE_CLIENT_SECRET: z.string().optional(),
   SHAREPOINT_SITE_ID: z.string().optional(),
+
+  // AI mapping (Claude). Optional — falls back to deterministic auto-map if unset.
+  ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_MODEL: z.string().default('claude-haiku-4-5-20251001'),
 });
 
 export const config = envSchema.parse(process.env);

@@ -67,16 +67,98 @@ export const credentials = appSchema.table('credentials', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
+// ─── Connector Studio enums ───────────────────────────────
+export const connectorAuthoringEnum = appSchema.enum('connector_authoring', ['manual', 'openapi', 'db_introspect']);
+export const connectorVersionStatusEnum = appSchema.enum('connector_version_status', ['draft', 'published', 'deprecated']);
+export const connectorOpKindEnum = appSchema.enum('connector_op_kind', ['read', 'write', 'both']);
+
+// Connector "head" — stable, org-scoped identity row for a connector template.
+// Extended (additively) to power Connector Studio + a template-driven Wizard.
 export const connectors = appSchema.table('connectors', {
   connectorId: uuid('connector_id').primaryKey().defaultRandom(),
   orgId: uuid('org_id').notNull().references(() => organizations.orgId),
   name: varchar('name', { length: 255 }).notNull(),
-  category: varchar('category', { length: 100 }).notNull(),
-  version: varchar('version', { length: 20 }).default('1.0.0'),
-  configSchema: jsonb('config_schema'),
+  category: varchar('category', { length: 100 }).notNull(), // 'source' | 'destination' | 'both'
+  version: varchar('version', { length: 20 }).default('1.0.0'), // denormalized latest published semver
+  configSchema: jsonb('config_schema'), // legacy/back-compat; templates use connector_versions
+  // ── Connector Studio fields ──
+  key: varchar('key', { length: 100 }), // stable machine id: 'jira','sharepoint','postgresql','mysql','sqlserver'
+  icon: varchar('icon', { length: 16 }), // emoji/icon for wizard cards
+  runtimeKind: varchar('runtime_kind', { length: 50 }), // 'jira' | 'sharepoint' | 'database' | 'generic'
+  engine: varchar('engine', { length: 20 }), // db engine when runtimeKind='database'
+  isSystem: boolean('is_system').default(false), // seeded built-ins (cannot be deleted)
+  authoringMethod: connectorAuthoringEnum('authoring_method').default('manual'),
+  latestVersionId: uuid('latest_version_id'), // soft pointer to connector_versions.versionId (no hard FK — avoids cycle)
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => [
+  unique('uq_connectors_org_key').on(table.orgId, table.key),
+]);
+
+// Immutable published snapshot of a connector. Integrations pin to a versionId.
+export const connectorVersions = appSchema.table('connector_versions', {
+  versionId: uuid('version_id').primaryKey().defaultRandom(),
+  connectorId: uuid('connector_id').notNull().references(() => connectors.connectorId, { onDelete: 'cascade' }),
+  orgId: uuid('org_id').notNull().references(() => organizations.orgId),
+  semver: varchar('semver', { length: 20 }).notNull(),
+  status: connectorVersionStatusEnum('status').notNull().default('draft'),
+  credentialSchema: jsonb('credential_schema').notNull(), // field defs the wizard renders
+  runtimeConfig: jsonb('runtime_config').notNull(), // DB_DEST_CONFIG generalization: handler paths, ports, schema flags
+  entitiesSnapshot: jsonb('entities_snapshot'), // frozen copy of entities at publish time
+  openApiSpec: jsonb('open_api_spec'), // raw parsed OpenAPI doc when authored from spec
+  changelog: text('changelog'),
+  publishedAt: timestamp('published_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  unique('uq_connector_version_semver').on(table.connectorId, table.semver),
+]);
+
+// Read/Write operations per connector version (OpenAPI ops, DB ops, etc.).
+export const connectorOperations = appSchema.table('connector_operations', {
+  operationId: uuid('operation_id').primaryKey().defaultRandom(),
+  versionId: uuid('version_id').notNull().references(() => connectorVersions.versionId, { onDelete: 'cascade' }),
+  key: varchar('key', { length: 120 }).notNull(),
+  name: varchar('name', { length: 200 }).notNull(),
+  kind: connectorOpKindEnum('kind').notNull().default('read'),
+  hidden: boolean('hidden').notNull().default(false),
+  httpMethod: varchar('http_method', { length: 10 }),
+  pathTemplate: varchar('path_template', { length: 500 }),
+  requestSchema: jsonb('request_schema'),
+  responseSchema: jsonb('response_schema'),
+  config: jsonb('config'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  unique('uq_op_version_key').on(table.versionId, table.key),
+]);
+
+// Entities a connector version exposes (Wizard step 3 + Entity Catalog read from these).
+export const entityDefinitions = appSchema.table('entity_definitions', {
+  entityId: uuid('entity_id').primaryKey().defaultRandom(),
+  versionId: uuid('version_id').notNull().references(() => connectorVersions.versionId, { onDelete: 'cascade' }),
+  key: varchar('key', { length: 120 }).notNull(),
+  name: varchar('name', { length: 200 }).notNull(),
+  description: text('description'),
+  defaultOn: boolean('default_on').notNull().default(false),
+  masterEntityKey: varchar('master_entity_key', { length: 120 }), // BRD: link to a Master Catalog entity
+  discovery: jsonb('discovery'), // { mode:'live'|'static', endpoint, params[] }
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  unique('uq_entity_version_key').on(table.versionId, table.key),
+]);
+
+// Static fields for an entity (used by OpenAPI/manual connectors; live connectors leave empty).
+export const entityFields = appSchema.table('entity_fields', {
+  fieldId: uuid('field_id').primaryKey().defaultRandom(),
+  entityId: uuid('entity_id').notNull().references(() => entityDefinitions.entityId, { onDelete: 'cascade' }),
+  name: varchar('name', { length: 200 }).notNull(),
+  displayName: varchar('display_name', { length: 200 }),
+  type: varchar('type', { length: 40 }).notNull(),
+  path: varchar('path', { length: 300 }),
+  required: boolean('required').notNull().default(false),
+  ordinal: integer('ordinal').default(0),
+}, (table) => [
+  unique('uq_field_entity_name').on(table.entityId, table.name),
+]);
 
 export const integrations = appSchema.table('integrations', {
   integrationId: uuid('integration_id').primaryKey().defaultRandom(),

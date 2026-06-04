@@ -116,20 +116,20 @@ ROWS=[
 ("S1","Adapter","SharePoint -> MSSQL (extend SP->PG: MERGE upsert + sys.columns introspect)","Dev B",24,"Done",1.0,date(2026,6,2),"COMPLETE (T-06) — SqlServerWriter smartUpsert + sys.columns introspect + hub MSSQL endpoints + wizard wiring. Tested."),
 ("S1","Frontend","Wire Dashboard + Registry to real APIs (remove mock data)","Dev B",16,"Done",1.0,date(2026,6,3),"COMPLETE (T-07) — integrationMap.js shared mapper, live KPIs/tiles/charts off /api/connected, sample fallback, 0 diagnostics. Browser-verified headless (verify-t07.mjs): Dashboard + Registry render the 'Live' badge with real adapters (SP->SQL Server, SP->MySQL)."),
 # Sprint 2
-("S2","Wizard","Connection Wizard 6-step backend + Step 4 (mapping) + Step 6 (test/deploy gate)","Dev A",28,"Not Started",0,None,"Hard test-before-publish gate."),
-("S2","Mapping","Mapping Canvas + AI Auto-Map (Claude API) + confidence badges","Dev B",30,"Not Started",0,None,"Human-confirm required."),
+("S2","Wizard","Connection Wizard 6-step backend + Step 4 (mapping) + Step 6 (test/deploy gate)","Dev A",28,"Done",1.0,date(2026,6,4),"COMPLETE (T-08) — Wizard cut over to the connector registry: removed all hardcoded source/dest cards, per-system credential schemas and DB engine config; now loads cards + credential-schema + runtime-config + entities from /api/connectors. Generic-REST and SharePoint-by-runtimeKind source branches (test/entities/fields/fetch/push); REST->DB and REST->REST push; Step-4 'Edit in Mapping Canvas' handoff; persists sourceConnectorId/destConnectorId + version pins. Builds clean."),
+("S2","Mapping","Mapping Canvas + AI Auto-Map (Claude API) + confidence badges","Dev B",30,"Done",1.0,date(2026,6,4),"COMPLETE (T-09) — shared components/mapping module; MappingAIService (Claude auto-map + NL->JS transform, deterministic fallback, ANTHROPIC_API_KEY optional); GET/PUT /api/integrations/:id/mappings + /auto-map + /transform/nl; Canvas rewritten as a real editor (integration picker, AI auto-map w/ confidence colours, editable transforms + live preview, persist); Wizard->Canvas handoff. Verified."),
 ("S2","Policy Access","Policy-Based Access Control — data model + policy engine (policies, permissions, subscription)","Dev A",24,"Not Started",0,None,"NEW. Company policy -> access level."),
 ("S2","Frontend","Wire Monitor + Connected + Push to real APIs","Dev B",18,"Not Started",0,None,"Replace remaining mocks."),
 ("S2","Vault","Credential decrypt endpoint + DB-connection credential type + test-connection","Dev A",12,"Not Started",0,None,"AES-256-GCM in place."),
 # Sprint 3
 ("S3","Policy Access","Policy enforcement middleware + JWT login + admin UI (manage policies & user subscriptions)","Dev A",32,"Not Started",0,None,"NEW. Subscription -> enforced level of access."),
-("S3","Studio","Connector Studio — define / test / publish connector templates (backend + UI)","Dev B",28,"Not Started",0,None,"Designer workflow."),
+("S3","Studio","Connector Studio — define / test / publish connector templates (backend + UI)","Dev B",28,"Done",1.0,date(2026,6,4),"COMPLETE (T-14) — connector registry (connectors/versions/operations/entity tables + seed of 5 built-ins) + ConnectorService; Studio backend: CRUD + draft/publish versioning + publish test-gate; OpenAPI 3.0 parser; DB-introspect + generic database template (no design-time connection, Docker-image model); SharePoint runtime preset; clone; generic REST runtime (auth apiKey/bearer/basic/oauth2-cc + fetch/push + REST->DB write). Studio BRD 5-stage authoring UI: System Registration -> Authentication -> Operation Selection (R/W/Both + hide-from-Operator) -> Entity Modelling (Master-Catalog link) -> Publish & Version (sample-cred test gate). 414 backend tests pass."),
 ("S3","Alerts","Alerts — failure detection + in-app feed + email dispatch + acknowledge","Dev A",20,"Not Started",0,None,"Wire dormant queue."),
 ("S3","Monitoring","Health Dashboard — real metrics, volume + error charts, drill-down","Dev B",20,"Not Started",0,None,"Replace hardcoded SVG."),
 ("S3","Audit","Audit log — middleware + viewer (ties to Policy module)","Dev A",14,"Not Started",0,None,"Append-only, before/after diff."),
 # Sprint 4
 ("S4","Monitoring","Trading / Message Monitor — full per-message trace + error drill-down + create-task","Dev B",24,"Not Started",0,None,"Expandable rows, mapping trace."),
-("S4","Catalog","Master Entity Catalog (basic) — entity registry + field-level usage","Dev A",20,"Not Started",0,None,"Cross-adapter reference."),
+("S4","Catalog","Master Entity Catalog (basic) — entity registry + field-level usage","Dev A",20,"Done",1.0,date(2026,6,4),"COMPLETE (T-19) — GET /api/entities aggregates entities per connector + field-level usage counts (from integrations.fieldMappings.mappings) + used-by-adapters; CatalogPage rewritten: connector->entity tree, field/type/usage table, cross-refs to Studio/Registry; entity->Master-Catalog link surfaced (entity_definitions.master_entity_key). Verified."),
 ("S4","Platform","Multi-tenancy / org enforcement (row-level org_id, integrated with Policy)","Dev A",16,"Not Started",0,None,"Data isolation."),
 ("S4","Scheduler","Scheduler wire + cron builder UI (BullMQ repeatable jobs)","Dev B",16,"Not Started",0,None,"Next-run preview."),
 ("S4","Adapter","Jira -> SharePoint parity verify + harden","Dev B",12,"Not Started",0,None,"Existing engine regression."),
@@ -218,8 +218,8 @@ MIL=[
 ("M6","UAT signoff & go-live readiness",date(2026,8,14),"BA + Stakeholders",
  "UAT cycles 1-2 complete; all signoff scenarios passed; go-live checklist approved."),
 ]
-# Milestone status overrides (id -> (status, actual date)). All M1 tasks Done + browser-verified.
-MIL_STATUS={"M1":("Achieved",date(2026,6,3))}
+# Milestone status overrides (id -> (status, actual date)).
+MIL_STATUS={"M1":("Achieved",date(2026,6,3)),"M2":("Achieved",date(2026,6,4))}
 for i,(mid,m,tgt,owner,ac) in enumerate(MIL,2):
     mstat,mactual=MIL_STATUS.get(mid,("Not Started",None))
     ms.cell(i,1,mid).font=BB; ms.cell(i,2,m).font=BF; ms.cell(i,3,tgt).number_format="yyyy-mm-dd"
