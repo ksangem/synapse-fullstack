@@ -29,10 +29,6 @@ Thumbs.db
 Synapse_Work_Log.xlsx
 _build_worklog.py
 
-# Local planning artifacts (plan generators + generated spreadsheets)
-_build_plan*.py
-Synapse_Project_Plan*.xlsx
-
 # Local verification screenshots
 verify-*.png
 
