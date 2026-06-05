@@ -89,6 +89,9 @@ export const connectors = appSchema.table('connectors', {
   isSystem: boolean('is_system').default(false), // seeded built-ins (cannot be deleted)
   authoringMethod: connectorAuthoringEnum('authoring_method').default('manual'),
   latestVersionId: uuid('latest_version_id'), // soft pointer to connector_versions.versionId (no hard FK — avoids cycle)
+  // ── FSD §5.1 base fields ──
+  tags: jsonb('tags').default([]), // free-text tags for Registry filtering
+  visibility: varchar('visibility', { length: 20 }).default('private'), // 'private'|'org'|'public' (enforced once roles exist)
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => [
@@ -108,6 +111,9 @@ export const connectorVersions = appSchema.table('connector_versions', {
   openApiSpec: jsonb('open_api_spec'), // raw parsed OpenAPI doc when authored from spec
   changelog: text('changelog'),
   publishedAt: timestamp('published_at'),
+  // ── FSD §9 deprecation lifecycle ──
+  deprecatedAt: timestamp('deprecated_at'),
+  sunsetDate: date('sunset_date'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => [
   unique('uq_connector_version_semver').on(table.connectorId, table.semver),
@@ -140,6 +146,7 @@ export const entityDefinitions = appSchema.table('entity_definitions', {
   description: text('description'),
   defaultOn: boolean('default_on').notNull().default(false),
   masterEntityKey: varchar('master_entity_key', { length: 120 }), // BRD: link to a Master Catalog entity
+  naturalKey: varchar('natural_key', { length: 200 }), // FSD §7: field used as the upsert natural/primary key
   discovery: jsonb('discovery'), // { mode:'live'|'static', endpoint, params[] }
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (table) => [
@@ -159,6 +166,23 @@ export const entityFields = appSchema.table('entity_fields', {
 }, (table) => [
   unique('uq_field_entity_name').on(table.entityId, table.name),
 ]);
+
+// Test & Validate history (FSD §8) — also the server-side publish-gate proof
+// (replaces trusting a client-sent `tested` boolean).
+export const connectorTestRuns = appSchema.table('connector_test_runs', {
+  testRunId: uuid('test_run_id').primaryKey().defaultRandom(),
+  connectorId: uuid('connector_id').notNull().references(() => connectors.connectorId, { onDelete: 'cascade' }),
+  versionId: uuid('version_id').references(() => connectorVersions.versionId, { onDelete: 'cascade' }),
+  orgId: uuid('org_id').notNull().references(() => organizations.orgId),
+  runtimeKind: varchar('runtime_kind', { length: 50 }),
+  phase: varchar('phase', { length: 20 }).notNull(), // 'test'|'fetch'|'push'|'discover'
+  status: varchar('status', { length: 20 }).notNull(), // 'success'|'error'
+  sampleCount: integer('sample_count').default(0),
+  durationMs: integer('duration_ms'),
+  error: text('error'),
+  detail: jsonb('detail'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
 
 export const integrations = appSchema.table('integrations', {
   integrationId: uuid('integration_id').primaryKey().defaultRandom(),

@@ -6,7 +6,7 @@
  * in ConnectorService; this service owns mutations and enforces version
  * immutability (published versions cannot be edited).
  */
-import { eq, and } from 'drizzle-orm';
+import { eq, and, or } from 'drizzle-orm';
 import { db } from '../db/client';
 import {
   connectors,
@@ -14,6 +14,7 @@ import {
   connectorOperations,
   entityDefinitions,
   entityFields,
+  integrations,
 } from '../db/schema';
 import { DEFAULT_ORG, BUILT_IN_CONNECTORS } from '../connectors/seed-data';
 import { connectorService } from './ConnectorService';
@@ -29,6 +30,7 @@ interface EntityInput {
   description?: string;
   defaultOn?: boolean;
   masterEntityKey?: string | null;
+  naturalKey?: string | null;
   discovery?: unknown;
   fields?: Array<{ name: string; displayName?: string; type: string; required?: boolean; path?: string }>;
 }
@@ -108,6 +110,7 @@ export class ConnectorAuthoringService {
         description: e.description ?? null,
         defaultOn: e.defaultOn ?? false,
         masterEntityKey: e.masterEntityKey ?? null,
+        naturalKey: e.naturalKey ?? null,
         discovery: e.discovery ?? null,
       }).returning();
       if (e.fields?.length) {
@@ -139,6 +142,8 @@ export class ConnectorAuthoringService {
     openApiSpec?: unknown;
     entities?: EntityInput[];
     operations?: Array<{ key: string; name: string; kind?: string; hidden?: boolean; httpMethod?: string; pathTemplate?: string; requestSchema?: unknown; responseSchema?: unknown }>;
+    tags?: string[];
+    visibility?: string;
     orgId?: string;
   }) {
     const orgId = input.orgId ?? DEFAULT_ORG;
@@ -155,6 +160,8 @@ export class ConnectorAuthoringService {
       engine: input.engine ?? null,
       isSystem: false,
       authoringMethod: input.authoringMethod ?? 'manual',
+      tags: input.tags ?? [],
+      visibility: input.visibility ?? 'private',
     }).returning();
 
     const [version] = await db.insert(connectorVersions).values({
@@ -219,7 +226,7 @@ export class ConnectorAuthoringService {
     });
   }
 
-  async updateConnector(connectorId: string, patch: { name?: string; icon?: string; category?: string }) {
+  async updateConnector(connectorId: string, patch: { name?: string; icon?: string; category?: string; tags?: string[]; visibility?: string }) {
     const [head] = await db.select().from(connectors).where(eq(connectors.connectorId, connectorId));
     if (!head) throw new Error('Connector not found');
     if (head.isSystem) throw new Error('Built-in connectors cannot be edited');
@@ -227,17 +234,38 @@ export class ConnectorAuthoringService {
       name: patch.name ?? head.name,
       icon: patch.icon ?? head.icon,
       category: patch.category ?? head.category,
+      tags: patch.tags ?? head.tags,
+      visibility: patch.visibility ?? head.visibility,
       updatedAt: new Date(),
     }).where(eq(connectors.connectorId, connectorId)).returning();
     return updated;
   }
 
-  async deleteConnector(connectorId: string) {
+  async deleteConnector(connectorId: string, force = false) {
     const [head] = await db.select().from(connectors).where(eq(connectors.connectorId, connectorId));
     if (!head) throw new Error('Connector not found');
-    if (head.isSystem) throw new Error('Built-in connectors cannot be deleted');
+    if (head.isSystem) throw { status: 400, message: 'Built-in connectors cannot be deleted' };
+
+    // A connector can't be dropped while saved connections (integrations) still
+    // reference it — the FK is NO ACTION. Surface a clear message, or unlink on force.
+    const refs = await db.select().from(integrations).where(
+      or(eq(integrations.sourceConnectorId, connectorId), eq(integrations.destConnectorId, connectorId)),
+    );
+    if (refs.length && !force) {
+      const names = refs.map((r) => r.name).slice(0, 5).join(', ');
+      throw { status: 409, message: `Can't delete — ${refs.length} saved connection(s) still use this connector (${names}${refs.length > 5 ? ', …' : ''}). Delete those connections first, or force-delete to unlink them.` };
+    }
+    if (refs.length && force) {
+      for (const r of refs) {
+        await db.update(integrations).set({
+          sourceConnectorId: r.sourceConnectorId === connectorId ? null : r.sourceConnectorId,
+          destConnectorId: r.destConnectorId === connectorId ? null : r.destConnectorId,
+          updatedAt: new Date(),
+        }).where(eq(integrations.integrationId, r.integrationId));
+      }
+    }
     await db.delete(connectors).where(eq(connectors.connectorId, connectorId)); // cascades versions/entities
-    return { connectorId };
+    return { connectorId, unlinked: force ? refs.length : 0 };
   }
 
   /** Create a new draft version cloned from the latest version. */
@@ -347,6 +375,35 @@ export class ConnectorAuthoringService {
     }).where(eq(connectors.connectorId, connectorId));
 
     return published;
+  }
+
+  /** Mark a version deprecated with an optional sunset date (FSD §9). */
+  async deprecateVersion(versionId: string, opts: { sunsetDate?: string } = {}) {
+    const [v] = await db.select().from(connectorVersions).where(eq(connectorVersions.versionId, versionId));
+    if (!v) throw new Error('Version not found');
+    const [updated] = await db.update(connectorVersions).set({
+      status: 'deprecated',
+      deprecatedAt: new Date(),
+      sunsetDate: opts.sunsetDate ?? null,
+    }).where(eq(connectorVersions.versionId, versionId)).returning();
+    return updated;
+  }
+
+  /**
+   * Roll the connector head back to a prior PUBLISHED version (FSD §9). New
+   * adapters pin to it; existing pinned adapters are unaffected. Re-test gate is
+   * the operator's responsibility on next edit.
+   */
+  async rollbackVersion(connectorId: string, targetVersionId: string) {
+    const [target] = await db.select().from(connectorVersions).where(eq(connectorVersions.versionId, targetVersionId));
+    if (!target || target.connectorId !== connectorId) throw { status: 400, message: 'Target version does not belong to this connector' };
+    if (target.status !== 'published') throw { status: 400, message: 'Can only roll back to a published version' };
+    await db.update(connectors).set({
+      latestVersionId: targetVersionId,
+      version: target.semver,
+      updatedAt: new Date(),
+    }).where(eq(connectors.connectorId, connectorId));
+    return target;
   }
 
   /** Author a connector from an OpenAPI 3.0 spec → executable `rest` runtime. */

@@ -1,10 +1,33 @@
 import { Router, type Request, type Response } from 'express';
 import { connectorService } from '../services/ConnectorService';
 import { connectorAuthoringService } from '../services/ConnectorAuthoringService';
-import { genericRestRuntime } from '../services/GenericRestRuntime';
+import { getRuntime, capabilitiesFor } from '../services/runtime/registry';
+import { CATEGORY_REGISTRY } from '../connectors/category-registry';
 import { writeRecordsToDb } from '../integrations/database/genericDbWrite';
+import { db } from '../db/client';
+import { connectorTestRuns } from '../db/schema';
 
 const router = Router();
+
+/** Resolve the connector head + its runtime + an execution context. */
+async function resolveRuntime(connectorId: string, versionId?: string) {
+  const head = await connectorService.getConnector(connectorId);
+  if (!head) throw { status: 404, message: 'Connector not found' };
+  const runtime = getRuntime(head.runtimeKind);
+  if (!runtime) throw { status: 400, message: `No runtime registered for "${head.runtimeKind}"` };
+  return { head, runtime, ctx: { connectorId, versionId, orgId: head.orgId } };
+}
+
+/** Best-effort Test & Validate history (FSD §8); never blocks the response. */
+async function recordTestRun(row: { connectorId: string; versionId?: string; orgId: string; runtimeKind: string | null; phase: string; status: 'success' | 'error'; sampleCount?: number; durationMs?: number; error?: string }): Promise<void> {
+  try {
+    await db.insert(connectorTestRuns).values({
+      connectorId: row.connectorId, versionId: row.versionId ?? null, orgId: row.orgId,
+      runtimeKind: row.runtimeKind, phase: row.phase, status: row.status,
+      sampleCount: row.sampleCount ?? 0, durationMs: row.durationMs ?? null, error: row.error ?? null,
+    });
+  } catch { /* history is best-effort */ }
+}
 
 function fail(res: Response, err: unknown, status = 500): void {
   // Service layer may throw { status, message } for 4xx outcomes (e.g. 409 immutable).
@@ -22,7 +45,11 @@ router.post('/runtime/test', async (req: Request, res: Response) => {
   try {
     const { connectorId, versionId, creds } = req.body ?? {};
     if (!connectorId || !creds) { res.status(400).json({ success: false, error: 'connectorId and creds required' }); return; }
-    const result = await genericRestRuntime.test(connectorId, versionId, creds);
+    const { head, runtime, ctx } = await resolveRuntime(connectorId, versionId);
+    if (!runtime.test) { res.status(400).json({ success: false, error: `test not supported for runtime "${head.runtimeKind}"` }); return; }
+    const started = Date.now();
+    const result = await runtime.test(creds, ctx);
+    await recordTestRun({ connectorId, versionId, orgId: head.orgId, runtimeKind: head.runtimeKind, phase: 'test', status: result.ok ? 'success' : 'error', sampleCount: result.sampleCount, durationMs: Date.now() - started, error: result.ok ? undefined : result.message });
     res.json({ success: true, data: result });
   } catch (err) {
     fail(res, err, 400);
@@ -33,7 +60,9 @@ router.post('/runtime/fetch', async (req: Request, res: Response) => {
   try {
     const { connectorId, versionId, creds, entity } = req.body ?? {};
     if (!connectorId || !creds || !entity) { res.status(400).json({ success: false, error: 'connectorId, creds, entity required' }); return; }
-    const result = await genericRestRuntime.fetch(connectorId, versionId, creds, entity);
+    const { head, runtime, ctx } = await resolveRuntime(connectorId, versionId);
+    if (!runtime.fetch) { res.status(400).json({ success: false, error: `fetch not supported for runtime "${head.runtimeKind}"` }); return; }
+    const result = await runtime.fetch(creds, entity, ctx);
     res.json({ success: true, data: result });
   } catch (err) {
     fail(res, err, 400);
@@ -44,7 +73,9 @@ router.post('/runtime/push', async (req: Request, res: Response) => {
   try {
     const { connectorId, versionId, creds, entity, records } = req.body ?? {};
     if (!connectorId || !creds || !entity || !Array.isArray(records)) { res.status(400).json({ success: false, error: 'connectorId, creds, entity, records[] required' }); return; }
-    const result = await genericRestRuntime.push(connectorId, versionId, creds, entity, records);
+    const { head, runtime, ctx } = await resolveRuntime(connectorId, versionId);
+    if (!runtime.push) { res.status(400).json({ success: false, error: `push not supported for runtime "${head.runtimeKind}"` }); return; }
+    const result = await runtime.push(creds, entity, records, ctx);
     res.json({ success: true, data: result });
   } catch (err) {
     fail(res, err, 400);
@@ -54,16 +85,56 @@ router.post('/runtime/push', async (req: Request, res: Response) => {
 // Push arbitrary records (e.g. fetched from a REST source) into a database destination.
 router.post('/runtime/push-to-db', async (req: Request, res: Response) => {
   try {
-    const { engine, conn, table, records, mappings } = req.body ?? {};
+    const { engine, conn, table, records, mappings, naturalKey } = req.body ?? {};
     if (!engine || !conn || !table || !Array.isArray(records) || !Array.isArray(mappings)) {
       res.status(400).json({ success: false, error: 'engine, conn, table, records[], mappings[] required' });
       return;
     }
-    const result = await writeRecordsToDb({ engine, conn, table, records, mappings });
+    const result = await writeRecordsToDb({ engine, conn, table, records, mappings, naturalKey });
     res.json({ success: true, data: result });
   } catch (err) {
     fail(res, err, 400);
   }
+});
+
+// ── Generic runtime discovery (registry-dispatched by the connector's runtimeKind) ──
+// These let the Wizard call ONE set of endpoints instead of branching per kind.
+
+async function dispatchDiscovery(
+  req: Request, res: Response,
+  method: 'discoverScopes' | 'discoverEntities' | 'discoverFields',
+): Promise<void> {
+  try {
+    const { connectorId, versionId, creds, entity, scope } = req.body ?? {};
+    if (!connectorId) { res.status(400).json({ success: false, error: 'connectorId required' }); return; }
+    const head = await connectorService.getConnector(connectorId);
+    if (!head) { res.status(404).json({ success: false, error: 'Connector not found' }); return; }
+    const runtime = getRuntime(head.runtimeKind);
+    const fn = runtime?.[method];
+    if (!runtime || !fn) {
+      res.status(400).json({ success: false, error: `${method} not supported for runtime "${head.runtimeKind}" yet` });
+      return;
+    }
+    const ctx = { connectorId, versionId, orgId: head.orgId };
+    const data = method === 'discoverFields'
+      ? await runtime.discoverFields!(creds ?? {}, ctx, entity, scope)
+      : method === 'discoverEntities'
+        ? await runtime.discoverEntities!(creds ?? {}, ctx, scope)
+        : await runtime.discoverScopes!(creds ?? {}, ctx);
+    res.json({ success: true, data });
+  } catch (err) {
+    fail(res, err, 400);
+  }
+}
+
+router.post('/runtime/discover-scopes', (req, res) => dispatchDiscovery(req, res, 'discoverScopes'));
+router.post('/runtime/discover-entities', (req, res) => dispatchDiscovery(req, res, 'discoverEntities'));
+router.post('/runtime/discover-fields', (req, res) => dispatchDiscovery(req, res, 'discoverFields'));
+
+// GET /api/connectors/meta/categories — the data-driven category registry (FSD §3-§5).
+// Drives the Studio system-registration + per-category dynamic forms.
+router.get('/meta/categories', (_req: Request, res: Response) => {
+  res.json({ success: true, data: CATEGORY_REGISTRY });
 });
 
 // ── Authoring (POST before /:id param routes for clarity) ──
@@ -132,7 +203,8 @@ router.put('/:id', async (req: Request, res: Response) => {
 // DELETE /api/connectors/:id
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
-    const result = await connectorAuthoringService.deleteConnector(req.params.id as string);
+    const force = req.query.force === 'true';
+    const result = await connectorAuthoringService.deleteConnector(req.params.id as string, force);
     res.json({ success: true, data: result });
   } catch (err) {
     fail(res, err, 400);
@@ -173,6 +245,26 @@ router.post('/:id/versions/:versionId/publish', async (req: Request, res: Respon
   }
 });
 
+// POST /api/connectors/:id/versions/:versionId/deprecate — mark deprecated (+ sunset)
+router.post('/:id/versions/:versionId/deprecate', async (req: Request, res: Response) => {
+  try {
+    const updated = await connectorAuthoringService.deprecateVersion(req.params.versionId as string, req.body ?? {});
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    fail(res, err, 400);
+  }
+});
+
+// POST /api/connectors/:id/versions/:versionId/rollback — point head at a prior published version
+router.post('/:id/versions/:versionId/rollback', async (req: Request, res: Response) => {
+  try {
+    const target = await connectorAuthoringService.rollbackVersion(req.params.id as string, req.params.versionId as string);
+    res.json({ success: true, data: target });
+  } catch (err) {
+    fail(res, err, 400);
+  }
+});
+
 // GET /api/connectors?category=source|destination|both — connector cards
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -194,6 +286,17 @@ router.get('/:id', async (req: Request, res: Response) => {
     }
     const version = await connectorService.getVersion(head.connectorId);
     res.json({ success: true, data: { ...head, latestVersion: version ?? null } });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+// GET /api/connectors/:id/capabilities — declarative runtime capabilities (drives Wizard UI)
+router.get('/:id/capabilities', async (req: Request, res: Response) => {
+  try {
+    const head = await connectorService.getConnector(req.params.id as string);
+    if (!head) { res.status(404).json({ success: false, error: 'Connector not found' }); return; }
+    res.json({ success: true, data: { runtimeKind: head.runtimeKind, capabilities: capabilitiesFor(head.runtimeKind) } });
   } catch (err) {
     fail(res, err);
   }

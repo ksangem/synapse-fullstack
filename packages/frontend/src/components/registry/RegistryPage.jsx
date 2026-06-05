@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useDetailPane } from '../../hooks/useDetailPane';
 import { api } from '../../services/api';
 import { mapToCard, statusLabel } from '../../services/integrationMap';
-import { integrations as mockIntegrations } from '../../data/integrations';
 
 export default function RegistryPage() {
   const navigate = useNavigate();
@@ -22,14 +21,9 @@ export default function RegistryPage() {
       setLoading(true);
       const res = await api.getConnected();
       if (!alive) return;
-      if (res.ok && Array.isArray(res.data?.data) && res.data.data.length > 0) {
-        setCards(res.data.data.map(mapToCard));
-        setUsingSample(false);
-      } else {
-        // Backend down or no integrations yet → sample data so the page isn't blank.
-        setCards(mockIntegrations.map((m) => ({ ...m, msgsLabel: m.msgs })));
-        setUsingSample(true);
-      }
+      const rows = (res.ok && Array.isArray(res.data?.data)) ? res.data.data : [];
+      setCards(rows.map(mapToCard));
+      setUsingSample(false);
       setLoading(false);
     })();
     return () => { alive = false; };

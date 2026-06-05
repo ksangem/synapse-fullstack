@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDetailPane } from '../../hooks/useDetailPane';
 import { useToast } from '../../hooks/useToast';
-import { monitorData } from '../../data/monitorData';
 import DeadLetterPanel from './DeadLetterPanel';
 
 const statusBadgeMap = {
@@ -24,10 +23,13 @@ export default function MonitorPage() {
   const [showFailed, setShowFailed] = useState(true);
   const [showPartial, setShowPartial] = useState(true);
   const [realtime, setRealtime] = useState(true);
+  // Run history (real). There is no global run-history feed yet, so this stays
+  // empty (no mock) — the live DLQ panel below shows real reliability data.
+  const [rows] = useState([]);
 
-  const uniqueAdapters = ['All Adapters', ...new Set(monitorData.map((r) => r.adapter))];
+  const uniqueAdapters = ['All Adapters', ...new Set(rows.map((r) => r.adapter))];
 
-  const filteredData = monitorData.filter((row) => {
+  const filteredData = rows.filter((row) => {
     if (adapterFilter !== 'All Adapters' && row.adapter !== adapterFilter) return false;
     if (!showSuccess && row.status === 'Success') return false;
     if (!showFailed && row.status === 'Failed') return false;
@@ -186,7 +188,7 @@ export default function MonitorPage() {
             {filteredData.map((row, idx) => {
               const failed = row.status === 'Failed';
               const isProcessing = row.status === 'Processing';
-              const originalIdx = monitorData.indexOf(row);
+              const originalIdx = rows.indexOf(row);
 
               return (
                 <React.Fragment key={originalIdx}>
@@ -285,6 +287,9 @@ export default function MonitorPage() {
                 </React.Fragment>
               );
             })}
+            {filteredData.length === 0 && (
+              <tr><td colSpan={9} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>No sync runs recorded yet.</td></tr>
+            )}
           </tbody>
         </table>
       </div>

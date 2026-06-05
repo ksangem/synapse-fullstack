@@ -49,7 +49,8 @@ router.get('/', async (_req: Request, res: Response) => {
 // MUST be before /:id routes so Express doesn't match "save-connection" as an :id param.
 const saveConnectionSchema = z.object({
   name: z.string().min(1),
-  endpointUrl: z.string().min(1),
+  // Optional: only REST/Jira-style sources have a base URL; GraphQL/CSV/SFTP/etc. don't.
+  endpointUrl: z.string().optional(),
   sourceType: z.string().optional(),
   destType: z.string().optional(),
   // Connector-registry pins (template-driven wizard)
@@ -87,14 +88,19 @@ router.post('/save-connection', async (req: Request, res: Response) => {
     const body = saveConnectionSchema.parse(req.body);
     const sourceType = body.sourceType || 'Jira';
     const destType = body.destType || 'SharePoint';
+    const endpointUrl = (body.endpointUrl ?? '').trim();
 
-    // Look for existing active integration with same endpointUrl
+    // Dedup an existing connection: by endpointUrl when present (Jira/REST), else by
+    // name + connector pins (GraphQL/CSV/SFTP/… have no endpointUrl).
     const allActive = await db.select().from(integrations)
       .where(eq(integrations.status, 'active'));
 
     const existing = allActive.find(i => {
       const fm = i.fieldMappings as Record<string, string> | null;
-      return fm?.endpointUrl === body.endpointUrl;
+      if (endpointUrl) return fm?.endpointUrl === endpointUrl;
+      return i.name === body.name
+        && (i.sourceConnectorId ?? null) === (body.sourceConnectorId ?? null)
+        && (i.destConnectorId ?? null) === (body.destConnectorId ?? null);
     });
 
     // Encrypt source credentials based on source type
@@ -180,7 +186,7 @@ router.post('/save-connection', async (req: Request, res: Response) => {
     // Build fieldMappings object
     const buildFm = (baseFm?: Record<string, unknown> | null): Record<string, unknown> => {
       const fm: Record<string, unknown> = { ...(baseFm ?? {}) };
-      fm.endpointUrl = body.endpointUrl;
+      fm.endpointUrl = endpointUrl;
       fm.sourceType = sourceType;
       fm.destType = destType;
       if (credId) { fm.credId = credId; fm.authMethod = 'api_token'; }

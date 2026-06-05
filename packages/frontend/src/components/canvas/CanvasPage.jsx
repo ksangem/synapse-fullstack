@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { useToast } from '../../hooks/useToast';
 import {
@@ -26,6 +26,7 @@ function deriveFields(mappings, side) {
 
 export default function CanvasPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { showToast } = useToast();
   const handoff = location.state || null;
 
@@ -96,6 +97,7 @@ export default function CanvasPage() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {handoff && <button className="btn btn-outline btn-sm" onClick={() => navigate('/wizard')} title="Return to the Connection Wizard where you left off">&#8592; Back to Wizard</button>}
           <button className="btn btn-outline btn-sm" disabled={busy} onClick={runAutoMap}>{busy ? 'Mapping…' : '✨ AI Auto-Map'}</button>
           <button className="btn btn-ghost btn-sm" onClick={clearAll}>Clear</button>
           <button className={`btn btn-sm ${saveState === 'saved' ? 'btn-success' : 'btn-primary'}`} onClick={save}>

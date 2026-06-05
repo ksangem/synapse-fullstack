@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useDetailPane } from '../../hooks/useDetailPane';
 import { useToast } from '../../hooks/useToast';
 import { useNavigate } from 'react-router-dom';
-import { alerts } from '../../data/alerts';
+import { api } from '../../services/api';
 
 function AlertDetailContent({ alert, showToast, navigate }) {
   const [showStack, setShowStack] = useState(false);
@@ -73,9 +73,19 @@ function AlertDetailContent({ alert, showToast, navigate }) {
 
 export default function AlertsPage() {
   const [severityFilter, setSeverityFilter] = useState('all');
+  const [alerts, setAlerts] = useState([]);
   const { openDetailPane } = useDetailPane();
   const { showToast } = useToast();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    (async () => {
+      const res = await api.getAlerts();
+      setAlerts((res.ok && Array.isArray(res.data?.data)) ? res.data.data : []);
+    })();
+  }, []);
+
+  const unresolvedCount = alerts.filter(a => !a.resolved).length;
 
   const filteredAlerts = alerts.filter(a => {
     if (severityFilter === 'critical') return a.severity === 'critical';
@@ -96,7 +106,7 @@ export default function AlertsPage() {
       <div className="page-header">
         <div>
           <div className="page-title">Alerts &amp; Notifications</div>
-          <div className="page-subtitle">3 unresolved alerts</div>
+          <div className="page-subtitle">{unresolvedCount} unresolved alert{unresolvedCount === 1 ? '' : 's'}</div>
         </div>
         <div className="flex gap-8">
           <select
@@ -112,6 +122,9 @@ export default function AlertsPage() {
       </div>
 
       <div id="alertsList">
+        {filteredAlerts.length === 0 && (
+          <div className="card" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>No alerts.</div>
+        )}
         {filteredAlerts.map((a, idx) => {
           const bgColor = a.severity === 'critical' && !a.resolved ? 'var(--error-dim)' : 'transparent';
           const borderColor = a.severity === 'critical' ? 'var(--error)' : a.severity === 'warning' ? 'var(--warning)' : 'var(--info)';

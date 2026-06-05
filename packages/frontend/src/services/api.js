@@ -1,12 +1,6 @@
 // ── API Client ──
-// When the Express backend is running at localhost:4000, real endpoints are used.
-// Falls back to mock data when backend is unavailable.
-
-import { integrations } from '../data/integrations';
-import { monitorData } from '../data/monitorData';
-import { credentials as mockCredentials } from '../data/credentials';
-import { alerts as mockAlerts } from '../data/alerts';
-import { dashboardTiles } from '../data/dashboardTiles';
+// Talks to the Express backend at localhost:4000. No mock/sample data — pages
+// show real backend data or an empty state.
 
 // Use whatever host the page was loaded from, on the backend's port 4000.
 // → On your PC (localhost:5173) it calls localhost:4000.
@@ -41,16 +35,16 @@ export const api = {
   getConnectorEntities: async (id) => fetchApi(`/api/connectors/${id}/entities`),
   getConnectorOperations: async (id) => fetchApi(`/api/connectors/${id}/operations`),
   getConnectorVersions: async (id) => fetchApi(`/api/connectors/${id}/versions`),
+  // FSD §3-§5 category registry (drives the data-driven Studio) + runtime capabilities
+  getConnectorCategories: async () => fetchApi('/api/connectors/meta/categories'),
+  getConnectorCapabilities: async (id) => fetchApi(`/api/connectors/${id}/capabilities`),
 
   // ── Entity Catalog ──
   getEntityCatalog: async () => fetchApi('/api/entities'),
 
-  // ── Mock data (always available) ──
-  getIntegrations: async () => integrations,
-  getMonitorData: async () => monitorData,
-  getCredentials: async () => mockCredentials,
-  getAlerts: async () => mockAlerts,
-  getDashboardTiles: async () => dashboardTiles,
+  // ── Credentials / alerts (real backend) ──
+  getCredentials: async () => fetchApi('/api/credentials'),
+  getAlerts: async () => fetchApi('/api/alerts'),
 
   // ── Real backend endpoints (Jira integration) ──
   testJiraConnection: async (endpointUrl, email, apiToken) => {
@@ -322,9 +316,6 @@ export const api = {
   },
   replayAllDeadLetters: async () => {
     return fetchApi('/api/hub/dlq/replay', { method: 'POST' });
-  },
-  seedDeadLetter: async () => {
-    return fetchApi('/api/hub/dlq/_seed', { method: 'POST' });
   },
 
   // ── Health check ──

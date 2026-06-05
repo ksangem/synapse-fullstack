@@ -43,14 +43,6 @@ export default function DeadLetterPanel() {
     setBusy(false);
   };
 
-  const seed = async () => {
-    setBusy(true);
-    await api.seedDeadLetter();
-    await load();
-    setBusy(false);
-    showToast('Seeded a sample dead-letter (dev)', 'info');
-  };
-
   const statusBadge = (s) =>
     s === 'done' ? 'badge-success' : s === 'poisoned' ? 'badge-error' : s === 'failed' ? 'badge-warning' : 'badge-info';
 
@@ -68,7 +60,6 @@ export default function DeadLetterPanel() {
         </div>
         <div className="flex gap-8">
           <button className="btn btn-ghost btn-sm" onClick={load} disabled={busy} title="Refresh">&#8635; Refresh</button>
-          <button className="btn btn-outline btn-sm" onClick={seed} disabled={busy} title="Insert a sample failed message (dev)">+ Seed sample</button>
           <button className="btn btn-primary btn-sm" onClick={replayAll} disabled={busy || replayable.length === 0}>&#9654; Replay all</button>
         </div>
       </div>
@@ -77,7 +68,7 @@ export default function DeadLetterPanel() {
         <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)' }}>Loading dead-letter queue…</div>
       ) : rows.length === 0 ? (
         <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)' }}>
-          No dead-lettered messages. &#127881; Use <strong>Seed sample</strong> to try a replay.
+          No dead-lettered messages. &#127881; Failed hub deliveries will appear here for replay.
         </div>
       ) : (
         <div className="table-wrap">

@@ -128,9 +128,17 @@ export class SqlServerWriter implements IDbWriter {
     if (columns.length === 0) throw new Error('Cannot upsert an empty row');
 
     const naturalKeyValue = String(row[naturalKeyColumn] ?? '');
-    if (!naturalKeyValue) throw new Error(`Natural key column "${naturalKeyColumn}" is missing or empty in row`);
-
     const qualifiedTable = `[${schema}].[${table}]`;
+
+    // No business key value → append the row (key is non-mandatory).
+    if (!naturalKeyValue) {
+      const insertReq = this.pool!.request();
+      columns.forEach((col, i) => insertReq.input(`c${i}`, row[col]));
+      const columnList = columns.map((c) => `[${c}]`).join(', ');
+      const valueList = columns.map((_, i) => `@c${i}`).join(', ');
+      await insertReq.query(`INSERT INTO ${qualifiedTable} (${columnList}) VALUES (${valueList})`);
+      return { action: 'inserted', naturalKey: '', changedColumns: columns };
+    }
 
     // 1. Check if the row exists
     const selectReq = this.pool!.request();

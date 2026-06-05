@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useDetailPane } from '../../hooks/useDetailPane';
 import { api } from '../../services/api';
 import { mapToCard, computeKpis, statusLabel } from '../../services/integrationMap';
-import { dashboardTiles } from '../../data/dashboardTiles';
 
 function AdapterDetailContent({ tile }) {
   const pushes = tile.recentPushes || [];
@@ -113,16 +112,11 @@ export default function DashboardPage() {
       setLoading(true);
       const res = await api.getConnected();
       if (!alive) return;
-      if (res.ok && Array.isArray(res.data?.data) && res.data.data.length > 0) {
-        const mapped = res.data.data.map(mapToCard);
-        setCards(mapped);
-        setKpis(computeKpis(mapped));
-        setUsingSample(false);
-      } else {
-        setCards(dashboardTiles);
-        setKpis(null); // sample → use illustrative KPI numbers below
-        setUsingSample(true);
-      }
+      const rows = (res.ok && Array.isArray(res.data?.data)) ? res.data.data : [];
+      const mapped = rows.map(mapToCard);
+      setCards(mapped);
+      setKpis(computeKpis(mapped));
+      setUsingSample(false);
       setLoading(false);
     })();
     return () => { alive = false; };

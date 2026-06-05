@@ -3,22 +3,9 @@ import { useDetailPane } from '../../hooks/useDetailPane';
 import { useToast } from '../../hooks/useToast';
 import { useNavigate } from 'react-router-dom';
 
-const users = [
-  { name: 'Anita Kumar', email: 'anita.k@acme.com', role: 'Admin', lastActive: '2 min ago', adapters: 8, status: 'Active' },
-  { name: 'Marcus Chen', email: 'marcus.c@acme.com', role: 'Designer', lastActive: '5 min ago', adapters: 12, status: 'Active' },
-  { name: 'Sarah Thompson', email: 'sarah.t@acme.com', role: 'Operator', lastActive: '1 hr ago', adapters: 4, status: 'Active' },
-  { name: 'David Park', email: 'david.p@acme.com', role: 'Operator', lastActive: '3 hrs ago', adapters: 6, status: 'Active' },
-  { name: 'Elena Rodriguez', email: 'elena.r@acme.com', role: 'Designer', lastActive: '30 min ago', adapters: 9, status: 'Active' },
-  { name: 'Lisa Nakamura', email: 'lisa.n@acme.com', role: 'Admin', lastActive: '10 min ago', adapters: 15, status: 'Active' },
-  { name: 'Tom Williams', email: 'tom.w@acme.com', role: 'Viewer', lastActive: '2 days ago', adapters: 0, status: 'Inactive' },
-];
-
-const clientApps = [
-  { name: 'Mobile Dashboard', clientId: 'syn_mob_****4f2e', tier: 'Heavy', calls: 245000, status: 'Active' },
-  { name: 'Analytics Portal', clientId: 'syn_ana_****8b3c', tier: 'Moderate', calls: 89000, status: 'Active' },
-  { name: 'Webhook Relay', clientId: 'syn_whk_****1a9d', tier: 'Light', calls: 12000, status: 'Active' },
-  { name: 'CI/CD Pipeline', clientId: 'syn_cicd_****7e5f', tier: 'Moderate', calls: 67000, status: 'Active' },
-];
+// User management + client-app registry have no backend yet — no mock data.
+const users = [];
+const clientApps = [];
 
 function roleBadgeClass(role) {
   switch (role) {
@@ -261,6 +248,9 @@ export default function AdminPage() {
               </tr>
             </thead>
             <tbody>
+              {filteredUsers.length === 0 && (
+                <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>No users — user management isn't available yet (no auth/role backend).</td></tr>
+              )}
               {filteredUsers.map((u, idx) => {
                 const roleStyle = roleBadgeStyle(u.role);
                 const useCustomStyle = u.role !== 'Viewer';
@@ -332,6 +322,9 @@ export default function AdminPage() {
               </tr>
             </thead>
             <tbody>
+              {clientApps.length === 0 && (
+                <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>No client applications registered yet.</td></tr>
+              )}
               {clientApps.map((app, idx) => {
                 const tierBadge = app.tier === 'Heavy' ? 'badge-error' : app.tier === 'Moderate' ? 'badge-warning' : 'badge-info';
 

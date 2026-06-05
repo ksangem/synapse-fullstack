@@ -95,9 +95,16 @@ export class MySqlWriter implements IDbWriter {
     if (columns.length === 0) throw new Error('Cannot upsert an empty row');
 
     const naturalKeyValue = String(row[naturalKeyColumn] ?? '');
-    if (!naturalKeyValue) throw new Error(`Natural key column "${naturalKeyColumn}" is missing or empty in row`);
-
     const qualifiedTable = schema ? `\`${schema}\`.\`${table}\`` : `\`${table}\``;
+
+    // No business key value → append the row (key is non-mandatory).
+    if (!naturalKeyValue) {
+      const placeholders = columns.map(() => '?');
+      const values = columns.map((col) => row[col]) as any[];
+      const columnList = columns.map((c) => `\`${c}\``).join(', ');
+      await this.pool!.execute(`INSERT INTO ${qualifiedTable} (${columnList}) VALUES (${placeholders.join(', ')})`, values);
+      return { action: 'inserted', naturalKey: '', changedColumns: columns };
+    }
 
     // 1. Check if row exists
     const [existingRows] = await this.pool!.execute(

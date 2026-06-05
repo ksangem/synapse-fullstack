@@ -9,9 +9,8 @@
  *   - DlqReplayService               (T-04, manual + auto replay)
  *
  * Replay re-dispatches a dead-lettered envelope to its *registered* destination
- * connector. Production registers real connectors (SharePoint→DB, etc.) here; a
- * built-in "echo" connector is registered so the replay loop is demonstrable
- * end-to-end before the full ingest path is wired.
+ * connector. Real connectors (SharePoint→DB, etc.) register themselves here; an
+ * unregistered destination causes replay to fail (correct — no demo target).
  */
 
 import { db } from '../db/client';
@@ -40,14 +39,6 @@ class HubService {
 
     // DeadLetterRepository satisfies DlqPort structurally.
     this.replayService = new DlqReplayService(this.deadLetterRepo, redeliver);
-
-    // Built-in echo destination: acknowledges any message so a replay can
-    // succeed. Replace/extend by registering real connectors in production.
-    this.registerDestination({
-      connectorId: 'echo',
-      orgId: DEFAULT_ORG,
-      async dispatch() { /* success — message accepted */ },
-    });
   }
 
   registerDestination(connector: IDestinationConnector): void {

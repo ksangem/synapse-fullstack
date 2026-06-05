@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
+import { runtimeClient } from '../../services/runtimeClient';
 
 /* ─── Static Data ──────────────────────────────────────��── */
 const stepLabels = ['Select Systems', 'Credentials', 'Entities', 'Mapping', 'Fetch & Review', 'Push & Sync'];
@@ -492,6 +493,8 @@ export default function WizardPage() {
   const [expandedMapping, setExpandedMapping] = useState(-1);
   const [srcSearch, setSrcSearch] = useState('');
   const [destSearch, setDestSearch] = useState('');
+  // Which destination column to dedup/upsert by. '' = default (first mapping); '__append__' = no matching (append every row).
+  const [matchKey, setMatchKey] = useState('');
 
   // Step 5 — Fetch & Review
   const [fetchStatus, setFetchStatus] = useState('idle'); // idle | fetching | done | error
@@ -520,12 +523,19 @@ export default function WizardPage() {
   const updateDestCred = (key, val) => setDestCreds(prev => ({ ...prev, [key]: val }));
 
   // ─── Registry-driven helpers (replace the old hardcoded lookups) ───
+  // Kinds that execute through the generic, registry-dispatched runtime endpoints
+  // (/api/connectors/runtime/{test,fetch,push}). Everything EXCEPT the three
+  // legacy handler-based kinds (jira/sharepoint/database, which still use their
+  // own routes) shares this path, so the Wizard treats them uniformly — adding a
+  // new category needs no Wizard change.
+  const GENERIC_RUNTIME_KINDS = ['rest', 'generic', 'graphql', 'flatfile', 'soap', 'mq', 'webhook', 'fileshare', 'email', 'scrape'];
   const getFields = (label) => connectorMeta[label]?.credFields || [];
   const dbCfg = (label) => connectorMeta[label]?.runtimeConfig || null;
   const isDbDest = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'database';
-  const isRest = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'rest';
+  const isRest = (label) => GENERIC_RUNTIME_KINDS.includes(connectorMeta[label]?.runtimeConfig?.runtimeKind);
   // Recognize a SharePoint connector by runtime kind (covers the built-in AND clones like "sp1").
   const isSpSource = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'sharepoint';
+  const isFlatFile = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'flatfile';
   const connectorIdOf = (label) => connectorMeta[label]?.connectorId;
   const versionIdOf = (label) => connectorMeta[label]?.latestVersionId;
 
@@ -734,7 +744,7 @@ export default function WizardPage() {
         } else { setFetchError(result.data?.error || 'Fetch failed'); setFetchStatus('error'); }
       } else if (isRest(selectedSource)) {
         const meta = connectorMeta[selectedSource];
-        const result = await api.call('/api/connectors/runtime/fetch', { connectorId: meta.connectorId, versionId: meta.latestVersionId, creds: srcCreds, entity: selectedEntity });
+        const result = await runtimeClient.fetch(meta.connectorId, meta.latestVersionId, selectedEntity, srcCreds);
         if (result.ok && result.data?.success) {
           const records = result.data.data?.records || [];
           setFetchResult({ runId: 'rest-fetch-' + Date.now(), tickets: records, totalCount: records.length });
@@ -757,12 +767,13 @@ export default function WizardPage() {
       setPushStatus('error');
       return;
     }
-    if (selectedDest === 'PostgreSQL') {
-      handlePushToPg();
-    } else if (selectedDest === 'MySQL') {
-      handlePushToMysql();
-    } else if (selectedDest === 'SQL Server') {
-      handlePushToMssql();
+    // Kind/engine-based dispatch (NOT display-label) — so a cloned DB connector
+    // like "pg-prod" routes correctly instead of falling through to SharePoint.
+    if (isDbDest(selectedDest)) {
+      const engine = dbCfg(selectedDest)?.engine;
+      if (engine === 'mysql') handlePushToMysql();
+      else if (engine === 'sqlserver') handlePushToMssql();
+      else handlePushToPg();
     } else {
       handlePushToSharePoint();
     }
@@ -787,12 +798,10 @@ export default function WizardPage() {
       const destMeta = connectorMeta[selectedDest];
       const entity = (destMeta?.entities || [])[0]?.key;
       const records = mapRecordsToDest();
-      const result = await api.call('/api/connectors/runtime/push', {
-        connectorId: destMeta.connectorId, versionId: destMeta.latestVersionId, creds: destCreds, entity, records,
-      });
+      const result = await runtimeClient.push(destMeta.connectorId, destMeta.latestVersionId, entity, destCreds, records);
       if (result.ok && result.data?.success) {
         const d = result.data.data;
-        setPushResult({ pushRunId: 'rest-' + Date.now(), total: records.length, status: 'success', created: d.created, updated: 0, failed: d.failed });
+        setPushResult({ pushRunId: 'rest-' + Date.now(), total: records.length, status: 'success', created: d.created, updated: 0, failed: d.failed, errors: d.errors });
         setPushStatus('done');
       } else { setPushError(result.data?.error || 'Push failed'); setPushStatus('error'); }
     } catch { setPushError('Network error during push'); setPushStatus('error'); }
@@ -814,10 +823,11 @@ export default function WizardPage() {
         table: destCreds.table || 'rest_data',
         records: fetchResult.tickets,
         mappings: dbMappings,
+        naturalKey: matchKey === '__append__' ? '' : (matchKey || undefined),
       });
       if (result.ok && result.data?.success) {
         const d = result.data.data;
-        setPushResult({ pushRunId: 'restdb-' + Date.now(), total: fetchResult.tickets.length, status: 'success', created: d.inserted, updated: d.updated, failed: d.failed, tableCreated: d.tableCreated });
+        setPushResult({ pushRunId: 'restdb-' + Date.now(), total: fetchResult.tickets.length, status: 'success', created: d.inserted, updated: d.updated, failed: d.failed, tableCreated: d.tableCreated, errors: d.errors, autoPrimaryKey: d.autoPrimaryKey });
         setPushStatus('done');
       } else { setPushError(result.data?.error || 'Push failed'); setPushStatus('error'); }
     } catch { setPushError('Network error during push'); setPushStatus('error'); }
@@ -1102,6 +1112,31 @@ export default function WizardPage() {
     if (destTestStatus !== 'idle') { setDestTestStatus('idle'); setDestTestMsg(''); }
   };
 
+  // Flat File upload — read the operator's file into srcCreds.fileContent
+  // (text for CSV/TSV/JSON, base64 for XLSX) so the generic runtime can parse it.
+  const handleFileUpload = (file) => {
+    if (!file) return;
+    const name = file.name.toLowerCase();
+    const isXlsx = name.endsWith('.xlsx') || name.endsWith('.xls');
+    const fmt = isXlsx ? 'XLSX' : name.endsWith('.json') ? 'JSON' : name.endsWith('.tsv') ? 'TSV' : 'CSV';
+    const reader = new FileReader();
+    reader.onload = () => {
+      let content;
+      if (isXlsx) {
+        const bytes = new Uint8Array(reader.result);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        content = btoa(bin);
+      } else {
+        content = reader.result;
+      }
+      updateSrcCred('fileFormat', fmt);
+      updateSrcCred('fileContent', content);
+      setSrcTestStatus('idle'); setSrcTestMsg(`Loaded ${file.name} (${fmt})`);
+    };
+    if (isXlsx) reader.readAsArrayBuffer(file); else reader.readAsText(file);
+  };
+
   const testSourceConnection = async () => {
     setSrcTestStatus('testing'); setSrcTestMsg('');
     try {
@@ -1125,12 +1160,13 @@ export default function WizardPage() {
         } else { setSrcTestStatus('error'); setSrcTestMsg(result.data?.error || 'Connection failed'); }
       } else if (isRest(selectedSource)) {
         const meta = connectorMeta[selectedSource];
-        const result = await api.call('/api/connectors/runtime/test', { connectorId: meta.connectorId, versionId: meta.latestVersionId, creds: srcCreds });
+        const result = await runtimeClient.test(meta.connectorId, meta.latestVersionId, srcCreds);
         if (result.ok && result.data?.success) {
+          const d = result.data.data || {};
           setSrcTestStatus('connected');
-          setSrcTestMsg(`Connected (HTTP ${result.data.data.status}) — ${result.data.data.sampleCount} sample records`);
-          setSrcConnectionData(result.data.data);
-        } else { setSrcTestStatus('error'); setSrcTestMsg(result.data?.error || 'Connection failed'); }
+          setSrcTestMsg(`Connected${d.status ? ` (HTTP ${d.status})` : ''}${d.sampleCount != null ? ` — ${d.sampleCount} sample records` : ''}`);
+          setSrcConnectionData(d);
+        } else { setSrcTestStatus('error'); setSrcTestMsg(result.data?.error || result.data?.data?.message || 'Connection failed'); }
       } else { setSrcTestStatus('error'); setSrcTestMsg(`${selectedSource} not yet supported.`); }
     } catch { setSrcTestStatus('error'); setSrcTestMsg('Connection failed.'); }
   };
@@ -1138,7 +1174,8 @@ export default function WizardPage() {
   const testDestConnection = async () => {
     setDestTestStatus('testing'); setDestTestMsg('');
     try {
-      if (selectedDest === 'SharePoint') {
+      if (isSpSource(selectedDest)) {
+        // SharePoint destination (built-in or clone) \u2014 recognized by runtimeKind.
         const { siteUrl, listName } = destCreds;
         if (!siteUrl || !listName) { setDestTestStatus('error'); setDestTestMsg('Please fill in Site URL and List Name'); return; }
         const result = await api.testSharePointConnection({ siteUrl, listName });
@@ -1147,41 +1184,31 @@ export default function WizardPage() {
           setDestTestMsg(`Connected to "${result.data.data?.siteDisplayName}" \u2014 list "${result.data.data?.listName}" (${result.data.data?.listColumnCount} columns)`);
           setDestConnectionData(result.data.data);
         } else { setDestTestStatus('error'); setDestTestMsg(result.data?.error || 'Connection failed'); }
-      } else if (selectedDest === 'PostgreSQL') {
+      } else if (isDbDest(selectedDest)) {
+        // Engine-based dispatch (NOT label) so cloned DB connectors test correctly.
+        const cfg = dbCfg(selectedDest);
+        const engine = cfg?.engine;
         const { host, port, database, username, password } = destCreds;
         if (!host || !database || !username) { setDestTestStatus('error'); setDestTestMsg('Please fill in Host, Database, and Username'); return; }
-        const result = await api.testPgDest({ host, port: Number(port) || 5432, database, username, password });
+        const defPort = engine === 'mysql' ? 3306 : engine === 'sqlserver' ? 1433 : 5432;
+        const p = Number(port) || defPort;
+        const testFn = engine === 'mysql' ? api.testMysqlDest : engine === 'sqlserver' ? api.testMssqlDest : api.testPgDest;
+        const result = await testFn({ host, port: p, database, username, password });
         if (result.ok && result.data?.data?.connectionOk) {
+          const defSchema = engine === 'sqlserver' ? 'dbo' : 'public';
           setDestTestStatus('connected');
-          setDestTestMsg(`Connected to ${host}:${port || 5432}/${database}`);
-          setDestConnectionData({ host, port: Number(port) || 5432, database, username, password, schema: destCreds.schema || 'public', table: destCreds.table });
-        } else { setDestTestStatus('error'); setDestTestMsg('Connection failed \u2014 check credentials'); }
-      } else if (selectedDest === 'MySQL') {
-        const { host, port, database, username, password } = destCreds;
-        if (!host || !database || !username) { setDestTestStatus('error'); setDestTestMsg('Please fill in Host, Database, and Username'); return; }
-        const result = await api.testMysqlDest({ host, port: Number(port) || 3306, database, username, password });
-        if (result.ok && result.data?.data?.connectionOk) {
-          setDestTestStatus('connected');
-          setDestTestMsg(`Connected to ${host}:${port || 3306}/${database}`);
-          setDestConnectionData({ host, port: Number(port) || 3306, database, username, password, table: destCreds.table });
-        } else { setDestTestStatus('error'); setDestTestMsg('Connection failed \u2014 check credentials'); }
-      } else if (selectedDest === 'SQL Server') {
-        const { host, port, database, username, password } = destCreds;
-        if (!host || !database || !username) { setDestTestStatus('error'); setDestTestMsg('Please fill in Host, Database, and Username'); return; }
-        const result = await api.testMssqlDest({ host, port: Number(port) || 1433, database, username, password });
-        if (result.ok && result.data?.data?.connectionOk) {
-          setDestTestStatus('connected');
-          setDestTestMsg(`Connected to ${host}:${port || 1433}/${database}`);
-          setDestConnectionData({ host, port: Number(port) || 1433, database, username, password, schema: destCreds.schema || 'dbo', table: destCreds.table });
+          setDestTestMsg(`Connected to ${host}:${p}/${database}`);
+          setDestConnectionData({ host, port: p, database, username, password, schema: cfg?.hasSchema ? (destCreds.schema || defSchema) : undefined, table: destCreds.table });
         } else { setDestTestStatus('error'); setDestTestMsg('Connection failed \u2014 check credentials'); }
       } else if (isRest(selectedDest)) {
         const meta = connectorMeta[selectedDest];
-        const result = await api.call('/api/connectors/runtime/test', { connectorId: meta.connectorId, versionId: meta.latestVersionId, creds: destCreds });
+        const result = await runtimeClient.test(meta.connectorId, meta.latestVersionId, destCreds);
         if (result.ok && result.data?.success) {
+          const d = result.data.data || {};
           setDestTestStatus('connected');
-          setDestTestMsg(`Connected (HTTP ${result.data.data.status})`);
+          setDestTestMsg(`Connected${d.status ? ` (HTTP ${d.status})` : ''}`);
           setDestConnectionData({ ...destCreds });
-        } else { setDestTestStatus('error'); setDestTestMsg(result.data?.error || 'Connection failed'); }
+        } else { setDestTestStatus('error'); setDestTestMsg(result.data?.error || result.data?.data?.message || 'Connection failed'); }
       } else { setDestTestStatus('error'); setDestTestMsg(`${selectedDest} not yet supported.`); }
     } catch { setDestTestStatus('error'); setDestTestMsg('Connection failed.'); }
   };
@@ -1273,10 +1300,46 @@ export default function WizardPage() {
     }
   };
 
+  // Resume the wizard where you left off after a round-trip to the Mapping Canvas.
+  useEffect(() => {
+    let raw = null;
+    try { raw = sessionStorage.getItem('synapseWizardResume'); } catch { /* ignore */ }
+    if (!raw) return;
+    try { sessionStorage.removeItem('synapseWizardResume'); } catch { /* ignore */ }
+    try {
+      const s = JSON.parse(raw);
+      if (s.selectedSource) setSelectedSource(s.selectedSource);
+      if (s.selectedDest) setSelectedDest(s.selectedDest);
+      setSrcCreds(s.srcCreds || {});
+      setDestCreds(s.destCreds || {});
+      setSrcConnectionData(s.srcConnectionData || null);
+      setDestConnectionData(s.destConnectionData || null);
+      setSrcTestStatus(s.srcTestStatus || 'idle');
+      setDestTestStatus(s.destTestStatus || 'idle');
+      if (s.selectedEntity) setSelectedEntity(s.selectedEntity);
+      if (s.selectedProject) setSelectedProject(s.selectedProject);
+      setSrcFields(s.srcFields || []);
+      setDestFields(s.destFields || []);
+      setMappings(s.mappings || []);
+      if (s.fetchResult) setFetchResult(s.fetchResult);
+      if (s.activeIntegrationId) setActiveIntegrationId(s.activeIntegrationId);
+      if (s.wizardStep) setWizardStep(s.wizardStep);
+    } catch { /* ignore a corrupt snapshot */ }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Hand off the current mapping to the Mapping Canvas ──
   const openInCanvas = async () => {
     let id = activeIntegrationId;
     if (!id) id = await handleSaveConnection(); // persist first so Canvas has a target
+    // Snapshot the wizard so "Back to Wizard" returns to this exact stage.
+    try {
+      sessionStorage.setItem('synapseWizardResume', JSON.stringify({
+        wizardStep, selectedSource, selectedDest, selectedEntity, selectedProject,
+        srcCreds, destCreds, srcConnectionData, destConnectionData,
+        srcTestStatus, destTestStatus, srcFields, destFields, mappings, fetchResult,
+        activeIntegrationId: id || activeIntegrationId || null,
+      }));
+    } catch { /* ignore */ }
     navigate('/canvas', { state: { integrationId: id || null, srcFields, destFields, mappings } });
   };
 
@@ -1358,42 +1421,35 @@ export default function WizardPage() {
           }
         }
         setEntitiesLoading(false);
-
-        // Also load DB tables if destination is PostgreSQL or MySQL
-        if (isDbDest(selectedDest)) {
-          const dbCfg = destConnectionData || destCreds;
-          if (dbCfg.host && dbCfg.database) {
-            setPgTablesLoading(true);
-            const cfg = connectorMeta[selectedDest]?.runtimeConfig;
-            const apiFn = (body) => api.call(cfg?.handlers?.listTables, body);
-            const dbResult = await apiFn({
-              host: dbCfg.host, port: Number(dbCfg.port) || cfg.defaultPort,
-              database: dbCfg.database, username: dbCfg.username, password: dbCfg.password,
-              schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
-            });
-            if (dbResult.ok && dbResult.data?.success) {
-              setPgTables(dbResult.data.data?.tables || []);
-              if (destCreds.table) {
-                const match = (dbResult.data.data?.tables || []).find(t => t.name === destCreds.table);
-                if (match) setSelectedPgTable(match.name);
-                else { setCreateNewTable(true); setNewTableName(destCreds.table); }
-              }
-            }
-            setPgTablesLoading(false);
-          }
-        }
+        // DB destination tables are loaded by a separate effect (works for ALL sources).
       };
       loadLists();
     } else if (isRest(selectedSource)) {
-      // REST source: entities come from the connector template (no live discovery call).
-      const ents = (connectorMeta[selectedSource]?.entities || []).map((e) => ({
+      // Generic-runtime source. Prefer the template's design-time entities; if it
+      // has none (Flat File / Webhook / MQ define them at runtime), ask the runtime.
+      const meta = connectorMeta[selectedSource];
+      const applyEnts = (ents) => {
+        setEntities(ents);
+        setProjects([{ key: 'api', name: selectedSource }]);
+        setSelectedProject('api');
+        const def = ents.find((e) => e.defaultOn) || ents[0];
+        if (def) setSelectedEntity(def.id);
+      };
+      const staticEnts = (meta?.entities || []).map((e) => ({
         id: e.key, name: e.name, fieldCount: (e.fields || []).length, available: true, defaultOn: e.defaultOn,
       }));
-      setEntities(ents);
-      setProjects([{ key: 'api', name: selectedSource }]);
-      setSelectedProject('api');
-      const def = ents.find((e) => e.defaultOn) || ents[0];
-      if (def) setSelectedEntity(def.id);
+      if (staticEnts.length) {
+        applyEnts(staticEnts);
+      } else {
+        setEntitiesLoading(true);
+        runtimeClient.discoverEntities(meta?.connectorId, meta?.latestVersionId, srcCreds)
+          .then((res) => {
+            const disc = (res.ok && res.data?.success ? res.data.data : []) || [];
+            applyEnts(disc.map((e) => ({ id: e.key, name: e.name, fieldCount: e.fieldCount ?? 0, available: true, defaultOn: true })));
+          })
+          .catch(() => { /* leave empty; user sees "no entities" */ })
+          .finally(() => setEntitiesLoading(false));
+      }
     }
   }, [wizardStep]);
 
@@ -1414,6 +1470,33 @@ export default function WizardPage() {
     loadEntities();
   }, [wizardStep, selectedProject]);
 
+  // ─── Step 3: Load destination DB tables (any source → DB) ──
+  useEffect(() => {
+    if (wizardStep !== 3 || !isDbDest(selectedDest)) return;
+    const dbCfg = destConnectionData || destCreds;
+    if (!dbCfg.host || !dbCfg.database) return;
+    const cfg = connectorMeta[selectedDest]?.runtimeConfig;
+    if (!cfg?.handlers?.listTables) return;
+    (async () => {
+      setPgTablesLoading(true);
+      const dbResult = await api.call(cfg.handlers.listTables, {
+        host: dbCfg.host, port: Number(dbCfg.port) || cfg.defaultPort,
+        database: dbCfg.database, username: dbCfg.username, password: dbCfg.password,
+        schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
+      });
+      if (dbResult.ok && dbResult.data?.success) {
+        const tables = dbResult.data.data?.tables || [];
+        setPgTables(tables);
+        if (destCreds.table) {
+          const match = tables.find((t) => t.name === destCreds.table);
+          if (match) setSelectedPgTable(match.name);
+          else { setCreateNewTable(true); setNewTableName(destCreds.table); }
+        }
+      }
+      setPgTablesLoading(false);
+    })();
+  }, [wizardStep, selectedDest]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Step 4: Load fields when entering ──────────────────
   useEffect(() => {
     if (wizardStep !== 4) return;
@@ -1421,20 +1504,49 @@ export default function WizardPage() {
       setFieldsLoading(true);
 
       if (isRest(selectedSource)) {
-        // REST source: source fields come from the connector's entity definition.
-        const srcEnt = (connectorMeta[selectedSource]?.entities || []).find((e) => e.key === selectedEntity);
-        const sf = (srcEnt?.fields || []).map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'string', required: !!f.required }));
+        // Generic-runtime source: prefer the entity's static field defs; if none
+        // (Flat File / Webhook / MQ), infer from the runtime (parses the uploaded
+        // file / last event / a peeked message).
+        const meta = connectorMeta[selectedSource];
+        const srcEnt = (meta?.entities || []).find((e) => e.key === selectedEntity);
+        let sf = (srcEnt?.fields || []).map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'string', required: !!f.required }));
+        if (!sf.length) {
+          const fres = await runtimeClient.discoverFields(meta?.connectorId, meta?.latestVersionId, srcCreds, selectedEntity);
+          if (fres.ok && fres.data?.success) {
+            sf = (fres.data.data || []).map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'string', required: !!f.required }));
+          }
+        }
         setSrcFields(sf);
 
         if (isRest(selectedDest)) {
           const destEnt = (connectorMeta[selectedDest]?.entities || [])[0];
           setDestFields((destEnt?.fields || []).map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'string', required: !!f.required })));
         } else if (isDbDest(selectedDest)) {
-          // DB destination: derive columns from the source fields (table auto-created on push).
-          setDestFields(sf.map((f) => {
-            const col = f.name.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '').replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_');
-            return { name: col, displayName: col, type: f.type, required: false };
-          }));
+          // DB destination. If an EXISTING table is selected, show its real columns;
+          // otherwise (new table) derive columns from the source (auto-created on push).
+          const cfg = connectorMeta[selectedDest]?.runtimeConfig;
+          const dbCfg = destConnectionData || destCreds;
+          const targetTable = createNewTable ? newTableName : (selectedPgTable || destCreds.table);
+          let loaded = false;
+          if (!createNewTable && targetTable && cfg?.handlers?.columns && dbCfg.host && dbCfg.database) {
+            const colRes = await api.call(cfg.handlers.columns, {
+              host: dbCfg.host, port: Number(dbCfg.port) || cfg.defaultPort,
+              database: dbCfg.database, username: dbCfg.username, password: dbCfg.password,
+              schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
+              table: targetTable,
+            });
+            const cols = colRes.ok && colRes.data?.success && colRes.data.data?.exists ? (colRes.data.data.columns || []) : [];
+            if (cols.length) {
+              setDestFields(cols.map((c) => ({ name: c.name || c.columnName, displayName: c.displayName || c.name || c.columnName, type: c.type || c.dataType || 'string', required: !!c.required })));
+              loaded = true;
+            }
+          }
+          if (!loaded) {
+            setDestFields(sf.map((f) => {
+              const col = f.name.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '').replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_');
+              return { name: col, displayName: col, type: f.type, required: false };
+            }));
+          }
         } else if (selectedDest === 'SharePoint') {
           const destResult = await api.getSharePointListFields({ siteUrl: destCreds.siteUrl, listName: destCreds.listName, siteId: destConnectionData?.siteId });
           if (destResult.ok && destResult.data?.success) {
@@ -1758,6 +1870,13 @@ export default function WizardPage() {
               <div className="card">
                 <div style={{ fontWeight: 600, marginBottom: 12 }}>Source Credentials ({selectedSource})</div>
                 {renderCredFields(getFields(selectedSource), srcCreds, handleSrcCredChange)}
+                {isFlatFile(selectedSource) && (
+                  <div className="form-group" style={{ marginTop: 8 }}>
+                    <label>Upload file (CSV / TSV / JSON / XLSX)</label>
+                    <input type="file" accept=".csv,.tsv,.json,.xlsx,.xls" onChange={(e) => handleFileUpload(e.target.files?.[0])} />
+                    {srcCreds.fileContent && <div style={{ fontSize: '.72rem', color: 'var(--success)', marginTop: 4 }}>✓ File loaded ({srcCreds.fileFormat})</div>}
+                  </div>
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
                   <button className="btn btn-outline btn-sm" onClick={testSourceConnection} disabled={srcTestStatus === 'testing'} style={statusStyle(srcTestStatus)}>
                     {statusLabel(srcTestStatus)}
@@ -2062,6 +2181,21 @@ export default function WizardPage() {
                   </div>
                 </div>
 
+                {isDbDest(selectedDest) && (
+                  <div style={{ margin: '8px 0', padding: '10px 12px', background: 'var(--bg-main)', borderRadius: 6, fontSize: '.8rem', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 600 }}>Match records by:</span>
+                    <select value={matchKey} onChange={(e) => setMatchKey(e.target.value)} style={{ minWidth: 220 }}>
+                      <option value="__append__">Append every row (no matching — each row is new)</option>
+                      {mappings.flatMap((m) => m.destinations || []).filter((d, i, a) => d && a.indexOf(d) === i).map((d) => (
+                        <option key={d} value={d}>Match by “{d}” (update if exists, else insert)</option>
+                      ))}
+                    </select>
+                    <span style={{ color: 'var(--text-dim)', fontSize: '.74rem' }}>
+                      New tables get an auto-increment <code>id</code> primary key automatically.
+                    </span>
+                  </div>
+                )}
+
                 <div className="mapper-layout">
                   {/* Left: Source fields */}
                   <div className="mapper-col">
@@ -2301,9 +2435,9 @@ export default function WizardPage() {
                     </div>
                     <div style={{ marginTop: 12, fontSize: '.82rem', color: 'var(--text-secondary)' }}>
                       {(isDbDest(selectedDest)) ? (
-                        <>Click <strong>Next</strong> to push {fetchResult.totalCount} items to <strong>{destCreds.table || 'auto-generated table'}</strong> in {selectedDest}. Table will be auto-created if it doesn't exist. Existing rows updated by sp_item_id.</>
+                        <>Click <strong>Next</strong> to push {fetchResult.totalCount} records to <strong>{destCreds.table || 'auto-generated table'}</strong> in {selectedDest}. Table is auto-created if it doesn't exist. Existing rows updated by {mappings[0]?.destinations?.[0] || 'key'}.</>
                       ) : (
-                        <>Click <strong>Next</strong> to push these {fetchResult.totalCount} issues to <strong>{destCreds.listName}</strong> on SharePoint. Existing records will be updated by IssueKey; new ones will be created.</>
+                        <>Click <strong>Next</strong> to push these {fetchResult.totalCount} records to <strong>{destCreds.listName || destCreds.table || selectedDest}</strong>. Existing records are updated by {mappings[0]?.destinations?.[0] || 'key'}; new ones are created.</>
                       )}
                     </div>
                   </div>
@@ -2324,16 +2458,19 @@ export default function WizardPage() {
               <div className="card" style={{ padding: 20 }}>
                 <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.9rem' }}>Push Configuration</div>
                 <div style={{ display: 'grid', gap: 10 }}>
-                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Source:</span> <strong>{selectedProject}</strong> ({fetchResult?.totalCount || 0} issues)</div>
-                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Destination:</span> <strong>{destCreds.table || destCreds.listName}</strong> ({selectedDest})</div>
-                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Site:</span> <span style={{ fontSize: '.82rem', wordBreak: 'break-all' }}>{destCreds.siteUrl}</span></div>
+                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Source:</span> <strong>{selectedProject || selectedSource}</strong> ({fetchResult?.totalCount || 0} records)</div>
+                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Destination:</span> <strong>{destCreds.table || destCreds.listName || selectedDest}</strong> ({selectedDest})</div>
+                  {destCreds.siteUrl && <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Site:</span> <span style={{ fontSize: '.82rem', wordBreak: 'break-all' }}>{destCreds.siteUrl}</span></div>}
                   <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Mappings:</span> {mappings.length} fields</div>
-                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Mode:</span> <strong>Upsert</strong> (update by IssueKey, create if new)</div>
-                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Date Range:</span> {dateStart} &rarr; {dateEnd}</div>
+                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Mode:</span> {matchKey === '__append__'
+                    ? <><strong>Append</strong> (every row inserted as new)</>
+                    : <><strong>Upsert</strong> (update by {matchKey || mappings[0]?.destinations?.[0] || 'key'}, create if new)</>}</div>
+                  {dateStart && dateEnd && <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Date Range:</span> {dateStart} &rarr; {dateEnd}</div>}
                 </div>
                 <div style={{ marginTop: 14, padding: '8px 12px', background: 'var(--info-dim)', border: '1px solid var(--info)', borderRadius: 6, fontSize: '.78rem', color: 'var(--info)' }}>
-                  <strong>Dedup:</strong> Each issue is matched by <code style={{ background: 'var(--bg-main)', padding: '1px 4px', borderRadius: 3 }}>IssueKey</code> column.
-                  If a record exists in SharePoint with the same IssueKey, it will be <strong>updated</strong>. Otherwise, a new row is created. No duplicates.
+                  {matchKey === '__append__'
+                    ? <><strong>Append:</strong> Every record is inserted as a new row (no matching). The auto-increment <code style={{ background: 'var(--bg-main)', padding: '1px 4px', borderRadius: 3 }}>id</code> keeps rows unique.</>
+                    : <><strong>Dedup:</strong> Each record is matched by the <code style={{ background: 'var(--bg-main)', padding: '1px 4px', borderRadius: 3 }}>{matchKey || mappings[0]?.destinations?.[0] || 'key'}</code> column. If a row with the same key already exists in {selectedDest}, it is <strong>updated</strong>; otherwise a new row is created. No duplicates.</>}
                 </div>
               </div>
 
@@ -2568,6 +2705,20 @@ export default function WizardPage() {
                         <div style={{ fontSize: '1.3rem', fontWeight: 800, color: pushResult.failed > 0 ? 'var(--error)' : 'var(--text-dim)' }}>{pushResult.failed || 0}</div>
                       </div>
                     </div>
+
+                    {/* Surface why rows failed (first few errors) so failures aren't opaque */}
+                    {pushResult.failed > 0 && (pushResult.errors || []).length > 0 && (
+                      <div style={{ marginTop: 12, border: '1px solid var(--error)', borderRadius: 8, overflow: 'hidden' }}>
+                        <div style={{ padding: '8px 14px', background: 'var(--bg-main)', fontWeight: 600, fontSize: '.78rem', color: 'var(--error)', borderBottom: '1px solid var(--border)' }}>
+                          Why rows failed (first {(pushResult.errors || []).length})
+                        </div>
+                        <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+                          {(pushResult.errors || []).map((e, i) => (
+                            <div key={i} style={{ padding: '5px 14px', borderBottom: '1px solid var(--border)', fontSize: '.74rem', fontFamily: 'monospace', color: 'var(--text-secondary)' }}>{e}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Column-level diff stats (PG smart upsert) */}
                     {pushResult.columnChanges && pushResult.columnChanges.length > 0 && (

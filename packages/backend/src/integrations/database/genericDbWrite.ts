@@ -29,11 +29,38 @@ function quoteCol(engine: DbEngine, schema: string, table: string, col: string):
   return engine === 'sqlserver' ? `[${col}]` : `"${col}"`;
 }
 
-function createTableDdl(engine: DbEngine, schema: string, table: string, cols: GenericMapping[]): string {
+// Auto-increment surrogate primary-key column definition, per engine.
+function autoPkColDdl(engine: DbEngine, name: string): string {
+  if (engine === 'mysql') return `\`${name}\` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY`;
+  if (engine === 'sqlserver') return `[${name}] BIGINT IDENTITY(1,1) PRIMARY KEY`;
+  return `"${name}" BIGSERIAL PRIMARY KEY`;
+}
+
+function createTableDdl(engine: DbEngine, schema: string, table: string, cols: GenericMapping[], autoPkName?: string): string {
   const defs = cols.map((c) => `${quoteCol(engine, schema, table, c.to)} ${sqlType(engine, c.type)}`);
+  // Surrogate PK goes first (only on table creation — never altered into existing tables).
+  if (autoPkName) defs.unshift(autoPkColDdl(engine, autoPkName));
   if (engine === 'mysql') return `CREATE TABLE \`${schema}\`.\`${table}\` (\n  ${defs.join(',\n  ')}\n) ENGINE=InnoDB`;
   if (engine === 'sqlserver') return `CREATE TABLE [${schema}].[${table}] (\n  ${defs.join(',\n  ')}\n)`;
   return `CREATE TABLE "${schema}"."${table}" (\n  ${defs.join(',\n  ')}\n)`;
+}
+
+// ALTER TABLE ADD for a single mapped column (schema evolution on existing tables).
+function alterAddColumnDdl(engine: DbEngine, schema: string, table: string, col: GenericMapping): string {
+  const c = quoteCol(engine, schema, table, col.to);
+  const t = sqlType(engine, col.type);
+  if (engine === 'mysql') return `ALTER TABLE \`${schema}\`.\`${table}\` ADD COLUMN ${c} ${t}`;
+  if (engine === 'sqlserver') return `ALTER TABLE [${schema}].[${table}] ADD ${c} ${t}`;
+  return `ALTER TABLE "${schema}"."${table}" ADD COLUMN IF NOT EXISTS ${c} ${t}`;
+}
+
+/** Pick a surrogate-PK column name that doesn't collide with a mapped column. */
+function resolveAutoPkName(mappings: GenericMapping[]): string {
+  const taken = new Set(mappings.map((m) => (m.to || '').toLowerCase()));
+  let name = 'id';
+  let n = 1;
+  while (taken.has(name.toLowerCase())) { name = `pk_id${n > 1 ? n : ''}`; n++; }
+  return name;
 }
 
 export async function writeRecordsToDb(opts: {
@@ -42,25 +69,46 @@ export async function writeRecordsToDb(opts: {
   table: string;
   records: Record<string, unknown>[];
   mappings: GenericMapping[];
-}): Promise<{ inserted: number; updated: number; failed: number; tableCreated: boolean; errors: string[] }> {
+  /** Column to dedup/upsert by. '' (or unset → first mapping) ; pass '' explicitly to APPEND every row. */
+  naturalKey?: string;
+}): Promise<{ inserted: number; updated: number; failed: number; tableCreated: boolean; errors: string[]; autoPrimaryKey?: string }> {
   const { engine, conn, table, records, mappings } = opts;
+  if (!mappings.length) throw new Error('At least one mapping is required');
   const schema = engine === 'mysql' ? conn.database : (conn.schema || (engine === 'sqlserver' ? 'dbo' : 'public'));
   const writer: IDbWriter = engine === 'sqlserver' ? new SqlServerWriter() : engine === 'mysql' ? new MySqlWriter() : new PostgresWriter();
-  const naturalKey = mappings[0]?.to;
-  if (!naturalKey) throw new Error('At least one mapping is required');
+  // Explicit key wins; default to the first mapping. '' = match nothing = append every row.
+  const naturalKey = opts.naturalKey !== undefined ? opts.naturalKey : (mappings[0]?.to ?? '');
 
-  let inserted = 0; let updated = 0; let failed = 0; let tableCreated = false; const errors: string[] = [];
+  let inserted = 0; let updated = 0; let failed = 0; let tableCreated = false; let pkAdded: string | undefined; const errors: string[] = [];
   await writer.connect({ engine, host: conn.host, port: conn.port, database: conn.database, username: conn.username, password: conn.password });
   try {
     const introspector = new DbSchemaIntrospector(writer);
     if (!(await introspector.tableExists(schema, table))) {
-      await writer.applyDdl([createTableDdl(engine, schema, table, mappings)]);
+      // New tables always get an auto-increment surrogate PK (existing tables untouched),
+      // so rows are uniquely identifiable even when the business key is empty.
+      const pkName = resolveAutoPkName(mappings);
+      await writer.applyDdl([createTableDdl(engine, schema, table, mappings, pkName)]);
       tableCreated = true;
+      pkAdded = pkName;
+    } else {
+      // Schema evolution: add any mapped columns the existing table is missing, so
+      // re-pushing after changing the mapping doesn't fail on "Invalid column name".
+      const existing = new Set((await introspector.getColumnNames(schema, table)).map((c) => c.toLowerCase()));
+      const missing = mappings.filter((m) => m.to && !existing.has(m.to.toLowerCase()));
+      if (missing.length) await writer.applyDdl(missing.map((m) => alterAddColumnDdl(engine, schema, table, m)));
     }
     for (const rec of records) {
       try {
         const row: Record<string, unknown> = {};
-        for (const m of mappings) row[m.to] = (rec as Record<string, unknown>)[m.from];
+        for (const m of mappings) {
+          let v = (rec as Record<string, unknown>)[m.from];
+          // Nested objects/arrays (common in REST/Jira payloads) can't bind to a
+          // text/varchar column — serialize them to JSON so they land as strings.
+          if (v !== null && typeof v === 'object') v = JSON.stringify(v);
+          // An empty string can't cast to number/datetime/boolean/json — store NULL.
+          else if (v === '' && m.type && m.type.toLowerCase() !== 'string') v = null;
+          row[m.to] = v;
+        }
         const result = await writer.smartUpsert(schema, table, naturalKey, row);
         if (result.action === 'inserted') inserted++;
         else if (result.action === 'updated') updated++;
@@ -69,5 +117,5 @@ export async function writeRecordsToDb(opts: {
   } finally {
     await writer.disconnect();
   }
-  return { inserted, updated, failed, tableCreated, errors };
+  return { inserted, updated, failed, tableCreated, errors, autoPrimaryKey: pkAdded };
 }

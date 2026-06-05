@@ -12,30 +12,6 @@ import {
 /* ------------------------------------------------------------------ */
 /*  Mock fallback                                                     */
 /* ------------------------------------------------------------------ */
-const mockConnectedData = [
-  {
-    integrationId: 'int-001',
-    name: 'Flatiron Health',
-    status: 'active',
-    fieldMappings: { projectKey: 'FLAT', listName: 'Nalashaa_Jira_Issues', endpointUrl: 'https://mynalashaa.sharepoint.com/sites/ResourceManagement', clientId: 'flatiron' },
-    scheduleCron: '0 9 * * 1-5',
-    createdAt: '2026-02-15T10:00:00Z',
-    syncState: { syncStatus: 'COMPLETED', lastSyncedAt: '2026-04-13T09:00:00Z', lastJiraUpdatedAt: '2026-04-13T08:55:00Z', dateRangeStart: '2026-03-01', dateRangeEnd: '2026-03-31', syncError: null },
-    recentPushes: [],
-  },
-  {
-    integrationId: 'int-002',
-    name: 'Red Gold Foods',
-    status: 'active',
-    fieldMappings: { projectKey: 'CAS', listName: 'Nalashaa_Jira_Issues', endpointUrl: 'https://mynalashaa.sharepoint.com/sites/ResourceManagement', clientId: 'red-gold' },
-    scheduleCron: null,
-    createdAt: '2026-03-01T14:00:00Z',
-    syncState: { syncStatus: 'IDLE', lastSyncedAt: '2026-04-10T14:30:00Z', lastJiraUpdatedAt: null, dateRangeStart: '2026-03-01', dateRangeEnd: '2026-03-31', syncError: null },
-    recentPushes: [],
-  },
-];
-
-/* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
 /* ------------------------------------------------------------------ */
 const cronLabel = (cron) => {
@@ -99,7 +75,7 @@ function IntegrationCard({ intg, onSyncUpdate, onSyncTerminal, onOpenSchedule, o
               }}
             />
             <span style={{ fontWeight: 700, fontSize: '.95rem' }}>
-              {intg.fieldMappings.projectKey}
+              {intg.name || intg.fieldMappings?.projectKey || 'Connection'}
             </span>
             <span className={`badge ${statusBadgeClass(ss.syncStatus)}`}>
               {ss.syncStatus}
@@ -111,7 +87,10 @@ function IntegrationCard({ intg, onSyncUpdate, onSyncTerminal, onOpenSchedule, o
             )}
           </div>
           <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginLeft: 18 }}>
-            Jira &rarr; {intg.fieldMappings.listName} &middot; Created {fmtDate(intg.createdAt)}
+            {(intg.fieldMappings?.sourceType || 'Jira')} &rarr; {(intg.fieldMappings?.destType || intg.fieldMappings?.listName || 'SharePoint')}
+            {intg.fieldMappings?.projectKey ? ` · ${intg.fieldMappings.projectKey}` : ''}
+            {intg.fieldMappings?.pgTable ? ` · ${intg.fieldMappings.pgTable}` : ''}
+            {' '}&middot; Created {fmtDate(intg.createdAt)}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -247,17 +226,10 @@ export default function ConnectedPage() {
   /* ---- Fetch integrations from backend ---- */
   const fetchIntegrations = useCallback(async () => {
     const res = await api.getConnected();
-    if (res.ok && res.data?.data) {
-      const data = res.data.data;
-      setIntegrations(data);
-      // Auto-expand all client groups
-      const clientIds = new Set(data.map((intg) => intg.fieldMappings?.clientId).filter(Boolean));
-      setExpandedClients(clientIds);
-    } else {
-      // Fallback to mock
-      setIntegrations(mockConnectedData);
-      setExpandedClients(new Set(['flatiron', 'red-gold']));
-    }
+    const data = (res.ok && Array.isArray(res.data?.data)) ? res.data.data : [];
+    setIntegrations(data);
+    // Auto-expand all client groups
+    setExpandedClients(new Set(data.map((intg) => intg.fieldMappings?.clientId).filter(Boolean)));
     setLoading(false);
   }, []);
 

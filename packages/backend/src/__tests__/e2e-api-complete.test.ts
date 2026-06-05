@@ -526,9 +526,11 @@ describe('E2E: POST /api/integrations/save-connection', () => {
   });
 
   it('rejects save-connection with missing fields', async () => {
+    // `name` is the only hard-required field now (endpointUrl is optional —
+    // non-REST sources like GraphQL/CSV/SFTP have no base URL).
     const res = await api('/api/integrations/save-connection', {
       method: 'POST',
-      body: JSON.stringify({ name: 'Missing Fields' }),
+      body: JSON.stringify({ endpointUrl: 'https://example.com' }),
     });
     expect(res.status).toBe(400);
   });

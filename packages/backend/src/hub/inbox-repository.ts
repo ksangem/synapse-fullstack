@@ -3,7 +3,7 @@
  * Every inbound message is checkpointed here before fan-out.
  */
 
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { inboxEntries } from '../db/schema';
 import type { MessageEnvelope, EnvelopeStatus } from './interfaces';
@@ -103,6 +103,31 @@ export class InboxRepository {
       .limit(1);
 
     return (rows[0]?.status as EnvelopeStatus) ?? null;
+  }
+
+  /** Pending entries for a source connector (webhook/MQ drain), oldest first. */
+  async listPendingBySource(orgId: string, sourceConnectorId: string, limit = 500): Promise<Array<typeof inboxEntries.$inferSelect>> {
+    return this.db
+      .select()
+      .from(inboxEntries)
+      .where(and(
+        eq(inboxEntries.orgId, orgId),
+        eq(inboxEntries.sourceConnectorId, sourceConnectorId),
+        eq(inboxEntries.status, 'pending'),
+      ))
+      .orderBy(inboxEntries.createdAt)
+      .limit(limit);
+  }
+
+  /** Most recent entry for a source connector (used to infer fields from a sample). */
+  async latestBySource(orgId: string, sourceConnectorId: string): Promise<typeof inboxEntries.$inferSelect | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.orgId, orgId), eq(inboxEntries.sourceConnectorId, sourceConnectorId)))
+      .orderBy(desc(inboxEntries.createdAt))
+      .limit(1);
+    return row;
   }
 
   private async transition(

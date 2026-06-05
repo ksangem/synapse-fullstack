@@ -87,6 +87,8 @@ CREATE TABLE IF NOT EXISTS app.entity_definitions (
 
 -- additive: link entity → Master Catalog entity (for pre-existing installs)
 ALTER TABLE app.entity_definitions ADD COLUMN IF NOT EXISTS master_entity_key varchar(120);
+-- FSD §7: per-entity natural/primary key for upsert dedup
+ALTER TABLE app.entity_definitions ADD COLUMN IF NOT EXISTS natural_key varchar(200);
 
 -- ── entity_fields ──
 CREATE TABLE IF NOT EXISTS app.entity_fields (
@@ -100,6 +102,35 @@ CREATE TABLE IF NOT EXISTS app.entity_fields (
   ordinal integer DEFAULT 0,
   CONSTRAINT uq_field_entity_name UNIQUE (entity_id, name)
 );
+
+-- ── FSD §5.1 base fields on connectors (additive) ──
+-- varchar (not enum) for visibility — every new enum is a drizzle-kit-push landmine.
+ALTER TABLE app.connectors
+  ADD COLUMN IF NOT EXISTS tags jsonb DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS visibility varchar(20) DEFAULT 'private';
+
+-- ── FSD §9 deprecation lifecycle on connector_versions (additive) ──
+ALTER TABLE app.connector_versions
+  ADD COLUMN IF NOT EXISTS deprecated_at timestamp,
+  ADD COLUMN IF NOT EXISTS sunset_date date;
+
+-- ── connector_test_runs (FSD §8 Test & Validate history + publish-gate proof) ──
+CREATE TABLE IF NOT EXISTS app.connector_test_runs (
+  test_run_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  connector_id uuid NOT NULL REFERENCES app.connectors(connector_id) ON DELETE CASCADE,
+  version_id uuid REFERENCES app.connector_versions(version_id) ON DELETE CASCADE,
+  org_id uuid NOT NULL REFERENCES app.organizations(org_id),
+  runtime_kind varchar(50),
+  phase varchar(20) NOT NULL,
+  status varchar(20) NOT NULL,
+  sample_count integer DEFAULT 0,
+  duration_ms integer,
+  error text,
+  detail jsonb,
+  created_at timestamp NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ctr_connector ON app.connector_test_runs(connector_id);
+CREATE INDEX IF NOT EXISTS idx_ctr_version ON app.connector_test_runs(version_id);
 `;
 
 async function migrate(): Promise<void> {

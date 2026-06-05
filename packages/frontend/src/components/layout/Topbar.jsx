@@ -1,21 +1,19 @@
 import { useState, useRef, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../../hooks/useTheme';
-import { searchData } from '../../data/searchData';
+import { api } from '../../services/api';
 import { SidebarContext } from '../../contexts/SidebarContext';
 
 const categoryRoutes = {
   connectors: '/studio',
-  adapters: '/registry',
+  connections: '/connected',
   entities: '/catalog',
-  help: '/dashboard',
 };
 
 const categoryIcons = {
   connectors: '⚙',
-  adapters: '⇄',
+  connections: '⇄',
   entities: '⚏',
-  help: '?',
 };
 
 export default function Topbar({ onNotificationToggle, onHelpToggle }) {
@@ -24,6 +22,7 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [showResults, setShowResults] = useState(false);
+  const [searchData, setSearchData] = useState({});
   const searchRef = useRef(null);
 
   useEffect(() => {
@@ -34,6 +33,22 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Build the global search index from REAL data (no mock).
+  useEffect(() => {
+    (async () => {
+      const [conn, integ, ents] = await Promise.all([api.getConnectors(), api.getConnected(), api.getEntityCatalog()]);
+      const data = {};
+      const connectors = (conn.ok && conn.data?.data || []).map((c) => c.name).filter(Boolean);
+      const connections = (integ.ok && integ.data?.data || []).map((i) => i.name).filter(Boolean);
+      const entities = [];
+      (ents.ok && ents.data?.data?.groups || []).forEach((g) => (g.entities || []).forEach((e) => entities.push(e.name || e.key)));
+      if (connectors.length) data.connectors = [...new Set(connectors)];
+      if (connections.length) data.connections = [...new Set(connections)];
+      if (entities.length) data.entities = [...new Set(entities)];
+      setSearchData(data);
+    })();
   }, []);
 
   const filteredResults = {};

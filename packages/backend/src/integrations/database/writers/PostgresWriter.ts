@@ -107,9 +107,17 @@ export class PostgresWriter implements IDbWriter {
     if (columns.length === 0) throw new Error('Cannot upsert an empty row');
 
     const naturalKeyValue = String(row[naturalKeyColumn] ?? '');
-    if (!naturalKeyValue) throw new Error(`Natural key column "${naturalKeyColumn}" is missing or empty in row`);
-
     const qualifiedTable = `"${schema}"."${table}"`;
+
+    // No business key value on this row → append it (a surrogate PK, if any,
+    // identifies it). Keeps the key non-mandatory instead of failing the row.
+    if (!naturalKeyValue) {
+      const placeholders = columns.map((_, i) => `$${i + 1}`);
+      const values = columns.map((col) => row[col]);
+      const columnList = columns.map((c) => `"${c}"`).join(', ');
+      await this.pool!.query(`INSERT INTO ${qualifiedTable} (${columnList}) VALUES (${placeholders.join(', ')})`, values);
+      return { action: 'inserted', naturalKey: '', changedColumns: columns };
+    }
 
     // 1. Check if row exists
     const existing = await this.pool!.query(
