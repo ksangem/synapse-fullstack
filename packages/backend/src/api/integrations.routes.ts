@@ -67,6 +67,12 @@ const saveConnectionSchema = z.object({
   tenantId: z.string().optional(),
   clientId: z.string().optional(),
   clientSecret: z.string().optional(),
+  // SharePoint DESTINATION Azure creds + site/list (when SharePoint is the destination)
+  destTenantId: z.string().optional(),
+  destClientId: z.string().optional(),
+  destClientSecret: z.string().optional(),
+  destSiteUrl: z.string().optional(),
+  destListName: z.string().optional(),
   pgHost: z.string().optional(),
   pgPort: z.string().optional(),
   pgDatabase: z.string().optional(),
@@ -90,14 +96,25 @@ router.post('/save-connection', async (req: Request, res: Response) => {
     const destType = body.destType || 'SharePoint';
     const endpointUrl = (body.endpointUrl ?? '').trim();
 
-    // Dedup an existing connection: by endpointUrl when present (Jira/REST), else by
-    // name + connector pins (GraphQL/CSV/SFTP/… have no endpointUrl).
+    // Dedup an existing connection by SOURCE + DESTINATION, not source alone. A single
+    // Jira endpoint can feed many destinations (SharePoint, MySQL, SQL Server, different
+    // tables), so keying only on endpointUrl made every new Jira connection OVERWRITE the
+    // previous one. The destination signature (type + target list/table) keeps them distinct.
+    const destSig = (fm: Record<string, unknown> | null | undefined) => [
+      fm?.destType ?? '',
+      fm?.listName ?? '',        // Jira→SP destination list
+      fm?.destListName ?? '',    // SP→SP destination list
+      fm?.pgDatabase ?? '',
+      fm?.pgTable ?? '',         // DB destination table
+    ].join('|');
+    const wantDestSig = destSig({ destType, listName: body.listName, destListName: body.destListName, pgDatabase: body.pgDatabase, pgTable: body.pgTable });
+
     const allActive = await db.select().from(integrations)
       .where(eq(integrations.status, 'active'));
 
     const existing = allActive.find(i => {
       const fm = i.fieldMappings as Record<string, string> | null;
-      if (endpointUrl) return fm?.endpointUrl === endpointUrl;
+      if (endpointUrl) return fm?.endpointUrl === endpointUrl && destSig(fm) === wantDestSig;
       return i.name === body.name
         && (i.sourceConnectorId ?? null) === (body.sourceConnectorId ?? null)
         && (i.destConnectorId ?? null) === (body.destConnectorId ?? null);
@@ -181,6 +198,27 @@ router.post('/save-connection', async (req: Request, res: Response) => {
         encryptedPayload: dbPayload,
       }).returning();
       destCredId = destCred.credId;
+    } else if (destType === 'SharePoint' && body.destTenantId && body.destClientId && body.destClientSecret) {
+      // SharePoint DESTINATION Azure creds — encrypt with the connection so the
+      // destination authenticates with its own creds (not env), and they round-trip on load.
+      const spDestPayload = credentialService.encrypt(JSON.stringify({
+        tenantId: body.destTenantId,
+        clientId: body.destClientId,
+        clientSecret: body.destClientSecret,
+      }));
+      if (existing) {
+        const oldFm = existing.fieldMappings as Record<string, string> | null;
+        if (oldFm?.destCredId) {
+          await db.delete(credentials).where(eq(credentials.credId, oldFm.destCredId));
+        }
+      }
+      const [destCred] = await db.insert(credentials).values({
+        orgId: '00000000-0000-0000-0000-000000000001',
+        systemName: 'SharePoint',
+        authType: 'azure_app',
+        encryptedPayload: spDestPayload,
+      }).returning();
+      destCredId = destCred.credId;
     }
 
     // Build fieldMappings object
@@ -194,6 +232,8 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       if (body.projectKey) fm.projectKey = body.projectKey;
       if (body.siteUrl) fm.siteUrl = body.siteUrl;
       if (body.listName) fm.listName = body.listName;
+      if (body.destSiteUrl) fm.destSiteUrl = body.destSiteUrl;
+      if (body.destListName) fm.destListName = body.destListName;
       if (body.pgHost) fm.pgHost = body.pgHost;
       if (body.pgPort) fm.pgPort = body.pgPort;
       if (body.pgDatabase) fm.pgDatabase = body.pgDatabase;

@@ -8,7 +8,8 @@
     "dev:frontend": "cd packages/frontend && npm run dev",
     "dev:backend": "cd packages/backend && npm run dev",
     "build:frontend": "cd packages/frontend && npm run build",
-    "install:all": "cd packages/frontend && npm install && cd ../backend && npm install"
+    "install:all": "cd packages/frontend && npm install && cd ../backend && npm install",
+    "test:e2e": "node scripts/e2e/run.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"

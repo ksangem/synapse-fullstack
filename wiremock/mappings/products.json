@@ -1,0 +1,16 @@
+{
+  "request": { "method": "GET", "urlPath": "/api/products" },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": [
+      { "id": "P-001", "name": "Aurora Wireless Headphones", "category": "Audio", "price": 129.99, "stock": 320, "updatedAt": "2026-06-01T10:00:00Z" },
+      { "id": "P-002", "name": "Nimbus Mechanical Keyboard", "category": "Accessories", "price": 89.50, "stock": 145, "updatedAt": "2026-06-02T11:30:00Z" },
+      { "id": "P-003", "name": "Vertex 4K Monitor", "category": "Displays", "price": 459.00, "stock": 60, "updatedAt": "2026-06-03T09:15:00Z" },
+      { "id": "P-004", "name": "Pulse USB-C Hub", "category": "Accessories", "price": 39.99, "stock": 540, "updatedAt": "2026-06-04T14:45:00Z" },
+      { "id": "P-005", "name": "Cobalt Webcam Pro", "category": "Video", "price": 74.25, "stock": 210, "updatedAt": "2026-06-05T16:20:00Z" },
+      { "id": "P-006", "name": "Zephyr Laptop Stand", "category": "Accessories", "price": 54.00, "stock": 0, "updatedAt": "2026-06-06T08:05:00Z" }
+    ]
+  },
+  "metadata": { "demo": "synapse-products" }
+}

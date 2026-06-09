@@ -44,7 +44,7 @@ export const api = {
 
   // ── Credentials / alerts (real backend) ──
   getCredentials: async () => fetchApi('/api/credentials'),
-  getAlerts: async () => fetchApi('/api/alerts'),
+  getAlerts: async (query = '') => fetchApi(`/api/alerts${query}`),
 
   // ── Real backend endpoints (Jira integration) ──
   testJiraConnection: async (endpointUrl, email, apiToken) => {

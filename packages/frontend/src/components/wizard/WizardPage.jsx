@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { runtimeClient } from '../../services/runtimeClient';
@@ -6,6 +6,13 @@ import { runtimeClient } from '../../services/runtimeClient';
 /* ─── Static Data ──────────────────────────────────────��── */
 const stepLabels = ['Select Systems', 'Credentials', 'Entities', 'Mapping', 'Fetch & Review', 'Push & Sync'];
 const DEFAULT_ICON = '\u{1F50C}'; // fallback card icon for registry connectors without one
+
+// A connector icon can be emoji(s) OR an image/logo URL (e.g. a Keka logo); render accordingly.
+const isIconUrl = (v) => typeof v === 'string' && /^(https?:|data:image\/)/i.test(v.trim());
+function ConnIcon({ icon, size = 26 }) {
+  if (isIconUrl(icon)) return <img src={icon.trim()} alt="" style={{ width: size, height: size, objectFit: 'contain', verticalAlign: 'middle' }} />;
+  return <span style={{ fontSize: size }}>{icon || DEFAULT_ICON}</span>;
+}
 /* Connector cards, credential field schemas, DB engine config, and entity
    descriptions are loaded at runtime from the connector registry
    (`/api/connectors`) into component state — see the connector-metadata effect
@@ -873,13 +880,13 @@ export default function WizardPage() {
     if (wizardStep === 1 && (!selectedSource || !selectedDest)) return;
     if (wizardStep === 2 && (srcTestStatus !== 'connected' || destTestStatus !== 'connected')) return;
     if (wizardStep === 3 && !selectedEntity) return;
-    // Sync PG table selection to destCreds before moving to step 4.
-    // (Skipped for REST sources, which don't run the SharePoint table-discovery step —
-    //  they use the Target Table from the destination credential form, defaulting on push.)
-    if (wizardStep === 3 && isDbDest(selectedDest) && !isRuntimeSource(selectedSource)) {
+    // Sync the destination table picker into destCreds for ALL sources (Jira, SharePoint,
+    // and DB→DB / REST→DB). Without this, runtime sources left destCreds.table empty and
+    // the push fell back to a 'rest_data' table — and the Quick View button stayed hidden.
+    if (wizardStep === 3 && isDbDest(selectedDest)) {
       const tbl = createNewTable ? newTableName : selectedPgTable;
-      if (!tbl) return; // must pick a table
-      setDestCreds(prev => ({ ...prev, table: tbl }));
+      if (tbl) setDestCreds(prev => ({ ...prev, table: tbl }));
+      else if (!destCreds.table) return; // must pick/create a table (or already have one set)
     }
     if (wizardStep === 5 && fetchStatus !== 'done') return; // must fetch before push
     if (wizardStep === 6) { handlePush(); return; } // Step 6 button triggers push
@@ -951,10 +958,17 @@ export default function WizardPage() {
     // Kind/engine-based dispatch (NOT display-label) — so a cloned DB connector
     // like "pg-prod" routes correctly instead of falling through to SharePoint.
     if (isDbDest(selectedDest)) {
-      const engine = dbCfg(selectedDest)?.engine;
-      if (engine === 'mysql') handlePushToMysql();
-      else if (engine === 'sqlserver') handlePushToMssql();
-      else handlePushToPg();
+      // SharePoint source uses the dedicated SP→DB handlers (the backend re-reads from
+      // the SP list). Any record-based source (Jira, …) pushes its fetched+mapped rows
+      // through the generic records→DB writer.
+      if (isSpSource(selectedSource)) {
+        const engine = dbCfg(selectedDest)?.engine;
+        if (engine === 'mysql') handlePushToMysql();
+        else if (engine === 'sqlserver') handlePushToMssql();
+        else handlePushToPg();
+      } else {
+        handleRestToDbPush();
+      }
     } else if (isSpSource(selectedDest)) {
       // SharePoint destination. Jira source keeps the dedicated 3-layer upsert push;
       // any other source (SharePoint, CSV, …) writes the mapped records to the list.
@@ -1557,6 +1571,23 @@ export default function WizardPage() {
     }
   };
 
+  // Auto-save the connection once a push succeeds, so every successful sync becomes a
+  // reusable entry in "My Connections". Idempotent via the dedup on save-connection
+  // (same source+destination updates the existing row instead of duplicating). Fires once
+  // per push (tracked by pushRunId) and skips a total failure (0 written + failures).
+  const autoSavedPushRef = useRef(null);
+  useEffect(() => {
+    if (pushStatus !== 'done' || !pushResult) return;
+    const wrote = (pushResult.created || 0) + (pushResult.updated || 0);
+    const failed = pushResult.failed || 0;
+    if (wrote === 0 && failed > 0) return;                 // total failure -> don't save
+    if (srcTestStatus !== 'connected' || destTestStatus !== 'connected') return;
+    const key = pushResult.pushRunId || `${selectedSource}->${selectedDest}`;
+    if (autoSavedPushRef.current === key) return;          // already auto-saved this push
+    autoSavedPushRef.current = key;
+    handleSaveConnection();
+  }, [pushStatus, pushResult]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Resume the wizard where you left off after a round-trip to the Mapping Canvas.
   useEffect(() => {
     let raw = null;
@@ -1681,6 +1712,34 @@ export default function WizardPage() {
         // DB destination tables are loaded by a separate effect (works for ALL sources).
       };
       loadLists();
+    } else if (isDbSource(selectedSource)) {
+      // DB source (DB->DB migration): list the real tables so the operator picks which
+      // one to migrate, instead of a single generic "table" entity. Mirrors the
+      // destination table picker, using the same listTables handler.
+      const loadDbTables = async () => {
+        const cfg = connectorMeta[selectedSource]?.runtimeConfig;
+        // For a DB source the connection details live in srcCreds (the form). srcConnectionData
+        // only holds the runtime test result {ok,message}, so don't use it here.
+        const dbConn = srcCreds;
+        if (!cfg?.handlers?.listTables || !dbConn.host || !dbConn.database) return;
+        setEntitiesLoading(true);
+        const dbResult = await api.call(cfg.handlers.listTables, {
+          host: dbConn.host, port: Number(dbConn.port) || cfg.defaultPort,
+          database: dbConn.database, username: dbConn.username, password: dbConn.password,
+          schema: cfg.hasSchema ? (srcCreds.schema || cfg.defaultSchema) : undefined,
+        });
+        if (dbResult.ok && dbResult.data?.success) {
+          const tables = (dbResult.data.data?.tables || []).map((t) => ({
+            id: t.name, name: t.name, fieldCount: t.columnCount ?? null, available: true,
+          }));
+          setEntities(tables);
+          setProjects([{ key: 'db', name: `${selectedSource} (${dbConn.database})` }]);
+          setSelectedProject('db');
+          if (srcCreds.table) { const m = tables.find((t) => t.name === srcCreds.table); if (m) setSelectedEntity(m.id); }
+        }
+        setEntitiesLoading(false);
+      };
+      loadDbTables();
     } else if (isRuntimeSource(selectedSource)) {
       // Generic-runtime source. Prefer the template's design-time entities; if it
       // has none (Flat File / Webhook / MQ define them at runtime), ask the runtime.
@@ -1855,6 +1914,44 @@ export default function WizardPage() {
               name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: f.required || false,
             })));
           }
+        }
+      } else if (selectedSource === 'Jira' && isDbDest(selectedDest)) {
+        // Jira → relational DB. Source = Jira issue fields. Dest = an existing table's
+        // columns (if one is chosen) or columns derived from the source fields
+        // (snake_case) for a new table — the backend auto-creates/evolves it on push.
+        const { endpointUrl, email, apiToken } = srcCreds;
+        const srcResult = await api.getEntityFields({ endpointUrl, email, apiToken, projectKey: selectedProject, entity: selectedEntity });
+        const sf = (srcResult.ok && srcResult.data?.success) ? (srcResult.data.data?.fields || []) : [];
+        setSrcFields(sf);
+
+        const cfg = connectorMeta[selectedDest]?.runtimeConfig;
+        const dbConn = destConnectionData || destCreds;
+        const targetTable = createNewTable ? newTableName : (selectedPgTable || destCreds.table);
+        let loaded = false;
+        if (!createNewTable && targetTable && cfg?.handlers?.columns && dbConn.host && dbConn.database) {
+          const colRes = await api.call(cfg.handlers.columns, {
+            host: dbConn.host, port: Number(dbConn.port) || cfg.defaultPort,
+            database: dbConn.database, username: dbConn.username, password: dbConn.password,
+            schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
+            table: targetTable,
+          });
+          const cols = colRes.ok && colRes.data?.success && colRes.data.data?.exists ? (colRes.data.data.columns || []) : [];
+          if (cols.length) {
+            setDestFields(cols.map((c) => ({ name: c.name || c.columnName, displayName: c.displayName || c.name || c.columnName, type: c.type || c.dataType || 'string', required: !!c.required })));
+            loaded = true;
+          }
+        }
+        if (!loaded) {
+          // New table: derive snake_case columns from the Jira fields. Auto-Map matches
+          // them 1:1 (normalised names), and the backend creates the table on push.
+          // Jira object/array fields (status, assignee, labels, …) are auto-mapped to a
+          // SCALAR (e.g. status.name), so land them in TEXT columns — typing them as
+          // json/jsonb would reject the extracted string ("invalid input syntax for json").
+          setDestFields(sf.map((f) => {
+            const col = f.name.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '').replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_');
+            const type = (f.type === 'object' || f.type === 'array') ? 'string' : (f.type || 'string');
+            return { name: col, displayName: col, type, required: false };
+          }));
         }
       } else if (isSpSource(selectedSource) && (isDbDest(selectedDest))) {
         // SP → DB flow: source = SP list fields, dest = DB table columns (or empty for auto-create)
@@ -2174,7 +2271,7 @@ export default function WizardPage() {
                       <div key={i} className="card connector-card"
                         style={{ padding: 14, borderColor: selectedSource === c.label ? 'var(--primary)' : undefined, borderWidth: selectedSource === c.label ? 2 : undefined }}
                         onClick={() => handleSourceSelect(c.label)}>
-                        <div className="conn-icon" style={{ fontSize: '1.6rem' }}>{c.icon}</div>
+                        <div className="conn-icon"><ConnIcon icon={c.icon} size={26} /></div>
                         <div className="conn-label" style={{ fontSize: '.78rem' }}>{c.label}</div>
                       </div>
                     ))}
@@ -2191,7 +2288,7 @@ export default function WizardPage() {
                       <div key={i} className="card connector-card"
                         style={{ padding: 14, borderColor: selectedDest === c.label ? 'var(--primary)' : undefined, borderWidth: selectedDest === c.label ? 2 : undefined }}
                         onClick={() => handleDestSelect(c.label)}>
-                        <div className="conn-icon" style={{ fontSize: '1.6rem' }}>{c.icon}</div>
+                        <div className="conn-icon"><ConnIcon icon={c.icon} size={26} /></div>
                         <div className="conn-label" style={{ fontSize: '.78rem' }}>{c.label}</div>
                       </div>
                     ))}

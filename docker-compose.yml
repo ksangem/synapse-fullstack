@@ -18,6 +18,28 @@ services:
       timeout: 5s
       retries: 5
 
+  # Dedicated Postgres for connector DESTINATIONS (demo/integration data).
+  # Kept separate from synapse-postgres (the app's own DB on :5555) so connector
+  # data transfers never touch Synapse's internal schemas.
+  connectors-postgres:
+    image: postgres:16-alpine
+    container_name: synapse-connectors-postgres
+    ports:
+      - "5556:5432"
+    environment:
+      POSTGRES_USER: connectors
+      POSTGRES_PASSWORD: connectors
+      POSTGRES_DB: connectors_db
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+    volumes:
+      - synapse_connectors_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U connectors -d connectors_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   mysql:
     image: mysql:8.0
     container_name: synapse-mysql
@@ -65,7 +87,68 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Connector test sources / sinks (no cloud accounts needed) ──
+
+  # Mock REST / SaaS / SOAP source. Seed stubs via its __admin API (see DEMO_GUIDE.md).
+  wiremock:
+    image: wiremock/wiremock:3.9.1
+    container_name: synapse-wiremock
+    ports:
+      - "8089:8080"
+    command: ["--local-response-templating"]
+    volumes:
+      - ./wiremock/mappings:/home/wiremock/mappings
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/__admin/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # S3-compatible object store for File Share / Storage + flat-file drops.
+  minio:
+    image: minio/minio:latest
+    container_name: synapse-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: synapse
+      MINIO_ROOT_PASSWORD: synapse123
+    command: server /data --console-address ":9001"
+    volumes:
+      - synapse_miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Message Queue / Event Bus source with a management UI on :15672.
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: synapse-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: synapse
+      RABBITMQ_DEFAULT_PASS: synapse
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Lightweight DB viewer — show rows landing in the destination during the demo.
+  adminer:
+    image: adminer:latest
+    container_name: synapse-adminer
+    ports:
+      - "8082:8080"
+
 volumes:
   synapse_pgdata:
+  synapse_connectors_pgdata:
   synapse_mysqldata:
   synapse_mssqldata:
+  synapse_miniodata:

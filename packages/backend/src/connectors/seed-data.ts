@@ -175,7 +175,7 @@ function dbConnector(opts: {
     key: opts.key,
     name: opts.name,
     icon: opts.icon,
-    category: 'destination',
+    category: 'both', // usable as a destination (write) AND a source (read rows)
     runtimeKind: 'database',
     engine: opts.engine,
     credentialSchema: {

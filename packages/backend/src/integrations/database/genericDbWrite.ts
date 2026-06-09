@@ -54,6 +54,17 @@ function alterAddColumnDdl(engine: DbEngine, schema: string, table: string, col:
   return `ALTER TABLE "${schema}"."${table}" ADD COLUMN IF NOT EXISTS ${c} ${t}`;
 }
 
+/**
+ * Normalize an ISO / Jira datetime string to "YYYY-MM-DD HH:MM:SS" for engines whose
+ * datetime types reject the "T", fractional seconds, and timezone offset (MySQL datetime,
+ * SQL Server datetime2). The wall-clock time is preserved; the offset is dropped.
+ * Date-only or unrecognized values pass through unchanged.
+ */
+export function toSqlDateTime(v: string): string {
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : v;
+}
+
 /** Pick a surrogate-PK column name that doesn't collide with a mapped column. */
 function resolveAutoPkName(mappings: GenericMapping[]): string {
   const taken = new Set(mappings.map((m) => (m.to || '').toLowerCase()));
@@ -102,11 +113,25 @@ export async function writeRecordsToDb(opts: {
         const row: Record<string, unknown> = {};
         for (const m of mappings) {
           let v = (rec as Record<string, unknown>)[m.from];
+          const t = (m.type || '').toLowerCase();
+          const isJson = t === 'json' || t === 'object' || t === 'array';
           // Nested objects/arrays (common in REST/Jira payloads) can't bind to a
           // text/varchar column — serialize them to JSON so they land as strings.
           if (v !== null && typeof v === 'object') v = JSON.stringify(v);
           // An empty string can't cast to number/datetime/boolean/json — store NULL.
-          else if (v === '' && m.type && m.type.toLowerCase() !== 'string') v = null;
+          else if (v === '' && t && t !== 'string') v = null;
+          // A scalar string bound to a json/jsonb column must itself be valid JSON
+          // (e.g. a mapping that extracts status.name -> "In Progress"). Wrap it if it
+          // isn't already valid JSON, so the json cast succeeds instead of erroring.
+          else if (isJson && typeof v === 'string') {
+            try { JSON.parse(v); } catch { v = JSON.stringify(v); }
+          }
+          // Jira/ISO datetimes ("2025-10-17T12:09:57.091+0530") are accepted by Postgres
+          // timestamptz but rejected by MySQL datetime / SQL Server datetime2. Normalize
+          // to "YYYY-MM-DD HH:MM:SS" (wall-clock, offset dropped) for those engines.
+          else if (t === 'datetime' && engine !== 'postgres' && typeof v === 'string' && v) {
+            v = toSqlDateTime(v);
+          }
           row[m.to] = v;
         }
         const result = await writer.smartUpsert(schema, table, naturalKey, row);

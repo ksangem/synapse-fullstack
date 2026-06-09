@@ -12,6 +12,7 @@ import dlqRoutes from './dlq.routes';
 import connectorsRoutes from './connectors.routes';
 import entitiesRoutes from './entities.routes';
 import ingestRoutes from './ingest.routes';
+import alertsRoutes from './alerts.routes';
 
 const apiRouter = Router();
 
@@ -21,6 +22,7 @@ apiRouter.use('/ingest', ingestRoutes); // public inbound webhook ingestion
 apiRouter.use('/integrations', integrationsRoutes);
 apiRouter.use('/runs', runsRoutes);
 apiRouter.use('/credentials', credentialsRoutes);
+apiRouter.use('/alerts', alertsRoutes);
 apiRouter.use('/jira', jiraRoutes);
 apiRouter.use('/sharepoint', sharepointRoutes);
 apiRouter.use('/push', pushRoutes);

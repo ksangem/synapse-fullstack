@@ -428,8 +428,13 @@ html.dark-theme .json-bool{color:#c084fc}
 .mapper-toolbar .mapper-stats strong{color:var(--primary)}
 
 .mapper-layout{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:0;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;height:calc(100vh - 340px);min-height:400px;max-height:calc(100vh - 280px)}
-.mapper-col{display:flex;flex-direction:column;background:var(--bg-card);overflow:hidden}
+.mapper-col{display:flex;flex-direction:column;background:var(--bg-card);overflow:hidden;min-width:0}
 .mapper-col:not(:last-child){border-right:1px solid var(--border)}
+/* Keep the 3-column mapper from overflowing: let tracks/fields shrink and cap controls. */
+.mapping-editor-grid{min-width:0}
+.mapping-editor-grid .editor-field{min-width:0}
+.mapper-col select,.mapper-col input,.mapper-col textarea,.mapping-row-editor select,.mapping-row-editor input,.mapping-row-editor textarea{max-width:100%;box-sizing:border-box}
+.mapping-row-header .map-src,.mapping-row-header .map-dest{min-width:0}
 
 .mapper-col-header{padding:10px 14px;border-bottom:1px solid var(--border);background:var(--bg-input);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
 .mapper-col-header .col-title{font-weight:700;font-size:.82rem;display:flex;align-items:center;gap:6px}

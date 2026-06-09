@@ -90,9 +90,13 @@ router.post('/runtime/push-to-db', async (req: Request, res: Response) => {
       res.status(400).json({ success: false, error: 'engine, conn, table, records[], mappings[] required' });
       return;
     }
+    console.log(`[push-to-db] engine=${engine} host=${conn?.host}:${conn?.port} db=${conn?.database} schema=${conn?.schema ?? '-'} table=${table} records=${records.length} mappings=${mappings.length} key=${naturalKey ?? '(default)'}`);
     const result = await writeRecordsToDb({ engine, conn, table, records, mappings, naturalKey });
+    if (result.failed > 0) console.warn(`[push-to-db] ${result.inserted} inserted, ${result.updated} updated, ${result.failed} FAILED. First errors:`, result.errors);
+    else console.log(`[push-to-db] OK: ${result.inserted} inserted, ${result.updated} updated, tableCreated=${result.tableCreated}`);
     res.json({ success: true, data: result });
   } catch (err) {
+    console.error('[push-to-db] FAILED:', err instanceof Error ? err.message : err);
     fail(res, err, 400);
   }
 });

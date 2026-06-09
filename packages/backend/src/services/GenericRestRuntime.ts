@@ -24,6 +24,9 @@ interface AuthConfig {
   clientIdField?: string;
   clientSecretField?: string;
   scope?: string;
+  // Non-standard OAuth2 token requests (e.g. Keka: grant_type=kekaapi + an api_key).
+  grantType?: string; // defaults to 'client_credentials'
+  extraParams?: Array<{ key: string; field?: string; value?: string }>; // value from creds[field] or literal
 }
 
 interface RestRuntimeConfig {
@@ -104,11 +107,18 @@ export class GenericRestRuntime {
   private async fetchOAuthToken(a: AuthConfig, creds: Creds): Promise<string> {
     if (!a.tokenUrl) throw new Error('OAuth2 token URL not configured');
     const body = new URLSearchParams({
-      grant_type: 'client_credentials',
+      grant_type: a.grantType || 'client_credentials',
       client_id: a.clientIdField ? creds[a.clientIdField] : '',
       client_secret: a.clientSecretField ? creds[a.clientSecretField] : '',
     });
     if (a.scope) body.set('scope', a.scope);
+    // Extra token-request params for non-standard providers (e.g. Keka's api_key).
+    // Each entry's value comes from a credential field, or a literal fallback.
+    for (const ep of a.extraParams || []) {
+      if (!ep.key) continue;
+      const v = ep.field ? creds[ep.field] : ep.value;
+      if (v != null && v !== '') body.set(ep.key, String(v));
+    }
     const res = await fetch(a.tokenUrl, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
     if (!res.ok) throw new Error(`OAuth token request failed (${res.status})`);
     const json = (await res.json()) as { access_token?: string };

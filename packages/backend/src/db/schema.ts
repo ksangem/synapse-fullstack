@@ -83,7 +83,7 @@ export const connectors = appSchema.table('connectors', {
   configSchema: jsonb('config_schema'), // legacy/back-compat; templates use connector_versions
   // ── Connector Studio fields ──
   key: varchar('key', { length: 100 }), // stable machine id: 'jira','sharepoint','postgresql','mysql','sqlserver'
-  icon: varchar('icon', { length: 16 }), // emoji/icon for wizard cards
+  icon: varchar('icon', { length: 512 }), // emoji(s) OR an image/logo URL for wizard cards
   runtimeKind: varchar('runtime_kind', { length: 50 }), // 'jira' | 'sharepoint' | 'database' | 'generic'
   engine: varchar('engine', { length: 20 }), // db engine when runtimeKind='database'
   isSystem: boolean('is_system').default(false), // seeded built-ins (cannot be deleted)

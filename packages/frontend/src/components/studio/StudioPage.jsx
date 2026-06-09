@@ -174,7 +174,7 @@ export default function StudioPage() {
   };
 
   return (
-    <div className="page active">
+    <div className="page active" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div className="page-header">
         <div>
           <div className="page-title">Connector Studio</div>
@@ -183,18 +183,20 @@ export default function StudioPage() {
         <button className="btn btn-primary btn-sm" onClick={() => { setAuthoring({}); setSelectedId(null); setDetail(null); }}>+ Author Connector</button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 20 }}>
-        <div>
+      <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 20, flex: 1, minHeight: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <div style={{ fontWeight: 600, fontSize: '.85rem', marginBottom: 10 }}>Connectors {loading ? '…' : `(${connectors.length})`}</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
             {connectors.map((c) => (
               <div key={c.connectorId} className="card" style={{ cursor: 'pointer', padding: 12, borderColor: selectedId === c.connectorId ? 'var(--primary)' : undefined }} onClick={() => openDetail(c.connectorId)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ fontSize: '1.3rem' }}>{c.icon || '\u{1F50C}'}</span>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: '.9rem' }}>{c.name}</div>
-                    <div style={{ fontSize: '.7rem', color: 'var(--text-dim)' }}>v{c.version} · {c.runtimeKind}{c.engine ? ` (${c.engine})` : ''}</div>
+                  <span style={{ flexShrink: 0 }}><ConnectorIcon icon={c.icon} size={21} /></span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: '.9rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</div>
+                    <div style={{ fontSize: '.7rem', color: 'var(--text-dim)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>v{c.version} · {c.runtimeKind}{c.engine ? ` (${c.engine})` : ''}</div>
                   </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
                   <span className={`badge ${CATEGORY_BADGE[c.category] || 'badge-neutral'}`} style={{ fontSize: '.6rem' }}>{c.category}</span>
                   {c.isSystem ? <span className="badge badge-neutral" style={{ fontSize: '.6rem' }}>built-in</span> : <span className="badge badge-primary" style={{ fontSize: '.6rem' }}>custom</span>}
                 </div>
@@ -203,7 +205,7 @@ export default function StudioPage() {
           </div>
         </div>
 
-        <div>
+        <div style={{ minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
           {authoring && (
             <AuthoringFlow
               categories={categories}
@@ -214,12 +216,29 @@ export default function StudioPage() {
             />
           )}
           {!authoring && detail && (
-            <ConnectorDetail detail={detail} onPublish={publishVersion} onNewVersion={newVersion} onDelete={deleteConnector} onClone={cloneConnector} onEdit={editDraft} onRollback={rollbackVersion} onDeprecate={deprecateVersion} onOpenCatalog={() => navigate('/catalog')} />
+            <ConnectorDetail detail={detail} onPublish={publishVersion} onNewVersion={newVersion} onDelete={deleteConnector} onClone={cloneConnector} onEdit={editDraft} onRollback={rollbackVersion} onDeprecate={deprecateVersion} onOpenCatalog={() => navigate('/catalog')} onClose={() => { setDetail(null); setSelectedId(null); }} />
           )}
           {!authoring && !detail && (
-            <div className="card" style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)' }}>
-              Select a connector to manage it, or click <strong>+ Author Connector</strong> to design a new one through the
-              guided System Registration → Authentication → Operations → Entity Modelling → Test → Publish flow.
+            <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => { setAuthoring({}); setSelectedId(null); setDetail(null); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setAuthoring({}); setSelectedId(null); setDetail(null); } }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--primary)'; e.currentTarget.style.background = 'var(--primary-dim)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--text-secondary)'; e.currentTarget.style.background = 'var(--bg-main)'; }}
+                style={{
+                  border: '3px dashed var(--text-secondary)', borderRadius: 14, padding: '48px 40px',
+                  textAlign: 'center', color: 'var(--text-dim)', maxWidth: 520, background: 'var(--bg-main)',
+                  cursor: 'pointer', transition: 'all .15s',
+                }}>
+                <div style={{ fontSize: '2.4rem', marginBottom: 12 }}>{'\u{1F50C}'}</div>
+                <div style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--text)', marginBottom: 8 }}>+ Author a new connector</div>
+                <div style={{ fontSize: '.85rem', lineHeight: 1.55 }}>
+                  Click here to design a new connector through the guided System Registration → Authentication →
+                  Operations → Entity Modelling → Test → Publish flow — or pick an existing connector on the left to manage it.
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -229,6 +248,109 @@ export default function StudioPage() {
 }
 
 /* ─── FSD 6-stage authoring flow (data-driven by the category registry) ─── */
+// Collapsible box for large sections inside the authoring container.
+function Collapsible({ title, right, defaultOpen = true, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="card" style={{ background: 'var(--bg-main)', padding: 0, marginBottom: 8, overflow: 'hidden' }}>
+      <div onClick={() => setOpen((o) => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 12, cursor: 'pointer', userSelect: 'none' }}>
+        <span style={{ fontSize: '.7rem', color: 'var(--text-dim)', transition: 'transform .15s', transform: open ? 'rotate(90deg)' : 'none' }}>{'▶'}</span>
+        <div style={{ fontWeight: 600, flex: 1, minWidth: 0 }}>{title}</div>
+        {right}
+      </div>
+      {open && <div style={{ padding: '0 12px 12px' }}>{children}</div>}
+    </div>
+  );
+}
+
+// Curated emoji palette, ranked by relevance to the chosen system category.
+function relevantIcons(category) {
+  const hint = `${category?.key || ''} ${category?.label || ''} ${category?.runtimeKind || ''}`.toLowerCase();
+  const sets = [
+    [['database', 'sql', 'postgres', 'mysql', 'db'], ['🗄️', '🛢️', '💾', '🐘', '🐬', '🗃️', '📊']],
+    [['sharepoint', 'share'], ['📁', '📂', '🗂️', '📄', '📋']],
+    [['rest', 'api', 'http'], ['🌐', '🔌', '🔗', '📡', '⚡']],
+    [['file', 'storage', 'flat', 'blob'], ['📁', '📂', '🗃️', '📄', '📦']],
+    [['saas', 'app'], ['☁️', '🏢', '🧩', '🔧']],
+    [['queue', 'event', 'bus', 'kafka', 'message'], ['📨', '📬', '🚌', '⚙️', '📡']],
+    [['webhook', 'hook'], ['🪝', '📥', '⚡', '🔔']],
+    [['scrap', 'crawl'], ['🕷️', '🕸️', '🌐', '🔍']],
+    [['graphql', 'graph'], ['◈', '🔷', '📡', '🌐']],
+    [['soap', 'xml'], ['🧼', '📨', '📄']],
+    [['email', 'imap', 'mail', 'smtp'], ['📧', '✉️', '📬', '📮']],
+    [['erp', 'sap', 'export'], ['🧾', '🏭', '📑', '📄']],
+  ];
+  const matched = [];
+  for (const [keys, icons] of sets) if (keys.some((k) => hint.includes(k))) matched.push(...icons);
+  if (category?.icon) matched.unshift(category.icon);
+  const general = ['🔌', '🌐', '🗄️', '📁', '☁️', '📊', '🔗', '⚙️', '📨', '🧩', '🚀', '📦', '🔧', '💾', '📡', '🔔', '📋', '📧', '🏢', '🧾'];
+  return [...new Set([...matched, ...general])];
+}
+
+// An icon value can be emoji(s) OR an image/logo URL (e.g. the Keka logo).
+const isIconUrl = (v) => typeof v === 'string' && /^(https?:|data:image\/)/i.test(v.trim());
+export function ConnectorIcon({ icon, size = 20, fallback = '\u{1F50C}' }) {
+  if (isIconUrl(icon)) {
+    return <img src={icon.trim()} alt="" style={{ width: size, height: size, objectFit: 'contain', borderRadius: 4, verticalAlign: 'middle' }} />;
+  }
+  return <span style={{ fontSize: size }}>{icon || fallback}</span>;
+}
+
+// Click-to-open icon picker. Multiple emojis can be combined for a unique badge, OR
+// paste an image URL to use a real brand logo.
+function IconPicker({ value, onChange, category }) {
+  const [open, setOpen] = useState(false);
+  const icons = relevantIcons(category);
+  const urlMode = isIconUrl(value);
+  const has = (em) => !urlMode && value.includes(em);
+  const toggle = (em) => {
+    if (urlMode) { onChange(em); return; }            // replace a URL with an emoji
+    if (has(em)) onChange(value.split(em).join(''));
+    else if ((value + em).length <= 512) onChange(value + em);
+  };
+  return (
+    <div style={{ position: 'relative' }}>
+      <div onClick={() => setOpen((o) => !o)} title="Choose icon(s)"
+        style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 38, padding: '4px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-card)', cursor: 'pointer' }}>
+        {value ? <ConnectorIcon icon={value} size={20} /> : <span style={{ color: 'var(--text-dim)', fontSize: '.78rem' }}>Pick icon…</span>}
+        <span style={{ marginLeft: 'auto', color: 'var(--text-dim)', fontSize: '.7rem' }}>▾</span>
+      </div>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 90 }} />
+          <div style={{ position: 'absolute', top: '110%', left: 0, zIndex: 91, width: 320, background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: 'var(--shadow-md)', padding: 12 }}>
+            <div style={{ fontSize: '.7rem', color: 'var(--text-dim)', marginBottom: 6 }}>
+              {category ? `Suggested for ${category.label}` : 'Choose icon(s)'} — click to toggle, pick multiple for uniqueness
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
+              {icons.map((em) => (
+                <div key={em} onClick={() => toggle(em)}
+                  style={{ cursor: 'pointer', padding: 6, textAlign: 'center', fontSize: '1.2rem', borderRadius: 6,
+                    border: has(em) ? '2px solid var(--primary)' : '1px solid var(--border)',
+                    background: has(em) ? 'var(--primary-dim)' : 'transparent' }}>{em}</div>
+              ))}
+            </div>
+            <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+              <label style={{ fontSize: '.7rem', color: 'var(--text-dim)' }}>…or paste a logo image URL (e.g. the Keka logo)</label>
+              <input
+                value={urlMode ? value : ''}
+                onChange={(e) => onChange(e.target.value.trim())}
+                placeholder="https://…/keka-logo.png"
+                style={{ width: '100%', marginTop: 4, padding: '5px 8px', borderRadius: 6, border: '1px solid var(--border)', fontSize: '.8rem' }}
+              />
+              {urlMode && <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, fontSize: '.72rem', color: 'var(--text-dim)' }}>Preview: <ConnectorIcon icon={value} size={22} /></div>}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => onChange('')}>Clear</button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setOpen(false)}>Done</button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
   const editMode = !!existing;
   const [step, setStep] = useState(editMode ? 2 : 1);
@@ -425,8 +547,8 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
   const stageOk = registered;
 
   return (
-    <div className="card">
-      <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap', flexShrink: 0 }}>
         {STAGES.map((s, i) => (
           <div key={s} onClick={() => stageOk && setStep(i + 1)} style={{
             padding: '4px 10px', borderRadius: 14, fontSize: '.72rem', cursor: stageOk ? 'pointer' : 'default',
@@ -434,7 +556,9 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
             border: '1px solid var(--border)',
           }}>{i + 1}. {s}</div>
         ))}
+        <button className="btn btn-ghost btn-sm" title="Close" onClick={onCancel} style={{ marginLeft: 'auto', fontSize: '1.05rem', lineHeight: 1, padding: '2px 9px' }}>{'✕'}</button>
       </div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
 
       {/* ── Stage 1: System Registration ── */}
       {step === 1 && (
@@ -445,7 +569,7 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
             {categories.map((c) => (
               <div key={c.key} className="card" style={{ cursor: 'pointer', padding: 10, textAlign: 'center', borderColor: cat?.key === c.key ? 'var(--primary)' : undefined }}
                 onClick={() => { setCat(c); setRuntimeKind(c.runtimeKind); setDirection(c.defaultRole || 'source'); setConfig({}); }}>
-                <div style={{ fontSize: '1.4rem' }}>{c.icon}</div>
+                <div><ConnectorIcon icon={c.icon} size={22} /></div>
                 <div style={{ fontSize: '.75rem', fontWeight: 600 }}>{c.label}</div>
                 {c.real ? <div style={{ fontSize: '.58rem', color: 'var(--success)' }}>runtime ✓</div> : <div style={{ fontSize: '.58rem', color: 'var(--text-dim)' }}>design-only</div>}
               </div>
@@ -454,7 +578,7 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
 
           <div className="form-row">
             <div className="form-group"><label>Connector Name *</label><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Acme CRM" /></div>
-            <div className="form-group" style={{ maxWidth: 80 }}><label>Icon</label><input value={icon} onChange={(e) => setIcon(e.target.value)} /></div>
+            <div className="form-group" style={{ maxWidth: 160 }}><label>Icon</label><IconPicker value={icon} onChange={setIcon} category={cat} /></div>
             <div className="form-group" style={{ maxWidth: 140 }}><label>Direction</label>
               <select value={direction} onChange={(e) => setDirection(e.target.value)}><option value="source">Source</option><option value="destination">Destination</option><option value="both">Both</option></select>
             </div>
@@ -478,7 +602,7 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16, position: 'sticky', bottom: 0, background: 'var(--bg-card)', borderTop: '1px solid var(--border)', padding: '12px 0', zIndex: 5 }}>
             <button className="btn btn-outline" onClick={onCancel}>Cancel</button>
             <button className="btn btn-primary" disabled={busy} onClick={register}>{busy ? 'Registering…' : 'Register system →'}</button>
           </div>
@@ -518,8 +642,30 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
                   <div className="form-group"><label>Token URL</label><input value={auth.tokenUrl || ''} onChange={(e) => setAuth((p) => ({ ...p, tokenUrl: e.target.value }))} /></div>
                   <div className="form-group"><label>Client ID field</label><input list="fk" value={auth.clientIdField || ''} onChange={(e) => setAuth((p) => ({ ...p, clientIdField: e.target.value }))} /></div>
                   <div className="form-group"><label>Client secret field</label><input list="fk" value={auth.clientSecretField || ''} onChange={(e) => setAuth((p) => ({ ...p, clientSecretField: e.target.value }))} /></div>
+                  <div className="form-group" style={{ maxWidth: 170 }}><label>Grant type</label><input value={auth.grantType || ''} onChange={(e) => setAuth((p) => ({ ...p, grantType: e.target.value }))} placeholder="client_credentials" /></div>
+                  <div className="form-group" style={{ maxWidth: 150 }}><label>Scope</label><input value={auth.scope || ''} onChange={(e) => setAuth((p) => ({ ...p, scope: e.target.value }))} placeholder="(optional)" /></div>
                 </>)}
               </div>
+              {auth.type === 'oauth2_client' && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontSize: '.78rem', fontWeight: 600 }}>Extra token params</span>
+                    <span style={{ fontSize: '.7rem', color: 'var(--text-dim)' }}>for non-standard token requests (e.g. Keka <code>api_key</code>)</span>
+                    <button className="btn btn-outline btn-sm" style={{ marginLeft: 'auto' }}
+                      onClick={() => setAuth((p) => ({ ...p, extraParams: [...(p.extraParams || []), { key: '', field: '' }] }))}>+ Param</button>
+                  </div>
+                  {(auth.extraParams || []).map((ep, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
+                      <input value={ep.key || ''} placeholder="param name (e.g. api_key)" style={{ flex: 1, fontFamily: 'monospace' }}
+                        onChange={(e) => setAuth((p) => ({ ...p, extraParams: p.extraParams.map((x, j) => j === i ? { ...x, key: e.target.value } : x) }))} />
+                      <input list="fk" value={ep.field || ''} placeholder="credential field (e.g. apiKey)" style={{ flex: 1 }}
+                        onChange={(e) => setAuth((p) => ({ ...p, extraParams: p.extraParams.map((x, j) => j === i ? { ...x, field: e.target.value } : x) }))} />
+                      <button className="btn btn-ghost btn-sm"
+                        onClick={() => setAuth((p) => ({ ...p, extraParams: p.extraParams.filter((_, j) => j !== i) }))}>&times;</button>
+                    </div>
+                  ))}
+                </div>
+              )}
               {!['none', 'apiKey', 'bearer', 'basic', 'oauth2_client'].includes(auth.type) && (
                 <div style={{ fontSize: '.74rem', color: 'var(--text-dim)', marginTop: 4 }}>This auth method is stored as design metadata; its runtime support lands with this category's runtime.</div>
               )}
@@ -585,13 +731,11 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
           <datalist id="catkeys">{catalogKeys.map((k) => <option key={k} value={k} />)}</datalist>
           {entities.length === 0 && <div style={{ fontSize: '.8rem', color: 'var(--text-dim)' }}>No entities yet. (REST connectors derive entities from the OpenAPI spec.)</div>}
           {entities.map((e, i) => (
-            <div key={e.key} className="card" style={{ background: 'var(--bg-main)', padding: 12, marginBottom: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{ fontWeight: 600 }}>{e.name} <span className="badge badge-neutral" style={{ fontSize: '.6rem' }}>{(e.fields || []).length} fields</span></div>
-                <div className="form-group" style={{ margin: 0, marginLeft: 'auto', maxWidth: 200 }}>
-                  <label style={{ fontSize: '.68rem' }}>Master entity</label>
-                  <input list="catkeys" value={e.masterEntityKey || ''} onChange={(ev) => setEnt(i, { masterEntityKey: ev.target.value })} placeholder="(none)" />
-                </div>
+            <Collapsible key={e.key} defaultOpen={entities.length <= 2}
+              title={<>{e.name} <span className="badge badge-neutral" style={{ fontSize: '.6rem' }}>{(e.fields || []).length} fields</span></>}>
+              <div className="form-group" style={{ margin: 0, marginBottom: 8, maxWidth: 220 }}>
+                <label style={{ fontSize: '.68rem' }}>Master entity</label>
+                <input list="catkeys" value={e.masterEntityKey || ''} onChange={(ev) => setEnt(i, { masterEntityKey: ev.target.value })} placeholder="(none)" />
               </div>
               {isRest && (
                 <div className="form-row" style={{ marginTop: 8 }}>
@@ -617,7 +761,7 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
                   ))}</tbody>
                 </table>
               )}
-            </div>
+            </Collapsible>
           ))}
           <StageNav onCancel={onCancel} onBack={() => setStep(3)} onNext={() => setStep(5)} />
         </div>
@@ -677,13 +821,14 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
           />
         </div>
       )}
+      </div>
     </div>
   );
 }
 
 function StageNav({ onCancel, onBack, onNext, customNext }) {
   return (
-    <div style={{ display: 'flex', gap: 10, justifyContent: 'space-between', marginTop: 16 }}>
+    <div style={{ display: 'flex', gap: 10, justifyContent: 'space-between', marginTop: 16, position: 'sticky', bottom: 0, background: 'var(--bg-card)', borderTop: '1px solid var(--border)', padding: '12px 0', zIndex: 5 }}>
       <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
       <div style={{ display: 'flex', gap: 10 }}>
         {onBack && <button className="btn btn-outline" onClick={onBack}>← Back</button>}
@@ -694,7 +839,7 @@ function StageNav({ onCancel, onBack, onNext, customNext }) {
 }
 
 /* ─── Connector detail (manage an existing connector) ─── */
-function ConnectorDetail({ detail, onPublish, onNewVersion, onDelete, onClone, onEdit, onRollback, onDeprecate, onOpenCatalog }) {
+function ConnectorDetail({ detail, onPublish, onNewVersion, onDelete, onClone, onEdit, onRollback, onDeprecate, onOpenCatalog, onClose }) {
   const { connector, versions, entities, operations } = detail;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteBlocked, setDeleteBlocked] = useState(null); // 409 message when connections still use it
@@ -703,7 +848,7 @@ function ConnectorDetail({ detail, onPublish, onNewVersion, onDelete, onClone, o
   return (
     <div className="card">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-        <span style={{ fontSize: '1.6rem' }}>{connector.icon || '\u{1F50C}'}</span>
+        <span><ConnectorIcon icon={connector.icon} size={26} /></span>
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 700, fontSize: '1.05rem' }}>{connector.name}</div>
           <div style={{ fontSize: '.74rem', color: 'var(--text-dim)' }}>{connector.category} · {connector.runtimeKind}{connector.engine ? ` (${connector.engine})` : ''} · authored: {connector.authoringMethod} · {connector.visibility || 'private'}</div>
@@ -715,6 +860,7 @@ function ConnectorDetail({ detail, onPublish, onNewVersion, onDelete, onClone, o
           : confirmDelete
             ? <button className="btn btn-danger btn-sm" onClick={async () => { const err = await onDelete(connector.connectorId, false); if (err) setDeleteBlocked(err); }}>Confirm delete</button>
             : <button className="btn btn-ghost btn-sm" onClick={() => setConfirmDelete(true)}>Delete</button>)}
+        {onClose && <button className="btn btn-ghost btn-sm" title="Close" onClick={onClose} style={{ fontSize: '1.05rem', lineHeight: 1, padding: '2px 9px' }}>{'✕'}</button>}
       </div>
       {deleteBlocked && <div style={{ fontSize: '.74rem', color: 'var(--warning)', marginBottom: 10 }}>{deleteBlocked} <strong>Force delete</strong> will unlink those connections (they fall back to their stored type).</div>}
 

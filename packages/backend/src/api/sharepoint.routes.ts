@@ -352,14 +352,12 @@ async function upsertPush(
 ) {
   const itemsUrl = `/sites/${siteId}/lists/${listId}/items`;
 
-  // Resolve existing item ids: cache first; one bulk SP scan only if there are misses.
-  const issueKeys = issues.map((i) => (i.key as string) ?? '').filter(Boolean);
-  const cacheMap = await cacheRepo.bulkGet(integrationId, issueKeys);
-  let byIssueKey = new Map<string, string>(), byTitle = new Map<string, string>();
-  if (issueKeys.some((k) => !cacheMap.has(k))) {
-    ({ byIssueKey, byTitle } = await pushService.bulkLoadItemIds(siteId, listId, token));
-  }
-  const resolveId = (k: string) => cacheMap.get(k)?.spItemId || byIssueKey.get(k) || byTitle.get(k) || null;
+  // Resolve existing item ids from the TARGET LIST itself (authoritative, one bulk scan).
+  // The dedup cache is keyed by integration only (not by list), and multiple integrations
+  // can share a project key — so trusting the cache across lists would make a push to a
+  // brand-new list "update" stale ids from another list. Always scan the target list.
+  const { byIssueKey, byTitle } = await pushService.bulkLoadItemIds(siteId, listId, token);
+  const resolveId = (k: string) => byIssueKey.get(k) || byTitle.get(k) || null;
 
   // Build PATCH (exists) / POST (new) requests.
   const reqs: GraphBatchRequest[] = [];

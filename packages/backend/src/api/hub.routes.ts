@@ -8,6 +8,7 @@ import { PostgresWriter } from '../integrations/database/writers/PostgresWriter'
 import { SqlServerWriter } from '../integrations/database/writers/SqlServerWriter';
 import { MySqlWriter } from '../integrations/database/writers/MySqlWriter';
 import { DbSchemaIntrospector } from '../integrations/database/DbSchemaIntrospector';
+import { toSqlDateTime } from '../integrations/database/genericDbWrite';
 import { SharePointGraphReader } from '../integrations/sharepoint-source/SharePointGraphReader';
 import { SharePointFieldTypeMapper } from '../integrations/sharepoint-source/SharePointFieldTypeMapper';
 import type { IDbWriter } from '../integrations/database/writers/IDbWriter';
@@ -743,12 +744,14 @@ router.post('/push-to-mysql', async (req: Request, res: Response) => {
           const row: Record<string, unknown> = { [naturalKey]: mapped.spItemId };
 
           for (const m of mappings as DbColumnMapping[]) {
-            const val = mapped.fields[m.from];
-            row[m.to] = (val !== null && val !== undefined && typeof val === 'object')
-              ? JSON.stringify(val) : val ?? null;
+            let val = mapped.fields[m.from];
+            if (val !== null && val !== undefined && typeof val === 'object') val = JSON.stringify(val);
+            else if ((m.type || '').toLowerCase() === 'datetime' && typeof val === 'string' && val) val = toSqlDateTime(val);
+            row[m.to] = val ?? null;
           }
-          row['sp_created_at'] = item.createdDateTime || null;
-          row['sp_modified_at'] = item.lastModifiedDateTime || null;
+          // MySQL DATETIME rejects ISO "T"/"Z"/offset — normalize SP timestamps.
+          row['sp_created_at'] = item.createdDateTime ? toSqlDateTime(item.createdDateTime) : null;
+          row['sp_modified_at'] = item.lastModifiedDateTime ? toSqlDateTime(item.lastModifiedDateTime) : null;
 
           const result = await writer.smartUpsert(dbName, targetTable, naturalKey, row);
           if (result.action === 'inserted') inserted++;
@@ -802,16 +805,17 @@ router.post('/mysql-quick-view', async (req: Request, res: Response) => {
     const writer = new MySqlWriter();
     await writer.connect({ engine: 'mysql', host, port: Number(port) || 3306, database, username, password });
     try {
+      // NOTE: mysql2 prepared statements (.execute) reject a bound LIMIT param with
+      // "Incorrect arguments to mysqld_stmt_execute". rowLimit is already coerced to a
+      // safe integer above, so inline it instead of binding.
       let rows: any[], fields: any[];
       try {
-        [rows, fields] = await (writer as any).pool!.execute(
-          `SELECT * FROM \`${database}\`.\`${table}\` ORDER BY synced_at DESC LIMIT ?`,
-          [rowLimit],
+        [rows, fields] = await (writer as any).pool!.query(
+          `SELECT * FROM \`${database}\`.\`${table}\` ORDER BY synced_at DESC LIMIT ${rowLimit}`,
         ) as any;
       } catch {
-        [rows, fields] = await (writer as any).pool!.execute(
-          `SELECT * FROM \`${database}\`.\`${table}\` LIMIT ?`,
-          [rowLimit],
+        [rows, fields] = await (writer as any).pool!.query(
+          `SELECT * FROM \`${database}\`.\`${table}\` LIMIT ${rowLimit}`,
         ) as any;
       }
 
@@ -1018,12 +1022,14 @@ router.post('/push-to-mssql', async (req: Request, res: Response) => {
           const row: Record<string, unknown> = { [naturalKey]: mapped.spItemId };
 
           for (const m of mappings as DbColumnMapping[]) {
-            const val = mapped.fields[m.from];
-            row[m.to] = (val !== null && val !== undefined && typeof val === 'object')
-              ? JSON.stringify(val) : val ?? null;
+            let val = mapped.fields[m.from];
+            if (val !== null && val !== undefined && typeof val === 'object') val = JSON.stringify(val);
+            else if ((m.type || '').toLowerCase() === 'datetime' && typeof val === 'string' && val) val = toSqlDateTime(val);
+            row[m.to] = val ?? null;
           }
-          row['sp_created_at'] = item.createdDateTime || null;
-          row['sp_modified_at'] = item.lastModifiedDateTime || null;
+          // SQL Server datetime2 rejects ISO "Z"/offset — normalize SP timestamps.
+          row['sp_created_at'] = item.createdDateTime ? toSqlDateTime(item.createdDateTime) : null;
+          row['sp_modified_at'] = item.lastModifiedDateTime ? toSqlDateTime(item.lastModifiedDateTime) : null;
 
           const result = await writer.smartUpsert(schema, targetTable, naturalKey, row);
           if (result.action === 'inserted') inserted++;

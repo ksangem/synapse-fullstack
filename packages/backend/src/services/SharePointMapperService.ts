@@ -106,8 +106,9 @@ export class SharePointMapperService {
 
     for (const mapping of DEFAULT_MAPPING) {
       const val = mapping.value(issue, meta);
-      // SharePoint doesn't accept undefined — use null for missing values
-      fields[mapping.spColumn] = val === undefined ? null : val;
+      // SharePoint rejects undefined AND empty-string on typed (datetime/number) columns
+      // (empty string → badArgument/generalException). Use null for both.
+      fields[mapping.spColumn] = (val === undefined || val === '') ? null : val;
     }
 
     return { fields };

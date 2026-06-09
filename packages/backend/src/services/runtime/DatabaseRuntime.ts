@@ -81,8 +81,33 @@ export class DatabaseRuntime implements IConnectorRuntime {
     }
   }
 
-  async fetch(): Promise<FetchResult> {
-    throw new Error('Database connectors are destinations in this build — use them as a push target.');
+  // Read rows from a source table (DB-as-source). Engine-specific SELECT via the
+  // writer's underlying pool. Capped for safety.
+  async fetch(creds: Creds, entityKey: string, ctx: RuntimeContext): Promise<FetchResult> {
+    const engine = await this.engine(ctx);
+    const c = this.conn(engine, creds);
+    const table = entityKey || creds.table;
+    if (!table) throw new Error('No source table — set the table name in the source credentials');
+    const LIMIT = 5000;
+    const writer = writerFor(engine);
+    await writer.connect({ engine, host: c.host, port: c.port, database: c.database, username: c.username, password: c.password });
+    try {
+      const pool = (writer as unknown as { pool: unknown }).pool;
+      let records: Record<string, unknown>[] = [];
+      if (engine === 'postgres') {
+        const r = await (pool as { query: (q: string) => Promise<{ rows: Record<string, unknown>[] }> }).query(`SELECT * FROM "${c.schema}"."${table}" LIMIT ${LIMIT}`);
+        records = r.rows;
+      } else if (engine === 'mysql') {
+        const [rows] = await (pool as { query: (q: string) => Promise<[Record<string, unknown>[]]> }).query(`SELECT * FROM \`${c.database}\`.\`${table}\` LIMIT ${LIMIT}`);
+        records = rows;
+      } else {
+        const result = await (pool as { request: () => { query: (q: string) => Promise<{ recordset: Record<string, unknown>[] }> } }).request().query(`SELECT TOP ${LIMIT} * FROM [${c.schema}].[${table}]`);
+        records = result.recordset;
+      }
+      return { records, totalCount: records.length };
+    } finally {
+      try { await writer.disconnect(); } catch { /* ignore */ }
+    }
   }
 
   async push(creds: Creds, entityKey: string, records: Record<string, unknown>[], ctx: RuntimeContext, mappings?: unknown): Promise<PushResult> {
