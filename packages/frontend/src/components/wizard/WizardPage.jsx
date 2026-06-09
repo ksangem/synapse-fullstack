@@ -12,14 +12,39 @@ const DEFAULT_ICON = '\u{1F50C}'; // fallback card icon for registry connectors 
    inside WizardPage. `isDbDest` / `getFields` / `dbCfg` are registry-driven. */
 
 const PRESET_TRANSFORMS = [
+  // Text (single source)
   { value: 'dateFormat', label: 'Date Format (YYYY-MM-DD)', desc: 'Extracts date portion' },
   { value: 'uppercase', label: 'Uppercase', desc: 'Converts text to UPPER CASE' },
   { value: 'lowercase', label: 'Lowercase', desc: 'Converts text to lower case' },
   { value: 'trim', label: 'Trim Whitespace', desc: 'Removes leading/trailing spaces' },
   { value: 'joinArray', label: 'Join Array \u2192 String', desc: 'Joins array items with comma' },
   { value: 'extractNumber', label: 'Extract Number', desc: 'Extracts first number from text' },
-  { value: 'boolean', label: 'Boolean (truthy check)', desc: 'Returns true/false' },
+  // Type casts (single source)
+  { value: 'toInt', label: 'Cast \u2192 Integer', desc: 'Parse the value as a whole number' },
+  { value: 'toFloat', label: 'Cast \u2192 Decimal', desc: 'Parse the value as a decimal number' },
+  { value: 'toText', label: 'Cast \u2192 Text', desc: 'Convert the value to a string' },
+  { value: 'boolean', label: 'Cast \u2192 Boolean', desc: 'Truthy check \u2192 true / false' },
+  // Aggregations (across ALL selected source fields, coerced to numbers)
+  { value: 'sum', label: '\u03a3 Sum (all sources)', desc: 'Add all selected sources as numbers' },
+  { value: 'avg', label: 'Average / Mean (all sources)', desc: 'Mean of the selected number sources' },
+  { value: 'min', label: 'Min (all sources)', desc: 'Smallest of the source values' },
+  { value: 'max', label: 'Max (all sources)', desc: 'Largest of the source values' },
+  { value: 'count', label: 'Count (non-empty sources)', desc: 'How many sources have a value' },
+  { value: 'concat', label: 'Concatenate (all sources)', desc: 'Join all sources with a space' },
 ];
+
+// Output type each preset produces \u2014 used to auto-type a new destination column.
+const PRESET_OUTPUT_TYPE = {
+  toInt: 'number', toFloat: 'number', extractNumber: 'number',
+  sum: 'number', avg: 'number', min: 'number', max: 'number', count: 'number',
+  boolean: 'boolean', dateFormat: 'datetime',
+  toText: 'string', uppercase: 'string', lowercase: 'string', trim: 'string', joinArray: 'string', concat: 'string',
+};
+function inferMappingOutputType(m) {
+  if (m.transform === 'PRESET' && PRESET_OUTPUT_TYPE[m.preset]) return PRESET_OUTPUT_TYPE[m.preset];
+  if (m.transform === 'DIRECT') return m.srcTypes?.[0] || 'string';
+  return m.srcTypes?.[0] || 'string'; // EXPRESSION: unknown statically \u2192 user can override
+}
 
 const PAIR_COLORS = ['#6366f1','#22c55e','#a855f7','#f59e0b','#ef4444','#3b82f6','#14b8a6','#ec4899','#84cc16','#06b6d4'];
 
@@ -42,6 +67,15 @@ function typesCompatible(srcType, destType) {
   if (src === 'datetime' && (dest === 'datetime' || dest === 'date')) return true;
   if (src === 'number' && dest === 'number') return true;
   return false;
+}
+
+// Turn a source field name into a SharePoint-safe internal column name. SP column
+// names can't contain dots/spaces/special chars, so a nested Jira field like
+// `status.name` becomes `statusname` — which still normalise-matches the source in
+// autoMapFields, so Auto-Map produces a direct/expression mapping for it.
+function spSafeColName(name) {
+  const clean = String(name).replace(/[^A-Za-z0-9]/g, '');
+  return /^[0-9]/.test(clean) ? `f${clean}` : (clean || 'Field');
 }
 
 function autoMapFields(srcFields, destFields) {
@@ -231,8 +265,89 @@ function PasswordField({ value, onChange, placeholder, label }) {
   );
 }
 
-function MappingRow({ mapping, index, srcFields, destFields, onUpdate, onRemove, expanded, onToggle }) {
+// Resolve a (possibly nested / SharePoint `.fields`) source value from a record.
+function getNestedValue(obj, path) {
+  if (!obj || !path) return '';
+  const parts = String(path).split('.');
+  let val = obj;
+  for (const p of parts) {
+    if (val == null) return '';
+    if (p === 'fields' || p === 'key' || p === 'id') val = val[p];
+    else val = val.fields?.[p] ?? val[p];
+  }
+  return val;
+}
+
+// Compute a mapping's output value for ONE record, applying the transform
+// (DIRECT / preset / multi-source EXPRESSION). Shared by the Step-5 preview AND the push,
+// so what you preview is exactly what gets written. Returns the raw value (numbers stay numbers).
+function computeMappedValue(m, record) {
+  const srcVal = (m.sources || []).map((s) => {
+    const raw = getNestedValue(record, s);
+    if (raw && typeof raw === 'object') {
+      if (raw.name) return raw.name;
+      if (raw.displayName) return raw.displayName;
+      if (Array.isArray(raw)) return raw.map((v) => (typeof v === 'object' ? (v.name || JSON.stringify(v)) : v)).join(', ');
+      return JSON.stringify(raw);
+    }
+    return raw ?? '';
+  });
+  if (!m.transform || m.transform === 'DIRECT') return srcVal[0] ?? '';
+  const nums = srcVal.map((v) => Number(v)).filter((n) => !Number.isNaN(n));
+  switch (m.preset) {
+    // text
+    case 'dateFormat': return String(srcVal[0] ?? '').substring(0, 10);
+    case 'uppercase': return String(srcVal[0] ?? '').toUpperCase();
+    case 'lowercase': return String(srcVal[0] ?? '').toLowerCase();
+    case 'trim': return String(srcVal[0] ?? '').trim();
+    case 'joinArray': return Array.isArray(srcVal[0]) ? srcVal[0].join(', ') : String(srcVal[0] ?? '');
+    case 'extractNumber': { const n = String(srcVal[0] ?? '').match(/[\d.]+/); return n ? Number(n[0]) : 0; }
+    // type casts
+    case 'toInt': return parseInt(srcVal[0], 10) || 0;
+    case 'toFloat': return Number(srcVal[0]) || 0;
+    case 'toText': return String(srcVal[0] ?? '');
+    case 'boolean': return !!srcVal[0] && srcVal[0] !== 'false' && srcVal[0] !== '0';
+    // aggregations (across all sources)
+    case 'sum': return nums.reduce((a, b) => a + b, 0);
+    case 'avg': return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
+    case 'min': return nums.length ? Math.min(...nums) : 0;
+    case 'max': return nums.length ? Math.max(...nums) : 0;
+    case 'count': return srcVal.filter((v) => v !== null && v !== undefined && v !== '').length;
+    case 'concat': return srcVal.map((v) => v ?? '').join(' ');
+    default: break;
+  }
+  if (m.transform === 'EXPRESSION' && m.expression) {
+    const source = {};
+    (m.sources || []).forEach((s, i) => { source[s] = srcVal[i]; });
+    // eslint-disable-next-line no-new-func
+    const fn = new Function('source', m.expression);
+    return fn(source);
+  }
+  return srcVal.join(', ');
+}
+
+function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey, onSetKey, onUpdate, onRemove, expanded, onToggle }) {
   const color = PAIR_COLORS[index % PAIR_COLORS.length];
+  const [newColName, setNewColName] = useState('');
+  const [newColType, setNewColType] = useState('');
+  const addNewDestColumn = (raw) => {
+    const name = (raw || '').trim();
+    if (!name || mapping.destinations.includes(name)) return;
+    const t = newColType || inferMappingOutputType(mapping);
+    const newDests = [...mapping.destinations, name];
+    const newDestTypes = [...mapping.destTypes, t];
+    const needsExpr = newDests.length > 1;
+    onUpdate({
+      ...mapping,
+      destinations: newDests,
+      destTypes: newDestTypes,
+      transform: needsExpr ? 'EXPRESSION' : mapping.transform,
+      expression: needsExpr
+        ? `// Multiple destinations\nreturn { ${newDests.map((d) => `'${d}': source['${mapping.sources[0]}']`).join(', ')} };`
+        : mapping.expression,
+    });
+    setNewColName('');
+  };
   const srcDisplay = mapping.sources.join(' + ');
   const destDisplay = mapping.destinations.join(' + ');
   const compatible = mapping.sources.every((s, i) => {
@@ -263,19 +378,28 @@ function MappingRow({ mapping, index, srcFields, destFields, onUpdate, onRemove,
 
   let previewOutput = '';
   let previewError = '';
-  if (mapping.transform === 'DIRECT') {
-    previewOutput = JSON.stringify(sampleSource[mapping.sources[0]]);
-  } else if (mapping.transform === 'PRESET') {
-    previewOutput = JSON.stringify(runPresetTransform(mapping.preset, sampleSource[mapping.sources[0]]));
-  } else if (mapping.transform === 'EXPRESSION' && mapping.expression) {
-    const { result, error } = evaluateExpression(mapping.expression, sampleSource);
-    if (error) previewError = error;
-    else previewOutput = JSON.stringify(result);
+  try {
+    previewOutput = JSON.stringify(computeMappedValue(mapping, sampleSource));
+  } catch (e) {
+    previewError = e.message;
   }
 
   return (
     <div className={`mapping-row${expanded ? ' expanded' : ''}${hasMismatch ? ' has-warning' : ''}`}>
       <div className="mapping-row-header" onClick={onToggle}>
+        <button
+          type="button"
+          className="map-key-star"
+          title={isKey
+            ? 'This column is the identity / match key — records are deduped & upserted by it. Click to clear (append every row instead).'
+            : 'Use this mapping as the identity / match key (dedupe & upsert by this column)'}
+          onClick={(e) => { e.stopPropagation(); onSetKey(); }}
+          style={{
+            background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px',
+            fontSize: '1.1rem', lineHeight: 1, color: isKey ? '#f59e0b' : 'var(--text-dim)',
+            opacity: isKey ? 1 : 0.55,
+          }}
+        >{isKey ? '★' : '☆'}</button>
         <div className="map-num" style={{ background: color }}>{index + 1}</div>
         <span className="map-src" title={srcDisplay}>{srcDisplay}</span>
         <span className="map-arrow">&rarr;</span>
@@ -384,6 +508,26 @@ function MappingRow({ mapping, index, srcFields, destFields, onUpdate, onRemove,
                   <option key={f.name} value={f.name}>{f.displayName || f.name} ({f.type}){f.required ? ' *' : ''}</option>
                 ))}
               </select>
+              {allowNewDest && (
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  <input
+                    value={newColName}
+                    onChange={(e) => setNewColName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addNewDestColumn(newColName); } }}
+                    placeholder="+ New column…"
+                    style={{ flex: 1, minWidth: 0, padding: '5px 8px', borderRadius: 6, border: '1px dashed var(--border)', fontSize: '.82rem' }}
+                  />
+                  <select value={newColType || inferMappingOutputType(mapping)} onChange={(e) => setNewColType(e.target.value)}
+                    title="Column type (defaults to the transform's output type)"
+                    style={{ padding: '5px 6px', borderRadius: 6, border: '1px solid var(--border)', fontSize: '.78rem' }}>
+                    <option value="string">Text</option>
+                    <option value="number">Number</option>
+                    <option value="boolean">Boolean</option>
+                    <option value="datetime">Date</option>
+                  </select>
+                  <button className="btn btn-outline btn-sm" disabled={!newColName.trim()} onClick={() => addNewDestColumn(newColName)}>Add</button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -455,6 +599,20 @@ export default function WizardPage() {
   // Saved connections (loaded on mount)
   const [savedConnections, setSavedConnections] = useState([]);
   const [savedLoading, setSavedLoading] = useState(false);
+
+  // One name for the whole integration (replaces per-side "Connection Name").
+  const [connectionName, setConnectionName] = useState('');
+
+  // Step 1 — search filters
+  const [connSearch, setConnSearch] = useState('');
+  const [srcSysSearch, setSrcSysSearch] = useState('');
+  const [destSysSearch, setDestSysSearch] = useState('');
+
+  // SharePoint destination — list selection moved to Step 3 (existing vs. create new)
+  const [spDestCreateNew, setSpDestCreateNew] = useState(false);
+  const [spDestLists, setSpDestLists] = useState([]);     // discovered lists on the dest site
+  const [spDestListsLoading, setSpDestListsLoading] = useState(false);
+  const [spNewListName, setSpNewListName] = useState(''); // name when creating a new dest list
 
   // Step 2 — Credentials
   const [srcCreds, setSrcCreds] = useState({});
@@ -529,12 +687,23 @@ export default function WizardPage() {
   // own routes) shares this path, so the Wizard treats them uniformly — adding a
   // new category needs no Wizard change.
   const GENERIC_RUNTIME_KINDS = ['rest', 'generic', 'graphql', 'flatfile', 'soap', 'mq', 'webhook', 'fileshare', 'email', 'scrape'];
-  const getFields = (label) => connectorMeta[label]?.credFields || [];
+  // Hide fields that belong to the integration as a whole, not to one side:
+  //  • connectionName → one shared "Connection name" field for the whole pipeline.
+  //  • SharePoint listName → a dataset chosen in Step 3, not a credential.
+  const getFields = (label) => {
+    const f = connectorMeta[label]?.credFields || [];
+    const isSp = connectorMeta[label]?.runtimeConfig?.runtimeKind === 'sharepoint';
+    return f.filter((x) => x.key !== 'connectionName' && !(isSp && x.key === 'listName'));
+  };
   const dbCfg = (label) => connectorMeta[label]?.runtimeConfig || null;
   const isDbDest = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'database';
   const isRest = (label) => GENERIC_RUNTIME_KINDS.includes(connectorMeta[label]?.runtimeConfig?.runtimeKind);
   // Recognize a SharePoint connector by runtime kind (covers the built-in AND clones like "sp1").
   const isSpSource = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'sharepoint';
+  // A database used AS A SOURCE (reads rows). Kept separate from isDbDest so dest routing is unaffected.
+  const isDbSource = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'database';
+  // Source side runs through the generic runtime path (REST-style) for both REST-family and DB sources.
+  const isRuntimeSource = (label) => isRest(label) || isDbSource(label);
   const isFlatFile = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'flatfile';
   const connectorIdOf = (label) => connectorMeta[label]?.connectorId;
   const versionIdOf = (label) => connectorMeta[label]?.latestVersionId;
@@ -591,6 +760,7 @@ export default function WizardPage() {
   // ─── Apply a saved connection ──────────────────────────
   const applySavedConnection = async (intg) => {
     const fm = intg.fieldMappings || {};
+    setConnectionName(intg.name || '');
     // Honor the saved source/destination types (e.g. SharePoint → SQL Server),
     // instead of assuming every saved connection is Jira → SharePoint.
     const srcType = fm.sourceType || 'Jira';
@@ -642,15 +812,25 @@ export default function WizardPage() {
 
     // ── Destination prefill ──
     if (destType === 'SharePoint') {
-      if (fm.siteUrl || fm.listName) {
-        setDestCreds({
-          connectionName: intg.name + ' (SP)',
-          siteUrl: fm.siteUrl || '',
-          listName: fm.listName || '',
-        });
-        setDestTestStatus('idle');
-        if (fm.siteUrl) setDestTestMsg('SharePoint details loaded from saved connection');
+      // Decrypt the stored DESTINATION Azure creds (like the DB dest does), so the
+      // destination authenticates with its own creds and the fields show on reload.
+      let azure = {};
+      if (fm.destCredId) {
+        const dRes = await api.decryptCredential(fm.destCredId);
+        if (dRes.ok && dRes.data?.data?.payload) azure = dRes.data.data.payload;
       }
+      setDestCreds({
+        connectionName: intg.name + ' (SP)',
+        siteUrl: fm.destSiteUrl || fm.siteUrl || '',
+        listName: fm.destListName || fm.listName || '',
+        tenantId: azure.tenantId || '',
+        clientId: azure.clientId || '',
+        clientSecret: azure.clientSecret || '',
+      });
+      setDestTestStatus('idle');
+      setDestTestMsg(fm.destCredId
+        ? 'SharePoint destination + Azure credentials loaded from saved connection'
+        : 'SharePoint destination loaded — re-enter Azure credentials and save to store them');
     } else if (isDbDest(destType)) {
       // Decrypt the stored DB credential to restore username + password too.
       let dbc = {};
@@ -696,7 +876,7 @@ export default function WizardPage() {
     // Sync PG table selection to destCreds before moving to step 4.
     // (Skipped for REST sources, which don't run the SharePoint table-discovery step —
     //  they use the Target Table from the destination credential form, defaulting on push.)
-    if (wizardStep === 3 && isDbDest(selectedDest) && !isRest(selectedSource)) {
+    if (wizardStep === 3 && isDbDest(selectedDest) && !isRuntimeSource(selectedSource)) {
       const tbl = createNewTable ? newTableName : selectedPgTable;
       if (!tbl) return; // must pick a table
       setDestCreds(prev => ({ ...prev, table: tbl }));
@@ -742,7 +922,7 @@ export default function WizardPage() {
           setFetchResult({ runId: 'sp-fetch-' + Date.now(), tickets: items, totalCount: items.length });
           setFetchStatus('done');
         } else { setFetchError(result.data?.error || 'Fetch failed'); setFetchStatus('error'); }
-      } else if (isRest(selectedSource)) {
+      } else if (isRuntimeSource(selectedSource)) {
         const meta = connectorMeta[selectedSource];
         const result = await runtimeClient.fetch(meta.connectorId, meta.latestVersionId, selectedEntity, srcCreds);
         if (result.ok && result.data?.success) {
@@ -760,10 +940,11 @@ export default function WizardPage() {
   // ─── Step 6: Push to destination ───────────────────────
   const handlePush = async () => {
     // REST source → its own dispatch (the SP/DB push paths fetch from SharePoint).
-    if (isRest(selectedSource)) {
+    if (isRuntimeSource(selectedSource)) {
       if (isRest(selectedDest)) return handleRestPush();
       if (isDbDest(selectedDest)) return handleRestToDbPush();
-      setPushError(`Pushing a REST source into ${selectedDest} isn't supported yet — use a database or REST destination.`);
+      if (isSpSource(selectedDest)) return handleSpDestPush(); // REST → SharePoint list
+      setPushError(`Pushing a REST source into ${selectedDest} isn't supported yet — use a database or SharePoint destination.`);
       setPushStatus('error');
       return;
     }
@@ -774,19 +955,65 @@ export default function WizardPage() {
       if (engine === 'mysql') handlePushToMysql();
       else if (engine === 'sqlserver') handlePushToMssql();
       else handlePushToPg();
+    } else if (isSpSource(selectedDest)) {
+      // SharePoint destination. Jira source keeps the dedicated 3-layer upsert push;
+      // any other source (SharePoint, CSV, …) writes the mapped records to the list.
+      if (selectedSource === 'Jira') handlePushToSharePoint();
+      else handleSpDestPush();
     } else {
       handlePushToSharePoint();
     }
   };
 
-  // Map the fetched source records to destination shape using the wizard mappings
-  // (direct field copy — consistent with the existing SP→DB push path).
+  // Generic "write mapped records into a SharePoint list" push (SP→SP, CSV→SP, REST→SP).
+  // ensure-list creates the list if it doesn't exist and adds any mapped columns that
+  // are missing — so "create new list / use existing" + "create columns" both work.
+  const handleSpDestPush = async () => {
+    if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
+    setPushStatus('pushing'); setPushError(''); setPushResult(null);
+    try {
+      const destMeta = connectorMeta[selectedDest];
+      const records = mapRecordsToDest();
+      // Don't create an empty list + report a false success: require at least one row with a mapped value.
+      if (!records.some((r) => r && Object.keys(r).length)) {
+        setPushError('Nothing to push — the source returned 0 rows (or no mapping produced a value). Re-fetch in Step 5 and check your mappings.');
+        setPushStatus('error');
+        return;
+      }
+      const cols = mappings.flatMap((m) => (m.destinations || []).map((d, j) => ({ name: d, type: (m.destTypes || [])[j] || 'text' }))).filter((c) => c.name);
+      const ens = await api.call('/api/sharepoint/ensure-list', {
+        siteUrl: destCreds.siteUrl, siteId: destConnectionData?.siteId, listName: destCreds.listName,
+        columns: cols, tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret,
+      });
+      if (!ens.ok || !ens.data?.success) { setPushError(ens.data?.error || 'Failed to create/prepare the destination list'); setPushStatus('error'); return; }
+      const listId = ens.data.data.listId;
+      // matchKey = the column starred (★) in the mapping step; '' → insert-only.
+      const result = await runtimeClient.push(destMeta.connectorId, destMeta.latestVersionId, listId, { ...destCreds, matchKey: effectiveKey || '__append__' }, records);
+      if (result.ok && result.data?.success) {
+        const d = result.data.data;
+        setPushResult({ pushRunId: 'sp-' + Date.now(), total: records.length, status: 'success', created: d.created, updated: d.updated || 0, failed: d.failed, errors: d.errors, listCreated: ens.data.data.created, addedColumns: ens.data.data.addedColumns });
+        // Don't claim success if rows actually failed to write.
+        if (d.failed > 0) setPushError(`${d.created} written, ${d.failed} failed — ${d.errors?.[0] || 'see SharePoint'}`);
+        setPushStatus('done');
+      } else { setPushError(result.data?.error || 'Push failed'); setPushStatus('error'); }
+    } catch { setPushError('Network error during push'); setPushStatus('error'); }
+  };
+
+  // Map the fetched source records to destination shape, APPLYING each mapping's
+  // transform (DIRECT / preset / multi-source aggregation expression) — same logic
+  // as the Step-5 preview. Handles multi-destination expressions (object result).
   const mapRecordsToDest = () => (fetchResult?.tickets || []).map((rec) => {
     const out = {};
     for (const m of mappings) {
-      const src = m.sources?.[0];
-      const dest = m.destinations?.[0];
-      if (src && dest) out[dest] = rec[src];
+      const dests = m.destinations || [];
+      if (!dests.length || !(m.sources || []).length) continue;
+      let val;
+      try { val = computeMappedValue(m, rec); } catch { val = ''; }
+      if (dests.length > 1 && val && typeof val === 'object' && !Array.isArray(val)) {
+        for (const d of dests) out[d] = val[d];
+      } else {
+        out[dests[0]] = val;
+      }
     }
     return out;
   });
@@ -812,7 +1039,9 @@ export default function WizardPage() {
     setPushStatus('pushing'); setPushError(''); setPushResult(null);
     try {
       const cfg = dbCfg(selectedDest);
-      const dbMappings = mappings.map((m) => ({ from: m.sources?.[0], to: m.destinations?.[0], type: m.srcTypes?.[0] || 'string' })).filter((m) => m.from && m.to);
+      // Apply transforms client-side, then push the computed rows with identity mappings.
+      const records = mapRecordsToDest();
+      const dbMappings = mappings.flatMap((m) => (m.destinations || []).map((d, j) => ({ from: d, to: d, type: m.destTypes?.[j] || m.srcTypes?.[0] || 'string' }))).filter((m) => m.from);
       const result = await api.call('/api/connectors/runtime/push-to-db', {
         engine: cfg.engine,
         conn: {
@@ -821,7 +1050,7 @@ export default function WizardPage() {
           schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
         },
         table: destCreds.table || 'rest_data',
-        records: fetchResult.tickets,
+        records,
         mappings: dbMappings,
         naturalKey: matchKey === '__append__' ? '' : (matchKey || undefined),
       });
@@ -1036,6 +1265,27 @@ export default function WizardPage() {
     setPushResult(null);
     try {
       const { siteUrl, listName } = destCreds;
+      let listId = destConnectionData?.listId;
+      // Creating a new list: provision it (and the mapped columns) before pushing.
+      // The dedicated upsert push only resolves an EXISTING list, so without this the
+      // push would fail for a brand-new list. SharePoint auto-generates each item's
+      // built-in `id` on insert, so we never create/map an id column (ensure-list skips it).
+      if (spDestCreateNew) {
+        // Jira→SP writes the fixed default-mapper columns (IssueKey, StatusName, …), NOT
+        // the wizard mappings, so we only create the list shell here and let the backend's
+        // ensurePushColumns create the exact columns the push will write. Passing the
+        // source-named mappings here would create mismatched lowercase columns.
+        const ens = await api.call('/api/sharepoint/ensure-list', {
+          siteUrl, siteId: destConnectionData?.siteId, listName, columns: [],
+          tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret,
+        });
+        if (!ens.ok || !ens.data?.success) {
+          setPushError(ens.data?.error || 'Failed to create the destination list');
+          setPushStatus('error');
+          return;
+        }
+        listId = ens.data.data.listId;
+      }
       const result = await api.pushToSharePoint({
         siteUrl, listName,
         runId: fetchResult.runId,
@@ -1043,7 +1293,7 @@ export default function WizardPage() {
         upsertMode: true,
         forceNew: false,
         siteId: destConnectionData?.siteId,
-        listId: destConnectionData?.listId,
+        listId,
       });
       if (result.ok && result.data?.success) {
         const d = result.data.data;
@@ -1056,7 +1306,7 @@ export default function WizardPage() {
         const retry = await api.pushToSharePoint({
           siteUrl, listName, runId: fetchResult.runId, source: 'api_token',
           upsertMode: true, forceNew: true,
-          siteId: destConnectionData?.siteId, listId: destConnectionData?.listId,
+          siteId: destConnectionData?.siteId, listId,
         });
         if (retry.ok && retry.data?.success) {
           const d = retry.data.data;
@@ -1158,7 +1408,7 @@ export default function WizardPage() {
           setSrcTestMsg(`Connected to "${result.data.data?.siteDisplayName}" (${result.data.data?.hostname})`);
           setSrcConnectionData(result.data.data);
         } else { setSrcTestStatus('error'); setSrcTestMsg(result.data?.error || 'Connection failed'); }
-      } else if (isRest(selectedSource)) {
+      } else if (isRuntimeSource(selectedSource)) {
         const meta = connectorMeta[selectedSource];
         const result = await runtimeClient.test(meta.connectorId, meta.latestVersionId, srcCreds);
         if (result.ok && result.data?.success) {
@@ -1175,15 +1425,16 @@ export default function WizardPage() {
     setDestTestStatus('testing'); setDestTestMsg('');
     try {
       if (isSpSource(selectedDest)) {
-        // SharePoint destination (built-in or clone) \u2014 recognized by runtimeKind.
-        const { siteUrl, listName } = destCreds;
-        if (!siteUrl || !listName) { setDestTestStatus('error'); setDestTestMsg('Please fill in Site URL and List Name'); return; }
-        const result = await api.testSharePointConnection({ siteUrl, listName });
-        if (result.ok && result.data?.success) {
+        // SharePoint destination \u2014 only the SITE + Azure creds are needed here.
+        // The target LIST is chosen in Step 3 (existing or create-new).
+        const { siteUrl, tenantId, clientId, clientSecret } = destCreds;
+        if (!siteUrl) { setDestTestStatus('error'); setDestTestMsg('Please fill in the Site URL'); return; }
+        const site = await api.testSpSource({ siteUrl, tenantId, clientId, clientSecret });
+        if (site.ok && site.data?.success) {
           setDestTestStatus('connected');
-          setDestTestMsg(`Connected to "${result.data.data?.siteDisplayName}" \u2014 list "${result.data.data?.listName}" (${result.data.data?.listColumnCount} columns)`);
-          setDestConnectionData(result.data.data);
-        } else { setDestTestStatus('error'); setDestTestMsg(result.data?.error || 'Connection failed'); }
+          setDestTestMsg(`Connected to "${site.data.data?.siteDisplayName}" \u2014 choose the list in the next step`);
+          setDestConnectionData({ siteId: site.data.data?.siteId });
+        } else { setDestTestStatus('error'); setDestTestMsg(site.data?.error || 'Connection failed'); }
       } else if (isDbDest(selectedDest)) {
         // Engine-based dispatch (NOT label) so cloned DB connectors test correctly.
         const cfg = dbCfg(selectedDest);
@@ -1247,7 +1498,7 @@ export default function WizardPage() {
     setSaveMsg('');
     try {
       const body = {
-        name: srcCreds.connectionName || `${selectedSource} → ${selectedDest}`,
+        name: connectionName || `${selectedSource} → ${selectedDest}`,
         sourceType: selectedSource,
         destType: selectedDest,
         // Connector-registry pins (template-driven wizard)
@@ -1265,6 +1516,12 @@ export default function WizardPage() {
         tenantId: srcCreds.tenantId || undefined,
         clientId: srcCreds.clientId || undefined,
         clientSecret: srcCreds.clientSecret || undefined,
+        // SharePoint DESTINATION creds + site/list (when SharePoint is the destination)
+        destTenantId: isSpSource(selectedDest) ? destCreds.tenantId || undefined : undefined,
+        destClientId: isSpSource(selectedDest) ? destCreds.clientId || undefined : undefined,
+        destClientSecret: isSpSource(selectedDest) ? destCreds.clientSecret || undefined : undefined,
+        destSiteUrl: isSpSource(selectedDest) ? destCreds.siteUrl || undefined : undefined,
+        destListName: isSpSource(selectedDest) ? destCreds.listName || undefined : undefined,
         // DB dest fields
         pgHost: destCreds.host || undefined,
         pgPort: destCreds.port || undefined,
@@ -1424,7 +1681,7 @@ export default function WizardPage() {
         // DB destination tables are loaded by a separate effect (works for ALL sources).
       };
       loadLists();
-    } else if (isRest(selectedSource)) {
+    } else if (isRuntimeSource(selectedSource)) {
       // Generic-runtime source. Prefer the template's design-time entities; if it
       // has none (Flat File / Webhook / MQ define them at runtime), ask the runtime.
       const meta = connectorMeta[selectedSource];
@@ -1470,6 +1727,23 @@ export default function WizardPage() {
     loadEntities();
   }, [wizardStep, selectedProject]);
 
+  // ─── Step 3: Load destination SharePoint lists (any source → SP) ──
+  useEffect(() => {
+    if (wizardStep !== 3 || !isSpSource(selectedDest)) return;
+    if (!destConnectionData?.siteId) return;
+    (async () => {
+      setSpDestListsLoading(true);
+      const res = await api.discoverSpLists({
+        siteId: destConnectionData.siteId,
+        tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret,
+      });
+      if (res.ok && res.data?.success) {
+        setSpDestLists((res.data.data?.lists || []).filter((l) => l.template === 'genericList'));
+      }
+      setSpDestListsLoading(false);
+    })();
+  }, [wizardStep, selectedDest]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Step 3: Load destination DB tables (any source → DB) ──
   useEffect(() => {
     if (wizardStep !== 3 || !isDbDest(selectedDest)) return;
@@ -1503,7 +1777,7 @@ export default function WizardPage() {
     const loadFields = async () => {
       setFieldsLoading(true);
 
-      if (isRest(selectedSource)) {
+      if (isRuntimeSource(selectedSource)) {
         // Generic-runtime source: prefer the entity's static field defs; if none
         // (Flat File / Webhook / MQ), infer from the runtime (parses the uploaded
         // file / last event / a peeked message).
@@ -1547,10 +1821,15 @@ export default function WizardPage() {
               return { name: col, displayName: col, type: f.type, required: false };
             }));
           }
-        } else if (selectedDest === 'SharePoint') {
-          const destResult = await api.getSharePointListFields({ siteUrl: destCreds.siteUrl, listName: destCreds.listName, siteId: destConnectionData?.siteId });
-          if (destResult.ok && destResult.data?.success) {
-            setDestFields((destResult.data.data?.spFields || []).map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: f.required || false })));
+        } else if (isSpSource(selectedDest)) {
+          if (spDestCreateNew) {
+            // New list: destination columns mirror the source fields (editable in the mapping step).
+            setDestFields(sf.map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: false })));
+          } else {
+            const destResult = await api.getSharePointListFields({ siteUrl: destCreds.siteUrl, listName: destCreds.listName, siteId: destConnectionData?.siteId });
+            if (destResult.ok && destResult.data?.success) {
+              setDestFields((destResult.data.data?.spFields || []).map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: f.required || false })));
+            }
           }
         }
         setFieldsLoading(false);
@@ -1561,16 +1840,21 @@ export default function WizardPage() {
         // Original Jira → SP flow
         const { endpointUrl, email, apiToken } = srcCreds;
         const { siteUrl, listName } = destCreds;
-        const [srcResult, destResult] = await Promise.all([
-          api.getEntityFields({ endpointUrl, email, apiToken, projectKey: selectedProject, entity: selectedEntity }),
-          api.getSharePointListFields({ siteUrl, listName, siteId: destConnectionData?.siteId }),
-        ]);
-        if (srcResult.ok && srcResult.data?.success) setSrcFields(srcResult.data.data?.fields || []);
-        if (destResult.ok && destResult.data?.success) {
-          const spf = (destResult.data.data?.spFields || []).map(f => ({
-            name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: f.required || false,
-          }));
-          setDestFields(spf);
+        const srcResult = await api.getEntityFields({ endpointUrl, email, apiToken, projectKey: selectedProject, entity: selectedEntity });
+        const sf = (srcResult.ok && srcResult.data?.success) ? (srcResult.data.data?.fields || []) : [];
+        setSrcFields(sf);
+        if (spDestCreateNew) {
+          // New list: there's no existing list to read columns from, so mirror the
+          // source fields (SP-safe names) into the destination. Auto-Map then matches
+          // them 1:1, and ensure-list creates these columns when we push.
+          setDestFields(sf.map((f) => ({ name: spSafeColName(f.name), displayName: f.displayName || f.name, type: f.type || 'text', required: false })));
+        } else {
+          const destResult = await api.getSharePointListFields({ siteUrl, listName, siteId: destConnectionData?.siteId });
+          if (destResult.ok && destResult.data?.success) {
+            setDestFields((destResult.data.data?.spFields || []).map(f => ({
+              name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: f.required || false,
+            })));
+          }
         }
       } else if (isSpSource(selectedSource) && (isDbDest(selectedDest))) {
         // SP → DB flow: source = SP list fields, dest = DB table columns (or empty for auto-create)
@@ -1623,6 +1907,25 @@ export default function WizardPage() {
           ];
           setDestFields(autoDestFields);
         }
+      } else if (isSpSource(selectedSource) && isSpSource(selectedDest)) {
+        // SP → SP: load the SOURCE list's fields.
+        const srcResult = await api.getSpListFields({
+          siteId: srcConnectionData?.siteId, listId: selectedEntity,
+          tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret,
+        });
+        const sf = (srcResult.ok && srcResult.data?.success) ? (srcResult.data.data?.fields || []) : [];
+        setSrcFields(sf);
+        if (spDestCreateNew) {
+          // New list: destination columns mirror the source fields (you can still edit them in the mapping step).
+          setDestFields(sf.map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: false })));
+        } else {
+          const destResult = await api.getSharePointListFields({ siteUrl: destCreds.siteUrl, listName: destCreds.listName, siteId: destConnectionData?.siteId });
+          if (destResult.ok && destResult.data?.success) {
+            setDestFields((destResult.data.data?.spFields || []).map((f) => ({
+              name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: f.required || false,
+            })));
+          }
+        }
       } else {
         // Fallback: try original Jira fields + SP columns
         const { endpointUrl, email, apiToken } = srcCreds;
@@ -1644,11 +1947,36 @@ export default function WizardPage() {
     loadFields();
   }, [wizardStep]);
 
+  // ─── Identity / match key ───────────────────────────────
+  // The starred mapping's destination column is the identity key used to dedupe &
+  // upsert on every destination type (DB, SharePoint, REST). It reuses the existing
+  // `matchKey` state so there's a single source of truth. When unset, the FIRST
+  // mapping's destination acts as the key (preserving the old default); `__append__`
+  // means "no key — insert every row as new".
+  const effectiveKey = useMemo(() => {
+    if (matchKey === '__append__') return '';
+    if (matchKey) return matchKey;
+    return mappings[0]?.destinations?.[0] || '';
+  }, [matchKey, mappings]);
+
+  const setMappingKey = useCallback((index) => {
+    const dest = mappings[index]?.destinations?.[0];
+    if (!dest) return;
+    // Clicking the current key clears it (→ append mode); otherwise make it the key.
+    setMatchKey((prev) => {
+      const current = prev === '__append__' ? '' : (prev || mappings[0]?.destinations?.[0] || '');
+      return current === dest ? '__append__' : dest;
+    });
+  }, [mappings]);
+
   // ─── Auto-map ───────────────────────────────────────────
   const handleAutoMap = useCallback(() => {
     const newMappings = autoMapFields(srcFields, destFields);
     setMappings(newMappings);
     setExpandedMapping(-1);
+    // Default the identity key to the first mapped column (the old "first acts as id"
+    // behaviour, now shown explicitly with a ★ and overridable per row).
+    setMatchKey(newMappings[0]?.destinations?.[0] || '');
   }, [srcFields, destFields]);
 
   // ─── Mapping CRUD ───────────────────────────────────────
@@ -1765,6 +2093,7 @@ export default function WizardPage() {
             (wizardStep === 1 && (!selectedSource || !selectedDest)) ||
             (wizardStep === 2 && (srcTestStatus !== 'connected' || destTestStatus !== 'connected')) ||
             (wizardStep === 3 && !selectedEntity) ||
+            (wizardStep === 3 && isSpSource(selectedDest) && !destCreds.listName) ||
             (wizardStep === 5 && fetchStatus !== 'done') ||
             (wizardStep === 6 && (pushStatus === 'pushing' || pushStatus === 'polling'))
           }>
@@ -1787,9 +2116,16 @@ export default function WizardPage() {
                   <span style={{ fontSize: '1.1rem' }}>&#128279;</span>
                   <span style={{ fontWeight: 700, fontSize: '.95rem' }}>My Connections</span>
                   <span className="badge badge-success" style={{ fontSize: '.7rem' }}>{savedConnections.length} saved</span>
+                  <input value={connSearch} onChange={(e) => setConnSearch(e.target.value)} placeholder="Search connections..."
+                    style={{ marginLeft: 'auto', maxWidth: 240, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.82rem' }} />
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
-                  {savedConnections.map((intg) => {
+                <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 6 }}>
+                  {savedConnections.filter((intg) => {
+                    const q = connSearch.trim().toLowerCase();
+                    if (!q) return true;
+                    const fm = intg.fieldMappings || {};
+                    return [intg.name, fm.sourceType, fm.destType, fm.projectKey, fm.listName, fm.siteUrl, fm.endpointUrl].filter(Boolean).join(' ').toLowerCase().includes(q);
+                  }).map((intg) => {
                     const fm = intg.fieldMappings || {};
                     return (
                       <div
@@ -1797,7 +2133,7 @@ export default function WizardPage() {
                         className="card"
                         style={{
                           padding: '12px 14px', cursor: 'pointer', transition: 'all .15s',
-                          border: '1px solid var(--border)', borderRadius: 8,
+                          border: '1px solid var(--border)', borderRadius: 8, flex: '0 0 240px',
                         }}
                         onClick={() => applySavedConnection(intg)}
                         onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--primary)'; e.currentTarget.style.background = 'var(--primary-dim)'; }}
@@ -1830,28 +2166,36 @@ export default function WizardPage() {
             <div className="grid-2" style={{ gap: 24 }}>
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.95rem' }}>&#9664; Source System</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-                  {sourceCards.map((c, i) => (
-                    <div key={i} className="card connector-card"
-                      style={{ padding: 14, borderColor: selectedSource === c.label ? 'var(--primary)' : undefined, borderWidth: selectedSource === c.label ? 2 : undefined }}
-                      onClick={() => handleSourceSelect(c.label)}>
-                      <div className="conn-icon" style={{ fontSize: '1.6rem' }}>{c.icon}</div>
-                      <div className="conn-label" style={{ fontSize: '.78rem' }}>{c.label}</div>
-                    </div>
-                  ))}
+                <input value={srcSysSearch} onChange={(e) => setSrcSysSearch(e.target.value)} placeholder="Search source systems..."
+                  style={{ width: '100%', marginBottom: 10, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.82rem' }} />
+                <div style={{ maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                    {sourceCards.filter((c) => c.label.toLowerCase().includes(srcSysSearch.trim().toLowerCase())).map((c, i) => (
+                      <div key={i} className="card connector-card"
+                        style={{ padding: 14, borderColor: selectedSource === c.label ? 'var(--primary)' : undefined, borderWidth: selectedSource === c.label ? 2 : undefined }}
+                        onClick={() => handleSourceSelect(c.label)}>
+                        <div className="conn-icon" style={{ fontSize: '1.6rem' }}>{c.icon}</div>
+                        <div className="conn-label" style={{ fontSize: '.78rem' }}>{c.label}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div>
                 <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.95rem' }}>Destination System &#9654;</div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-                  {destCards.map((c, i) => (
-                    <div key={i} className="card connector-card"
-                      style={{ padding: 14, borderColor: selectedDest === c.label ? 'var(--primary)' : undefined, borderWidth: selectedDest === c.label ? 2 : undefined }}
-                      onClick={() => handleDestSelect(c.label)}>
-                      <div className="conn-icon" style={{ fontSize: '1.6rem' }}>{c.icon}</div>
-                      <div className="conn-label" style={{ fontSize: '.78rem' }}>{c.label}</div>
-                    </div>
-                  ))}
+                <input value={destSysSearch} onChange={(e) => setDestSysSearch(e.target.value)} placeholder="Search destination systems..."
+                  style={{ width: '100%', marginBottom: 10, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.82rem' }} />
+                <div style={{ maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+                    {destCards.filter((c) => c.label.toLowerCase().includes(destSysSearch.trim().toLowerCase())).map((c, i) => (
+                      <div key={i} className="card connector-card"
+                        style={{ padding: 14, borderColor: selectedDest === c.label ? 'var(--primary)' : undefined, borderWidth: selectedDest === c.label ? 2 : undefined }}
+                        onClick={() => handleDestSelect(c.label)}>
+                        <div className="conn-icon" style={{ fontSize: '1.6rem' }}>{c.icon}</div>
+                        <div className="conn-label" style={{ fontSize: '.78rem' }}>{c.label}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1866,6 +2210,16 @@ export default function WizardPage() {
         {/* ── Step 2: Credentials ── */}
         {wizardStep === 2 && (
           <div className="wizard-step active">
+            <div className="card" style={{ marginBottom: 16, padding: '12px 16px' }}>
+              <label style={{ fontWeight: 600, fontSize: '.85rem' }}>Connection name</label>
+              <input
+                value={connectionName}
+                onChange={(e) => setConnectionName(e.target.value)}
+                placeholder={selectedSource && selectedDest ? `${selectedSource} → ${selectedDest}` : 'Name this integration'}
+                style={{ width: '100%', marginTop: 6, padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.9rem' }}
+              />
+              <div style={{ fontSize: '.74rem', color: 'var(--text-dim)', marginTop: 4 }}>One name for this source → destination pipeline.</div>
+            </div>
             <div className="grid-2" style={{ gap: 24 }}>
               <div className="card">
                 <div style={{ fontWeight: 600, marginBottom: 12 }}>Source Credentials ({selectedSource})</div>
@@ -1887,6 +2241,11 @@ export default function WizardPage() {
               <div className="card">
                 <div style={{ fontWeight: 600, marginBottom: 12 }}>Destination Credentials ({selectedDest})</div>
                 {renderCredFields(getFields(selectedDest), destCreds, handleDestCredChange)}
+                {isSpSource(selectedDest) && (
+                  <div style={{ fontSize: '.76rem', color: 'var(--text-dim)', margin: '6px 0' }}>
+                    You'll pick (or create) the destination list in the next step.
+                  </div>
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
                   <button className="btn btn-outline btn-sm" onClick={testDestConnection} disabled={destTestStatus === 'testing'} style={statusStyle(destTestStatus)}>
                     {statusLabel(destTestStatus)}
@@ -1961,9 +2320,9 @@ export default function WizardPage() {
                   {isSpSource(selectedSource) ? 'Select Source List & Destination Table' : 'Choose what to sync'}
                 </div>
                 <div className="conn-summary">
-                  <strong>{srcCreds.connectionName || selectedSource}</strong> ({srcCreds.siteUrl || srcCreds.endpointUrl})
+                  <strong>{selectedSource}</strong> ({srcCreds.siteUrl || srcCreds.endpointUrl})
                   &nbsp;&rarr;&nbsp;
-                  <strong>{destCreds.connectionName || selectedDest}</strong> ({destCreds.database || destCreds.listName || ''})
+                  <strong>{selectedDest}</strong> ({destCreds.database || destCreds.listName || ''})
                 </div>
               </div>
             </div>
@@ -1990,7 +2349,7 @@ export default function WizardPage() {
                 <div className="loader-text">Loading {isSpSource(selectedSource) ? 'lists' : 'entities'} from {selectedSource}...</div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: (isDbDest(selectedDest)) ? '1fr 1fr' : '1fr', gap: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: (isDbDest(selectedDest) || isSpSource(selectedDest)) ? '1fr 1fr' : '1fr', gap: 20 }}>
 
                 {/* ── LEFT: Source list/entity picker ── */}
                 <div className="card" style={{ padding: 16 }}>
@@ -2141,6 +2500,57 @@ export default function WizardPage() {
                     </div>
                   </div>
                 )}
+
+                {/* ── RIGHT: Destination list picker (SharePoint) ── */}
+                {isSpSource(selectedDest) && (
+                  <div className="card" style={{ padding: 16 }}>
+                    <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 10 }}>SharePoint Destination List</div>
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                      <button className={`btn btn-sm ${!spDestCreateNew ? 'btn-primary' : ''}`}
+                        style={spDestCreateNew ? { background: 'var(--bg-main)', border: '1px solid var(--border)' } : {}}
+                        onClick={() => { setSpDestCreateNew(false); setSpNewListName(''); }}>
+                        Existing List ({spDestLists.length})
+                      </button>
+                      <button className={`btn btn-sm ${spDestCreateNew ? 'btn-primary' : ''}`}
+                        style={!spDestCreateNew ? { background: 'var(--bg-main)', border: '1px solid var(--border)' } : {}}
+                        onClick={() => { setSpDestCreateNew(true); updateDestCred('listName', ''); setDestConnectionData((d) => ({ ...(d || {}), listId: undefined })); }}>
+                        + Create New
+                      </button>
+                    </div>
+                    {!spDestCreateNew ? (
+                      spDestListsLoading ? (
+                        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)' }}>Loading lists...</div>
+                      ) : (
+                        <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+                          {spDestLists.map((l) => (
+                            <div key={l.id}
+                              onClick={() => { updateDestCred('listName', l.name); setDestConnectionData((d) => ({ ...(d || {}), listId: l.id })); }}
+                              style={{ padding: '10px 14px', cursor: 'pointer', background: (destCreds.listName === l.name) ? 'var(--primary-dim)' : 'transparent', borderBottom: '1px solid var(--border)', borderLeft: (destCreds.listName === l.name) ? '3px solid var(--primary)' : '3px solid transparent', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ fontWeight: destCreds.listName === l.name ? 700 : 500, fontSize: '.88rem' }}>{l.name}</div>
+                              {destCreds.listName === l.name && <span style={{ color: 'var(--primary)', fontWeight: 700 }}>&#10003;</span>}
+                            </div>
+                          ))}
+                          {spDestLists.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)', fontSize: '.85rem' }}>No lists found on this site</div>}
+                        </div>
+                      )
+                    ) : (
+                      <div>
+                        <div style={{ marginBottom: 8, fontSize: '.82rem', color: 'var(--text-secondary)' }}>
+                          Enter a name for the new list. It will be auto-created with columns from your field mappings.
+                        </div>
+                        <input type="text" placeholder="e.g. Synced Products" value={spNewListName}
+                          onChange={(e) => { setSpNewListName(e.target.value); updateDestCred('listName', e.target.value); }}
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', fontSize: '.9rem' }} />
+                        {spNewListName && <div style={{ marginTop: 8, fontSize: '.78rem', color: 'var(--info)' }}>Will create list <strong>{spNewListName}</strong> with columns from the selected source.</div>}
+                      </div>
+                    )}
+                    {destCreds.listName && (
+                      <div style={{ marginTop: 8, fontSize: '.78rem', color: 'var(--success)', fontWeight: 600 }}>
+                        &#10003; Destination: {destCreds.listName}{spDestCreateNew ? ' (new)' : ''}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -2181,10 +2591,19 @@ export default function WizardPage() {
                   </div>
                 </div>
 
+                {mappings.length > 0 && (
+                  <div style={{ margin: '8px 0', padding: '8px 12px', background: 'var(--bg-main)', borderRadius: 6, fontSize: '.78rem', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', color: 'var(--text-dim)' }}>
+                    <span style={{ color: '#f59e0b', fontSize: '1rem' }}>★</span>
+                    {effectiveKey
+                      ? <span>Identity key: <code style={{ background: 'var(--bg-card)', padding: '1px 5px', borderRadius: 3 }}>{effectiveKey}</code> — records are deduped &amp; upserted by this column. Click the ★ on any mapping row to change it.</span>
+                      : <span>No identity key set — every row is inserted as new. Click the ☆ on a mapping row to dedupe/upsert by that column.</span>}
+                  </div>
+                )}
+
                 {isDbDest(selectedDest) && (
                   <div style={{ margin: '8px 0', padding: '10px 12px', background: 'var(--bg-main)', borderRadius: 6, fontSize: '.8rem', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                     <span style={{ fontWeight: 600 }}>Match records by:</span>
-                    <select value={matchKey} onChange={(e) => setMatchKey(e.target.value)} style={{ minWidth: 220 }}>
+                    <select value={matchKey === '__append__' ? '__append__' : effectiveKey} onChange={(e) => setMatchKey(e.target.value)} style={{ minWidth: 220 }}>
                       <option value="__append__">Append every row (no matching — each row is new)</option>
                       {mappings.flatMap((m) => m.destinations || []).filter((d, i, a) => d && a.indexOf(d) === i).map((d) => (
                         <option key={d} value={d}>Match by “{d}” (update if exists, else insert)</option>
@@ -2241,6 +2660,9 @@ export default function WizardPage() {
                           index={i}
                           srcFields={srcFields}
                           destFields={destFields}
+                          allowNewDest={isSpSource(selectedDest) || (isDbDest(selectedDest) && createNewTable)}
+                          isKey={!!effectiveKey && (m.destinations || []).includes(effectiveKey)}
+                          onSetKey={() => setMappingKey(i)}
                           onUpdate={(updated) => updateMapping(i, updated)}
                           onRemove={() => removeMapping(i)}
                           expanded={expandedMapping === i}
@@ -2502,47 +2924,12 @@ export default function WizardPage() {
                       </thead>
                       <tbody>
                         {fetchResult.tickets.slice(0, 3).map((ticket, rowIdx) => {
-                          // Apply each mapping to this ticket
-                          const getNestedValue = (obj, path) => {
-                            if (!obj || !path) return '';
-                            const parts = path.split('.');
-                            let val = obj;
-                            for (const p of parts) {
-                              if (val == null) return '';
-                              if (p === 'fields' || p === 'key' || p === 'id') val = val[p];
-                              else val = val.fields?.[p] ?? val[p];
-                            }
-                            return val;
-                          };
-
-                          const applyTransform = (m, ticket) => {
+                          // Use the SAME evaluator as the push so preview == what's written
+                          // (includes sum/avg/min/max/count + type casts).
+                          const applyTransform = (m, t) => {
                             try {
-                              const srcVal = m.sources.map(s => {
-                                const raw = getNestedValue(ticket, s);
-                                if (raw && typeof raw === 'object') {
-                                  if (raw.name) return raw.name;
-                                  if (raw.displayName) return raw.displayName;
-                                  if (Array.isArray(raw)) return raw.map(v => typeof v === 'object' ? (v.name || JSON.stringify(v)) : v).join(', ');
-                                  return JSON.stringify(raw);
-                                }
-                                return raw ?? '';
-                              });
-
-                              if (m.transform === 'DIRECT') return String(srcVal[0] ?? '');
-                              if (m.preset === 'dateFormat') return String(srcVal[0] ?? '').substring(0, 10);
-                              if (m.preset === 'uppercase') return String(srcVal[0] ?? '').toUpperCase();
-                              if (m.preset === 'lowercase') return String(srcVal[0] ?? '').toLowerCase();
-                              if (m.preset === 'trim') return String(srcVal[0] ?? '').trim();
-                              if (m.preset === 'joinArray') return Array.isArray(srcVal[0]) ? srcVal[0].join(', ') : String(srcVal[0] ?? '');
-                              if (m.preset === 'extractNumber') { const n = String(srcVal[0] ?? '').match(/\d+/); return n ? n[0] : ''; }
-                              if (m.preset === 'boolean') return srcVal[0] ? 'true' : 'false';
-                              if (m.transform === 'EXPRESSION' && m.expression) {
-                                const source = {};
-                                m.sources.forEach((s, i) => { source[s] = srcVal[i]; });
-                                const fn = new Function('source', m.expression);
-                                return String(fn(source) ?? '');
-                              }
-                              return String(srcVal.join(', '));
+                              const v = computeMappedValue(m, t);
+                              return v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? '');
                             } catch (e) { return `ERR: ${e.message}`; }
                           };
 

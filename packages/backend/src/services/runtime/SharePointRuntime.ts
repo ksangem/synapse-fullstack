@@ -10,6 +10,14 @@
 import { SharePointGraphReader } from '../../integrations/sharepoint-source/SharePointGraphReader';
 import type { IConnectorRuntime, RuntimeCapabilities, RuntimeContext, Creds, TestResult, FetchResult, PushResult, EntitySummary, FieldDef } from './types';
 import { CAPABILITIES } from './registry-caps';
+import { config } from '../../config';
+
+// SharePoint list columns that are read-only / system-managed and cannot be written.
+const READONLY_SP_FIELDS = new Set([
+  'id', 'ContentType', 'Attachments', 'Edit', 'LinkTitleNoMenu', 'LinkTitle',
+  'ItemChildCount', 'FolderChildCount', 'Created', 'Modified', 'Author', 'Editor',
+  'AppAuthor', 'AppEditor', '_UIVersionString', '_ComplianceFlags', '_ComplianceTag',
+]);
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 
@@ -36,8 +44,14 @@ export class SharePointRuntime implements IConnectorRuntime {
   readonly capabilities: RuntimeCapabilities = CAPABILITIES.sharepoint;
 
   private creds(c: Creds) {
-    if (!c.siteUrl || !c.tenantId || !c.clientId || !c.clientSecret) throw new Error('Missing SharePoint creds (siteUrl, tenantId, clientId, clientSecret)');
-    return { siteUrl: c.siteUrl, tenantId: c.tenantId, clientId: c.clientId, clientSecret: c.clientSecret };
+    // Azure creds may come from the request OR fall back to .env (like the hub/sharepoint routes).
+    const tenantId = (c.tenantId as string) || config.AZURE_TENANT_ID;
+    const clientId = (c.clientId as string) || config.AZURE_CLIENT_ID;
+    const clientSecret = (c.clientSecret as string) || config.AZURE_CLIENT_SECRET;
+    if (!c.siteUrl || !tenantId || !clientId || !clientSecret) {
+      throw new Error('Missing SharePoint creds (siteUrl + tenantId/clientId/clientSecret in fields or .env)');
+    }
+    return { siteUrl: c.siteUrl as string, tenantId, clientId, clientSecret };
   }
 
   async test(creds: Creds): Promise<TestResult> {
@@ -89,8 +103,89 @@ export class SharePointRuntime implements IConnectorRuntime {
     return { records, totalCount: records.length };
   }
 
-  async push(): Promise<PushResult> {
-    throw new Error('SharePoint write uses the dedicated /api/sharepoint/push handler in this build.');
+  /**
+   * Write records into a destination SharePoint list (create new items via Graph).
+   * entityKey = destination list id. Read-only/system columns are stripped so a
+   * record fetched from another SP list can be written back cleanly.
+   */
+  async push(creds: Creds, entityKey: string, records: Record<string, unknown>[]): Promise<PushResult> {
+    const c = this.creds(creds);
+    const listId = entityKey || (creds.listId as string);
+    if (!listId) throw new Error('A destination list id (entity) is required');
+    const token = await getToken(c.tenantId, c.clientId, c.clientSecret);
+    const siteId = await resolveSiteId(c.siteUrl, token);
+
+    // Optional identity / match key (the column chosen via the ★ in the mapping step).
+    // When set, records are upserted: find an existing item whose key column equals the
+    // record's value → PATCH it; otherwise insert. The built-in `id` is never used as a
+    // key (SharePoint auto-generates it). Empty → insert-only (append every row).
+    const matchKey = typeof creds.matchKey === 'string' && creds.matchKey && creds.matchKey !== '__append__'
+      ? (creds.matchKey as string) : '';
+
+    const itemsUrl = `${GRAPH}/sites/${siteId}/lists/${listId}/items`;
+    const postItem = (fields: Record<string, unknown>) => fetch(itemsUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields }),
+    });
+    const patchItem = (itemId: string, fields: Record<string, unknown>) => fetch(`${itemsUrl}/${itemId}/fields`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(fields),
+    });
+    const findByKey = async (value: unknown): Promise<string | null> => {
+      if (value === null || value === undefined || value === '') return null;
+      const filter = encodeURIComponent(`fields/${matchKey} eq '${String(value).replace(/'/g, "''")}'`);
+      const r = await fetch(`${itemsUrl}?$filter=${filter}&$select=id&$top=1`, {
+        headers: { Authorization: `Bearer ${token}`, Prefer: 'HonorNonIndexedQueriesWarningMayFailRandomly' },
+      });
+      if (!r.ok) return null;
+      const data = await r.json() as { value?: Array<{ id: string }> };
+      return data.value?.[0]?.id ?? null;
+    };
+    const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
+    let created = 0;
+    let updated = 0;
+    let failed = 0;
+    const errors: string[] = [];
+    for (const rec of records) {
+      const fields: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(rec)) {
+        if (v === null || v === undefined) continue;
+        if (READONLY_SP_FIELDS.has(k) || k.startsWith('@') || k.startsWith('_')) continue;
+        fields[k] = v;
+      }
+
+      // Upsert: PATCH the existing item when the key matches, else insert.
+      if (matchKey) {
+        const existingId = await findByKey(rec[matchKey]);
+        if (existingId) {
+          let pr = await patchItem(existingId, fields);
+          for (let attempt = 0; !pr.ok && (pr.status === 400 || pr.status === 429) && attempt < 4; attempt++) {
+            await sleep(1500 * (attempt + 1));
+            pr = await patchItem(existingId, fields);
+          }
+          if (pr.ok) { updated++; } else { failed++; if (errors.length < 5) errors.push(`${pr.status}: ${(await pr.text()).slice(0, 160)}`); }
+          continue;
+        }
+      }
+
+      // Just-created columns can take several seconds to become writable — a write
+      // before they propagate returns 400 badArgument. Retry 400/429 with backoff.
+      let r = await postItem(fields);
+      for (let attempt = 0; !r.ok && (r.status === 400 || r.status === 429) && attempt < 4; attempt++) {
+        await sleep(1500 * (attempt + 1));
+        r = await postItem(fields);
+      }
+      if (r.ok) {
+        created++;
+      } else {
+        failed++;
+        if (errors.length < 5) errors.push(`${r.status}: ${(await r.text()).slice(0, 160)}`);
+      }
+    }
+    return { created, updated, failed, errors };
   }
 }
 
