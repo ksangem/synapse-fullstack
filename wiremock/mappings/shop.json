@@ -1,0 +1,9 @@
+{
+  "request": { "method": "GET", "urlPath": "/shop" },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "text/html" },
+    "bodyFileName": "shop.html"
+  },
+  "metadata": { "demo": "synapse-shop-scrape" }
+}

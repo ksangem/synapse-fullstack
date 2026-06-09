@@ -89,7 +89,8 @@ services:
 
   # ── Connector test sources / sinks (no cloud accounts needed) ──
 
-  # Mock REST / SaaS / SOAP source. Seed stubs via its __admin API (see DEMO_GUIDE.md).
+  # Mock REST / SaaS / SOAP source. Stubs auto-load from ./wiremock/mappings on startup;
+  # large response bodies (e.g. the scraping demo HTML) live in ./wiremock/__files.
   wiremock:
     image: wiremock/wiremock:3.9.1
     container_name: synapse-wiremock
@@ -98,6 +99,7 @@ services:
     command: ["--local-response-templating"]
     volumes:
       - ./wiremock/mappings:/home/wiremock/mappings
+      - ./wiremock/__files:/home/wiremock/__files
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/__admin/health"]
       interval: 10s
