@@ -11,6 +11,7 @@ import { SharePointGraphReader } from '../../integrations/sharepoint-source/Shar
 import type { IConnectorRuntime, RuntimeCapabilities, RuntimeContext, Creds, TestResult, FetchResult, PushResult, EntitySummary, FieldDef } from './types';
 import { CAPABILITIES } from './registry-caps';
 import { config } from '../../config';
+import { SharePointPushService, type GraphBatchRequest } from '../SharePointPushService';
 
 // SharePoint list columns that are read-only / system-managed and cannot be written.
 const READONLY_SP_FIELDS = new Set([
@@ -108,6 +109,27 @@ export class SharePointRuntime implements IConnectorRuntime {
    * entityKey = destination list id. Read-only/system columns are stripped so a
    * record fetched from another SP list can be written back cleanly.
    */
+  private pushSvc = new SharePointPushService();
+
+  // One paginated pass to map a key column's value → item id (for upsert), instead of a
+  // per-row $filter query.
+  private async bulkLoadByKey(siteId: string, listId: string, token: string, keyCol: string): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    let next: string | undefined = `${GRAPH}/sites/${siteId}/lists/${listId}/items?$expand=fields&$top=999`;
+    let guard = 0;
+    while (next && guard++ < 200) {
+      const r = await fetch(next, { headers: { Authorization: `Bearer ${token}`, Prefer: 'HonorNonIndexedQueriesWarningMayFailRandomly' } });
+      if (!r.ok) break;
+      const d = await r.json() as { value?: Array<{ id: string; fields?: Record<string, unknown> }>; '@odata.nextLink'?: string };
+      for (const it of d.value || []) {
+        const v = it.fields?.[keyCol];
+        if (v !== null && v !== undefined) map.set(String(v), it.id);
+      }
+      next = d['@odata.nextLink'];
+    }
+    return map;
+  }
+
   async push(creds: Creds, entityKey: string, records: Record<string, unknown>[]): Promise<PushResult> {
     const c = this.creds(creds);
     const listId = entityKey || (creds.listId as string);
@@ -115,40 +137,19 @@ export class SharePointRuntime implements IConnectorRuntime {
     const token = await getToken(c.tenantId, c.clientId, c.clientSecret);
     const siteId = await resolveSiteId(c.siteUrl, token);
 
-    // Optional identity / match key (the column chosen via the ★ in the mapping step).
-    // When set, records are upserted: find an existing item whose key column equals the
-    // record's value → PATCH it; otherwise insert. The built-in `id` is never used as a
-    // key (SharePoint auto-generates it). Empty → insert-only (append every row).
+    // Optional identity / match key (the ★ column). When set, records are upserted: an
+    // existing item with the same key value → PATCH, otherwise insert. Empty → insert-only.
     const matchKey = typeof creds.matchKey === 'string' && creds.matchKey && creds.matchKey !== '__append__'
       ? (creds.matchKey as string) : '';
+    const itemsRel = `/sites/${siteId}/lists/${listId}/items`;
 
-    const itemsUrl = `${GRAPH}/sites/${siteId}/lists/${listId}/items`;
-    const postItem = (fields: Record<string, unknown>) => fetch(itemsUrl, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fields }),
-    });
-    const patchItem = (itemId: string, fields: Record<string, unknown>) => fetch(`${itemsUrl}/${itemId}/fields`, {
-      method: 'PATCH',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(fields),
-    });
-    const findByKey = async (value: unknown): Promise<string | null> => {
-      if (value === null || value === undefined || value === '') return null;
-      const filter = encodeURIComponent(`fields/${matchKey} eq '${String(value).replace(/'/g, "''")}'`);
-      const r = await fetch(`${itemsUrl}?$filter=${filter}&$select=id&$top=1`, {
-        headers: { Authorization: `Bearer ${token}`, Prefer: 'HonorNonIndexedQueriesWarningMayFailRandomly' },
-      });
-      if (!r.ok) return null;
-      const data = await r.json() as { value?: Array<{ id: string }> };
-      return data.value?.[0]?.id ?? null;
-    };
-    const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+    // Resolve existing items once (bulk) for upsert, instead of a query per row.
+    const existing = matchKey ? await this.bulkLoadByKey(siteId, listId, token, matchKey) : new Map<string, string>();
 
-    let created = 0;
-    let updated = 0;
-    let failed = 0;
-    const errors: string[] = [];
+    // Build a PATCH/POST request per record.
+    const reqs: GraphBatchRequest[] = [];
+    const meta = new Map<string, { isCreate: boolean }>();
+    let rid = 0;
     for (const rec of records) {
       const fields: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(rec)) {
@@ -156,34 +157,36 @@ export class SharePointRuntime implements IConnectorRuntime {
         if (READONLY_SP_FIELDS.has(k) || k.startsWith('@') || k.startsWith('_')) continue;
         fields[k] = v;
       }
+      const id = String(++rid);
+      const existingId = matchKey ? existing.get(String(rec[matchKey])) : undefined;
+      if (existingId) { reqs.push({ id, method: 'PATCH', url: `${itemsRel}/${existingId}/fields`, body: fields }); meta.set(id, { isCreate: false }); }
+      else { reqs.push({ id, method: 'POST', url: itemsRel, body: { fields } }); meta.set(id, { isCreate: true }); }
+    }
 
-      // Upsert: PATCH the existing item when the key matches, else insert.
-      if (matchKey) {
-        const existingId = await findByKey(rec[matchKey]);
-        if (existingId) {
-          let pr = await patchItem(existingId, fields);
-          for (let attempt = 0; !pr.ok && (pr.status === 400 || pr.status === 429) && attempt < 4; attempt++) {
-            await sleep(1500 * (attempt + 1));
-            pr = await patchItem(existingId, fields);
-          }
-          if (pr.ok) { updated++; } else { failed++; if (errors.length < 5) errors.push(`${pr.status}: ${(await pr.text()).slice(0, 160)}`); }
-          continue;
-        }
+    // Execute in parallel Graph $batch chunks (20/req, 4 concurrent). Retry 400/429
+    // sub-failures over a few rounds with backoff — this absorbs freshly-created columns
+    // that aren't writable yet (the slow case the per-row path handled with 15s/item).
+    const SIZE = 20, CONCURRENCY = 4;
+    const results = new Map<string, { status: number; body: unknown }>();
+    let pending = reqs;
+    for (let round = 0; round <= 4 && pending.length; round++) {
+      if (round > 0) await new Promise((r) => setTimeout(r, 1500 * round));
+      const chunks: GraphBatchRequest[][] = [];
+      for (let i = 0; i < pending.length; i += SIZE) chunks.push(pending.slice(i, i + SIZE));
+      for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+        const wave = chunks.slice(i, i + CONCURRENCY);
+        const maps = await Promise.all(wave.map((ch) => this.pushSvc.sendBatch(ch, token)));
+        for (const m of maps) for (const [k, v] of m) results.set(k, v);
       }
+      pending = pending.filter((rq) => { const s = results.get(rq.id)?.status ?? 0; return (s === 400 || s === 429) && round < 4; });
+    }
 
-      // Just-created columns can take several seconds to become writable — a write
-      // before they propagate returns 400 badArgument. Retry 400/429 with backoff.
-      let r = await postItem(fields);
-      for (let attempt = 0; !r.ok && (r.status === 400 || r.status === 429) && attempt < 4; attempt++) {
-        await sleep(1500 * (attempt + 1));
-        r = await postItem(fields);
-      }
-      if (r.ok) {
-        created++;
-      } else {
-        failed++;
-        if (errors.length < 5) errors.push(`${r.status}: ${(await r.text()).slice(0, 160)}`);
-      }
+    let created = 0, updated = 0, failed = 0;
+    const errors: string[] = [];
+    for (const [id, m] of meta) {
+      const res = results.get(id);
+      if (res && res.status >= 200 && res.status < 300) { if (m.isCreate) created++; else updated++; }
+      else { failed++; if (errors.length < 5) errors.push(`${res?.status ?? 0}: ${(typeof res?.body === 'string' ? res.body : JSON.stringify(res?.body ?? '')).slice(0, 160)}`); }
     }
     return { created, updated, failed, errors };
   }

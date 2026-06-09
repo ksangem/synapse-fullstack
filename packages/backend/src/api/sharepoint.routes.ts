@@ -549,9 +549,9 @@ router.post('/ensure-list', async (req: Request, res: Response) => {
     const siteId = (req.body.siteId as string) || await spResolveSiteId(siteUrl, token);
     const wanted = (columns || []).filter((c) => c.name && !SP_SKIP_COLS.has(c.name) && !c.name.startsWith('_') && !c.name.startsWith('@'));
 
-    const listsRes = await fetch(`${SP_GRAPH}/sites/${siteId}/lists?$select=id,displayName`, { headers: { Authorization: `Bearer ${token}` } });
+    const listsRes = await fetch(`${SP_GRAPH}/sites/${siteId}/lists?$select=id,displayName,webUrl`, { headers: { Authorization: `Bearer ${token}` } });
     if (!listsRes.ok) throw new Error(`Failed to list lists (${listsRes.status})`);
-    const lists = (await listsRes.json() as { value?: Array<{ id: string; displayName: string }> }).value || [];
+    const lists = (await listsRes.json() as { value?: Array<{ id: string; displayName: string; webUrl?: string }> }).value || [];
     let list = lists.find((l) => l.displayName === listName);
     let created = false;
     const addedColumns: string[] = [];
@@ -560,7 +560,7 @@ router.post('/ensure-list', async (req: Request, res: Response) => {
       const body = { displayName: listName, list: { template: 'genericList' }, columns: wanted.map((c) => spColumnDef(c.name, c.type)) };
       const cr = await fetch(`${SP_GRAPH}/sites/${siteId}/lists`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (!cr.ok) throw new Error(`Create list failed (${cr.status}): ${(await cr.text()).slice(0, 200)}`);
-      list = await cr.json() as { id: string; displayName: string };
+      list = await cr.json() as { id: string; displayName: string; webUrl?: string };
       created = true;
       wanted.forEach((c) => addedColumns.push(c.name));
     } else {
@@ -573,7 +573,7 @@ router.post('/ensure-list', async (req: Request, res: Response) => {
       }
     }
 
-    res.json({ success: true, data: { siteId, listId: list.id, listName, created, addedColumns } });
+    res.json({ success: true, data: { siteId, listId: list.id, listName, created, addedColumns, webUrl: (list as { webUrl?: string }).webUrl ?? null } });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ success: false, error: message });

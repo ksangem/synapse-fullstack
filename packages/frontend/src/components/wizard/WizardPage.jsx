@@ -1005,7 +1005,7 @@ export default function WizardPage() {
       const result = await runtimeClient.push(destMeta.connectorId, destMeta.latestVersionId, listId, { ...destCreds, matchKey: effectiveKey || '__append__' }, records);
       if (result.ok && result.data?.success) {
         const d = result.data.data;
-        setPushResult({ pushRunId: 'sp-' + Date.now(), total: records.length, status: 'success', created: d.created, updated: d.updated || 0, failed: d.failed, errors: d.errors, listCreated: ens.data.data.created, addedColumns: ens.data.data.addedColumns });
+        setPushResult({ pushRunId: 'sp-' + Date.now(), total: records.length, status: 'success', created: d.created, updated: d.updated || 0, failed: d.failed, errors: d.errors, listCreated: ens.data.data.created, addedColumns: ens.data.data.addedColumns, listUrl: ens.data.data.webUrl });
         // Don't claim success if rows actually failed to write.
         if (d.failed > 0) setPushError(`${d.created} written, ${d.failed} failed — ${d.errors?.[0] || 'see SharePoint'}`);
         setPushStatus('done');
@@ -1280,26 +1280,26 @@ export default function WizardPage() {
     try {
       const { siteUrl, listName } = destCreds;
       let listId = destConnectionData?.listId;
-      // Creating a new list: provision it (and the mapped columns) before pushing.
-      // The dedicated upsert push only resolves an EXISTING list, so without this the
-      // push would fail for a brand-new list. SharePoint auto-generates each item's
-      // built-in `id` on insert, so we never create/map an id column (ensure-list skips it).
-      if (spDestCreateNew) {
-        // Jira→SP writes the fixed default-mapper columns (IssueKey, StatusName, …), NOT
-        // the wizard mappings, so we only create the list shell here and let the backend's
-        // ensurePushColumns create the exact columns the push will write. Passing the
-        // source-named mappings here would create mismatched lowercase columns.
-        const ens = await api.call('/api/sharepoint/ensure-list', {
-          siteUrl, siteId: destConnectionData?.siteId, listName, columns: [],
-          tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret,
-        });
-        if (!ens.ok || !ens.data?.success) {
-          setPushError(ens.data?.error || 'Failed to create the destination list');
-          setPushStatus('error');
-          return;
-        }
+      let listUrl = null;
+      // Resolve the destination list for EVERY Jira→SP push (new or existing): ensure-list
+      // finds-or-creates the list (shell only — the backend's ensurePushColumns then creates
+      // the fixed default-mapper columns) and returns its webUrl so the result can link to it.
+      // SharePoint auto-generates each item's built-in `id`, so no id column is created.
+      const ens = await api.call('/api/sharepoint/ensure-list', {
+        siteUrl, siteId: destConnectionData?.siteId, listName, columns: [],
+        tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret,
+      });
+      if (ens.ok && ens.data?.success) {
         listId = ens.data.data.listId;
+        listUrl = ens.data.data.webUrl;
+      } else if (spDestCreateNew) {
+        // Creating a brand-new list MUST succeed before we can push into it.
+        setPushError(ens.data?.error || 'Failed to create the destination list');
+        setPushStatus('error');
+        return;
       }
+      // else: existing list, ensure-list failed (e.g. env creds) — fall back to the
+      // resolved listId from the connection test and push without the link.
       const result = await api.pushToSharePoint({
         siteUrl, listName,
         runId: fetchResult.runId,
@@ -1311,7 +1311,7 @@ export default function WizardPage() {
       });
       if (result.ok && result.data?.success) {
         const d = result.data.data;
-        setPushResult({ pushRunId: d.pushRunId, total: d.total, status: 'running' });
+        setPushResult({ pushRunId: d.pushRunId, total: d.total, status: 'running', listUrl });
         setPushStatus('polling');
         pollPushProgress(d.pushRunId);
       } else if (result.status === 409) {
@@ -1325,7 +1325,7 @@ export default function WizardPage() {
         if (retry.ok && retry.data?.success) {
           const d = retry.data.data;
           setPushError('');
-          setPushResult({ pushRunId: d.pushRunId, total: d.total, status: 'running' });
+          setPushResult({ pushRunId: d.pushRunId, total: d.total, status: 'running', listUrl });
           setPushStatus('polling');
           pollPushProgress(d.pushRunId);
         } else { setPushError(retry.data?.error || 'Push failed'); setPushStatus('error'); }
@@ -1882,8 +1882,10 @@ export default function WizardPage() {
           }
         } else if (isSpSource(selectedDest)) {
           if (spDestCreateNew) {
-            // New list: destination columns mirror the source fields (editable in the mapping step).
-            setDestFields(sf.map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: false })));
+            // New list: mirror source fields into SP-SAFE column names (SharePoint internal
+            // names can't contain spaces/symbols, e.g. "Incident ID" -> "IncidentID"), so the
+            // created column and the written field match. Original name kept as the label.
+            setDestFields(sf.map((f) => ({ name: spSafeColName(f.name), displayName: f.displayName || f.name, type: f.type || 'text', required: false })));
           } else {
             const destResult = await api.getSharePointListFields({ siteUrl: destCreds.siteUrl, listName: destCreds.listName, siteId: destConnectionData?.siteId });
             if (destResult.ok && destResult.data?.success) {
@@ -2013,8 +2015,9 @@ export default function WizardPage() {
         const sf = (srcResult.ok && srcResult.data?.success) ? (srcResult.data.data?.fields || []) : [];
         setSrcFields(sf);
         if (spDestCreateNew) {
-          // New list: destination columns mirror the source fields (you can still edit them in the mapping step).
-          setDestFields(sf.map((f) => ({ name: f.name, displayName: f.displayName || f.name, type: f.type || 'text', required: false })));
+          // New list: SP-safe column names (no spaces/symbols), so the created column and the
+          // written field match — e.g. "Incident ID" -> "IncidentID". Label keeps the original.
+          setDestFields(sf.map((f) => ({ name: spSafeColName(f.name), displayName: f.displayName || f.name, type: f.type || 'text', required: false })));
         } else {
           const destResult = await api.getSharePointListFields({ siteUrl: destCreds.siteUrl, listName: destCreds.listName, siteId: destConnectionData?.siteId });
           if (destResult.ok && destResult.data?.success) {
@@ -2891,7 +2894,7 @@ export default function WizardPage() {
                   <div>
                     <div style={{ padding: '10px 14px', background: 'var(--success-dim)', border: '1px solid var(--success)', borderRadius: 8, marginBottom: 12 }}>
                       <div style={{ fontWeight: 700, color: 'var(--success)', fontSize: '.88rem' }}>
-                        &#9989; Fetched {fetchResult.totalCount} {isSpSource(selectedSource) ? 'items' : 'issues'}
+                        &#9989; Fetched {fetchResult.totalCount} {isSpSource(selectedSource) ? 'items' : selectedSource === 'Jira' ? 'issues' : 'records'}
                       </div>
                       <div style={{ fontSize: '.78rem', color: 'var(--text-secondary)', marginTop: 2 }}>
                         Run ID: <span style={{ fontFamily: 'monospace' }}>{fetchResult.runId}</span>
@@ -2911,11 +2914,18 @@ export default function WizardPage() {
                                   <th key={f.name} style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>{f.displayName || f.name}</th>
                                 ))}
                               </>
-                            ) : (
+                            ) : selectedSource === 'Jira' ? (
                               <>
                                 <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Key</th>
                                 <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Summary</th>
                                 <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Status</th>
+                              </>
+                            ) : (
+                              // Generic source (REST/DB/…): columns from the actual record keys.
+                              <>
+                                {Object.keys(fetchResult.tickets[0] || {}).slice(0, 5).map((c) => (
+                                  <th key={c} style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>{c}</th>
+                                ))}
                               </>
                             )}
                           </tr>
@@ -2934,7 +2944,7 @@ export default function WizardPage() {
                                     </td>
                                   ))}
                                 </>
-                              ) : (
+                              ) : selectedSource === 'Jira' ? (
                                 <>
                                   <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                                     {t.key || t.issueKey || '--'}
@@ -2945,6 +2955,15 @@ export default function WizardPage() {
                                   <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>
                                     {t.fields?.status?.name || t.status || '--'}
                                   </td>
+                                </>
+                              ) : (
+                                // Generic source: show the same record keys as the header.
+                                <>
+                                  {Object.keys(fetchResult.tickets[0] || {}).slice(0, 5).map((c) => (
+                                    <td key={c} style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
+                                      {String(t[c] ?? '').substring(0, 50)}
+                                    </td>
+                                  ))}
                                 </>
                               )}
                             </tr>
@@ -3229,6 +3248,12 @@ export default function WizardPage() {
                     <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
                       <button className="btn btn-outline" onClick={() => navigate('/connected')}>View Connected</button>
                       <button className="btn btn-outline" onClick={() => { setPushStatus('idle'); setPushResult(null); setQuickView(null); }}>Push Again</button>
+                      {pushResult?.listUrl && (
+                        <a className="btn btn-outline" href={pushResult.listUrl} target="_blank" rel="noopener noreferrer"
+                          style={{ textDecoration: 'none' }} title={pushResult.listUrl}>
+                          &#128279; Open list in SharePoint
+                        </a>
+                      )}
                       {(isDbDest(selectedDest)) && destCreds.table && (
                         <button
                           className="btn btn-primary btn-sm"
