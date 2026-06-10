@@ -127,6 +127,7 @@ export default function MonitorPage() {
         </div>
       </div>
 
+      <div className="page-body">
       {/* Dead Letter Queue — live data + manual replay (T-04) */}
       <DeadLetterPanel />
 
@@ -292,6 +293,7 @@ export default function MonitorPage() {
             )}
           </tbody>
         </table>
+      </div>
       </div>
     </div>
   );

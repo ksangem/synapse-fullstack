@@ -177,6 +177,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      <div className="page-body">
       {/* KPI Row */}
       <div className="grid-4 mb-20">
         <div className="card kpi-card">
@@ -240,7 +241,13 @@ export default function DashboardPage() {
         <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)' }}>Loading adapters…</div>
       ) : (
         <div
-          style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+            gap: 12,
+            maxHeight: 'calc(100vh - 240px)',
+            overflowY: 'auto',
+          }}
           className="mb-20"
         >
           {filteredTiles.map((tile, idx) => (
@@ -280,6 +287,7 @@ export default function DashboardPage() {
           </div>
           <MiniBars series={usingSample ? [] : errorSeries} color="#ef4444" empty="No failures recorded." />
         </div>
+      </div>
       </div>
     </div>
   );

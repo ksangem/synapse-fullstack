@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
+import { ConnectorIcon } from '../studio/StudioPage';
 
 /* Master Entity Catalog — real data from /api/entities. Entities are grouped by
    connector (our real "department"); usage bars reflect how often each field is
@@ -58,6 +59,7 @@ export default function CatalogPage() {
         <button className="btn btn-outline btn-sm" onClick={() => navigate('/studio')}>&#9881; Manage in Studio</button>
       </div>
 
+      <div className="page-body">
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20 }}>
         {/* ── Tree (connector → entities) ── */}
         <div className="card" style={{ padding: 12, alignSelf: 'start' }}>
@@ -70,7 +72,7 @@ export default function CatalogPage() {
                 onClick={() => toggle(g.connectorId)}
               >
                 <span style={{ fontSize: '.7rem' }}>{expanded[g.connectorId] ? '▼' : '▶'}</span>
-                <span>{g.icon || '\u{1F50C}'}</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center' }}><ConnectorIcon icon={g.icon} size={16} /></span>
                 <span>{g.connectorName}</span>
                 <span className="badge badge-neutral" style={{ fontSize: '.58rem', marginLeft: 'auto' }}>{g.entities.length}</span>
               </div>
@@ -148,7 +150,7 @@ export default function CatalogPage() {
                       style={{ color: 'var(--primary)', cursor: 'pointer', fontWeight: 600, fontSize: '.85rem' }}
                       onClick={() => navigate('/studio')}
                     >
-                      {selected.group.icon} {selected.group.connectorName}
+                      <ConnectorIcon icon={selected.group.icon} size={15} /> {selected.group.connectorName}
                       {selected.group.isSystem ? ' (built-in)' : ' (custom)'}
                     </div>
                   </div>
@@ -166,6 +168,7 @@ export default function CatalogPage() {
             </>
           )}
         </div>
+      </div>
       </div>
     </div>
   );

@@ -606,6 +606,26 @@ export default function WizardPage() {
   // Saved connections (loaded on mount)
   const [savedConnections, setSavedConnections] = useState([]);
   const [savedLoading, setSavedLoading] = useState(false);
+  // Horizontal "My Connections" strip — ref + one-card scroll for the arrow buttons.
+  const connStripRef = useRef(null);
+  // Whether there's more to scroll in each direction (drives the arrow disabled state).
+  const [connScroll, setConnScroll] = useState({ left: false, right: false });
+  const updateConnScroll = useCallback(() => {
+    const el = connStripRef.current;
+    if (!el) return;
+    const { scrollLeft, scrollWidth, clientWidth } = el;
+    setConnScroll({
+      left: scrollLeft > 1,
+      right: scrollLeft < scrollWidth - clientWidth - 1,
+    });
+  }, []);
+  const scrollConnStrip = (dir) => {
+    const el = connStripRef.current;
+    if (!el) return;
+    const card = el.querySelector('[data-conn-card]');
+    const step = card ? card.offsetWidth + 10 : 250; // card width + flex gap
+    el.scrollBy({ left: dir * step, behavior: 'smooth' });
+  };
 
   // One name for the whole integration (replaces per-side "Connection Name").
   const [connectionName, setConnectionName] = useState('');
@@ -614,6 +634,13 @@ export default function WizardPage() {
   const [connSearch, setConnSearch] = useState('');
   const [srcSysSearch, setSrcSysSearch] = useState('');
   const [destSysSearch, setDestSysSearch] = useState('');
+
+  // Re-evaluate arrow state when the list/filter changes or the window resizes.
+  useEffect(() => {
+    updateConnScroll();
+    window.addEventListener('resize', updateConnScroll);
+    return () => window.removeEventListener('resize', updateConnScroll);
+  }, [updateConnScroll, savedConnections, connSearch]);
 
   // SharePoint destination — list selection moved to Step 3 (existing vs. create new)
   const [spDestCreateNew, setSpDestCreateNew] = useState(false);
@@ -721,7 +748,11 @@ export default function WizardPage() {
       setSavedLoading(true);
       const res = await api.getSavedConnections();
       if (res.ok && res.data?.data) {
-        setSavedConnections(res.data.data.filter(c => c.status === 'active'));
+        // Newest first — latest-created connection shows on the left.
+        const active = res.data.data
+          .filter(c => c.status === 'active')
+          .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+        setSavedConnections(active);
       }
       setSavedLoading(false);
     })();
@@ -2159,6 +2190,7 @@ export default function WizardPage() {
         </div>
       </div>
 
+      <div className="page-body">
       {/* Stepper */}
       <div className="stepper">
         {stepLabels.map((label, i) => {
@@ -2219,7 +2251,16 @@ export default function WizardPage() {
                   <input value={connSearch} onChange={(e) => setConnSearch(e.target.value)} placeholder="Search connections..."
                     style={{ marginLeft: 'auto', maxWidth: 240, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.82rem' }} />
                 </div>
-                <div style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'stretch', gap: 6 }}>
+                  <button
+                    type="button"
+                    className="conn-strip-arrow"
+                    title="Scroll left"
+                    aria-label="Scroll connections left"
+                    disabled={!connScroll.left}
+                    onClick={() => scrollConnStrip(-1)}
+                  >&#8249;</button>
+                  <div ref={connStripRef} className="conn-strip" onScroll={updateConnScroll} style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 2, flex: 1 }}>
                   {savedConnections.filter((intg) => {
                     const q = connSearch.trim().toLowerCase();
                     if (!q) return true;
@@ -2231,6 +2272,7 @@ export default function WizardPage() {
                       <div
                         key={intg.integrationId}
                         className="card"
+                        data-conn-card
                         style={{
                           padding: '12px 14px', cursor: 'pointer', transition: 'all .15s',
                           border: '1px solid var(--border)', borderRadius: 8, flex: '0 0 240px',
@@ -2253,6 +2295,15 @@ export default function WizardPage() {
                       </div>
                     );
                   })}
+                  </div>
+                  <button
+                    type="button"
+                    className="conn-strip-arrow"
+                    title="Scroll right"
+                    aria-label="Scroll connections right"
+                    disabled={!connScroll.right}
+                    onClick={() => scrollConnStrip(1)}
+                  >&#8250;</button>
                 </div>
                 <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', marginTop: 8 }}>
                   Click a saved connection to auto-fill credentials and skip to Step 2. You can still change the project.
@@ -3330,6 +3381,7 @@ export default function WizardPage() {
         )}
       </div>
 
+      </div>
     </div>
   );
 }

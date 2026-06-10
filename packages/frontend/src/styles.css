@@ -42,7 +42,7 @@ html.dark-theme{
    every font size. Scales with the viewport (standard ~15px on phones → 18px on
    desktop) instead of the old fixed 14px that read too small. */
 html{font-size:clamp(15px, 0.5vw + 11px, 18px)}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg-main);color:var(--text);height:100vh;overflow:hidden;display:flex;flex-direction:column;transition:background .3s,color .3s}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg-main);color:var(--text);height:100vh;height:100dvh;overflow:hidden;display:flex;flex-direction:column;transition:background .3s,color .3s}
 /* React mounts the whole app here; it must fill the viewport and lay its children
    out as a column, otherwise the app collapses to content height (sidebar stops short). */
 #root{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
@@ -133,10 +133,14 @@ input:focus,select:focus,textarea:focus{border-color:var(--primary)}
 /* Page is the single scroll region and fills the full content width (containers
    use all available space). It never grows past the viewport: it scrolls inside
    itself, and min-height/min-width:0 + overflow keep it bounded to the screen. */
-.page.active{display:block;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:0 24px 24px;animation:pageFadeIn 0.15s ease}
+/* The page never scrolls itself: it's a flex column that fills the content area.
+   The header stays pinned (flex-shrink:0) and only .page-body scrolls, so the
+   content container always fits the screen and its content scrolls if needed. */
+.page.active{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;padding:0 24px;animation:pageFadeIn 0.15s ease}
+.page-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-bottom:24px}
 .wizard-content{min-height:0;padding-bottom:40px}
 @keyframes pageFadeIn{from{opacity:0}to{opacity:1}}
-.page-header{position:sticky;top:0;z-index:20;background:var(--bg-main);display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 0 12px;margin-bottom:8px}
+.page-header{flex-shrink:0;background:var(--bg-main);display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 0 12px;margin-bottom:8px}
 .page-title{font-size:1.4rem;font-weight:700}
 .page-subtitle{font-size:.85rem;color:var(--text-secondary);margin-top:2px}
 
@@ -191,6 +195,30 @@ tr:hover td{background:rgba(99,102,241,.03)}
 
 .clickable{cursor:pointer;transition:color var(--transition)}.clickable:hover{color:var(--primary)}
 
+/* Truncation utilities — clip long names/urls/ids with an ellipsis; pair with
+   .tip + data-tip to reveal the full value on hover. */
+.truncate{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.cell-truncate{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Reusable CSS-only tooltip — any element with class "tip" and a data-tip
+   attribute shows the note in a styled bubble on hover (no JS, no libraries). */
+.tip{position:relative}
+/* Lift the hovered element into a high stacking context so its tooltip paints
+   above sticky headers / siblings (z-index on ::after alone is not enough). */
+.tip[data-tip]:hover{z-index:500}
+.tip[data-tip]:hover::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);left:0;background:rgba(15,23,42,.92);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);color:#fff;border:1px solid var(--text);border-radius:var(--radius-sm);padding:6px 9px;font-size:.72rem;font-weight:400;line-height:1.35;white-space:normal;width:max-content;max-width:300px;text-align:left;z-index:400;box-shadow:var(--shadow-md);pointer-events:none}
+.tip[data-tip]:hover::before{content:'';position:absolute;bottom:calc(100% + 1px);left:14px;border:5px solid transparent;border-top-color:var(--text);z-index:400;pointer-events:none}
+/* Variant: render the bubble BELOW the element — use when the trigger sits at the
+   top of a clipped/overflow-hidden container (e.g. the Studio stepper). */
+.tip-below[data-tip]:hover::after{top:calc(100% + 6px);bottom:auto}
+.tip-below[data-tip]:hover::before{top:calc(100% + 1px);bottom:auto;border-top-color:transparent;border-bottom-color:var(--text)}
+/* Variant: show the note ABOVE the element, anchored to its RIGHT edge. Used for a
+   stepper pill that has another pill wrapped directly below it — keeping the note
+   above (over empty space) avoids both the next step and the heading below, while
+   the right-anchor keeps it from spilling over the following step. */
+.tip-aboveright[data-tip]:hover::after{top:auto;bottom:calc(100% + 6px);left:auto;right:0;max-width:260px}
+.tip-aboveright[data-tip]:hover::before{top:auto;bottom:calc(100% + 1px);left:auto;right:14px;border-top-color:var(--text);border-bottom-color:transparent}
+
 /* KPI Cards */
 .kpi-card{padding:18px;position:relative;overflow:hidden}
 .kpi-card .kpi-icon{font-size:1.6rem;margin-bottom:8px}
@@ -230,7 +258,7 @@ tr:hover td{background:rgba(99,102,241,.03)}
 .step.completed .step-line{background:var(--success)}
 
 /* ===== MAPPING CANVAS REDESIGN ===== */
-.mapping-container{display:flex;gap:0;height:calc(100vh - 260px);min-height:500px;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;position:relative}
+.mapping-container{display:flex;gap:0;height:calc(100dvh - 260px);min-height:500px;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;position:relative}
 .mapping-panel{flex:1;background:var(--bg-card);padding:12px;overflow-y:auto;flex-shrink:0}
 .mapping-panel:first-child{border-right:1px solid var(--border)}
 .mapping-panel:last-child{border-left:1px solid var(--border)}
@@ -310,6 +338,15 @@ html.dark-theme .json-bool{color:#c084fc}
 .connector-card:hover{border-color:var(--primary);transform:translateY(-2px)}
 .connector-card .conn-icon{font-size:2.2rem;margin-bottom:8px}
 .connector-card .conn-label{font-size:.85rem;font-weight:600}
+
+/* My Connections horizontal strip — hidden scrollbar + end arrows */
+.conn-strip{scrollbar-width:none;-ms-overflow-style:none;scroll-behavior:smooth}
+.conn-strip::-webkit-scrollbar{display:none}
+.conn-strip-arrow{flex:0 0 auto;align-self:stretch;width:30px;display:flex;align-items:center;justify-content:center;
+  background:var(--bg-card);color:var(--text-secondary);border:1px solid var(--border);border-radius:8px;
+  font-size:1.3rem;line-height:1;cursor:pointer;transition:all var(--transition);user-select:none}
+.conn-strip-arrow:hover:not(:disabled){border-color:var(--primary);color:var(--primary);background:var(--primary-dim)}
+.conn-strip-arrow:disabled{opacity:.35;cursor:default}
 
 /* Connector category expand */
 .connector-category-list{display:none;padding:8px 0}
@@ -427,7 +464,7 @@ html.dark-theme .json-bool{color:#c084fc}
 .mapper-toolbar .mapper-stats{font-size:.82rem;color:var(--text-secondary)}
 .mapper-toolbar .mapper-stats strong{color:var(--primary)}
 
-.mapper-layout{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:0;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;height:calc(100vh - 340px);min-height:400px;max-height:calc(100vh - 280px)}
+.mapper-layout{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:0;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;height:calc(100dvh - 320px);min-height:400px}
 .mapper-col{display:flex;flex-direction:column;background:var(--bg-card);overflow:hidden;min-width:0}
 .mapper-col:not(:last-child){border-right:1px solid var(--border)}
 /* Keep the 3-column mapper from overflowing: let tracks/fields shrink and cap controls. */
@@ -579,6 +616,10 @@ html.dark-theme .json-bool{color:#c084fc}
   /* Detail pane takes the full screen as an overlay */
   .detail-pane{position:fixed;top:0;right:0;height:100vh;z-index:120}
   .detail-pane.open{width:100%;min-width:0}
+  /* Fixed-width popovers/panels must not exceed the viewport on small screens */
+  .notification-dropdown{right:8px;left:8px;width:auto;max-width:calc(100vw - 16px)}
+  .help-panel{width:100vw;right:-100vw}
+  .search-results-dropdown{max-height:60vh}
   /* Mapping/mapper layouts stack and grow with content rather than fixed heights */
   .mapping-container,.mapper-layout{flex-direction:column;display:flex;height:auto;max-height:none;min-height:0}
   .mapper-layout{grid-template-columns:1fr}

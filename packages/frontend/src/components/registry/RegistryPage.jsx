@@ -177,6 +177,7 @@ export default function RegistryPage() {
         <button className="btn btn-primary btn-sm" onClick={() => navigate('/wizard')}>+ New Integration</button>
       </div>
 
+      <div className="page-body">
       <div className="flex gap-12 mb-16" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
         <div className="search-bar">
           <span className="search-icon">&#128269;</span>
@@ -250,6 +251,7 @@ export default function RegistryPage() {
           })}
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -175,6 +175,7 @@ export default function PushPage() {
         </button>
       </div>
 
+      <div className="page-body">
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
         {/* =========================================================== */}
         {/*  Left column - Push form                                    */}
@@ -427,6 +428,7 @@ export default function PushPage() {
           </div>
         </div>
       )}
+      </div>
 
       {/* ============================================================ */}
       {/*  Duplicate Push Modal                                        */}

@@ -106,6 +106,7 @@ export default function CanvasPage() {
         </div>
       </div>
 
+      <div className="page-body">
       <div className="card" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
         <label style={{ fontWeight: 600, fontSize: '.85rem' }}>Integration</label>
         <select value={integrationId} onChange={(e) => loadIntegration(e.target.value)} style={{ minWidth: 280 }}>
@@ -143,6 +144,7 @@ export default function CanvasPage() {
           showToast={showToast}
         />
       ))}
+      </div>
     </div>
   );
 }

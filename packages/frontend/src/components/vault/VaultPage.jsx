@@ -77,6 +77,7 @@ export default function VaultPage() {
         </div>
       </div>
 
+      <div className="page-body">
       <div className="table-wrap">
         <table>
           <thead>
@@ -147,6 +148,7 @@ export default function VaultPage() {
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

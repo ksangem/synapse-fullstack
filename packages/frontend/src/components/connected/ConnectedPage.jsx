@@ -409,6 +409,7 @@ export default function ConnectedPage() {
         </button>
       </div>
 
+      <div className="page-body">
       {/* Client groups */}
       {grouped.map((group) => (
         <div key={group.clientId} className="card" style={{ marginBottom: 16 }}>
@@ -538,6 +539,7 @@ export default function ConnectedPage() {
           </div>
         </div>
       )}
+      </div>
 
       {/* ============================================================ */}
       {/*  Sync Dialog Modal                                           */}

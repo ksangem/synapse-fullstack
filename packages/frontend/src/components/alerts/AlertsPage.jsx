@@ -121,6 +121,7 @@ export default function AlertsPage() {
         </div>
       </div>
 
+      <div className="page-body">
       <div id="alertsList">
         {filteredAlerts.length === 0 && (
           <div className="card" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>No alerts.</div>
@@ -164,6 +165,7 @@ export default function AlertsPage() {
             </div>
           );
         })}
+      </div>
       </div>
     </div>
   );

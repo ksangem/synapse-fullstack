@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { runtimeClient } from '../../services/runtimeClient';
 import { useToast } from '../../hooks/useToast';
+import CrawlRecorder from './CrawlRecorder';
 
 /* Connector Studio — design-time authoring over the real connector registry.
    Data-driven from the backend category registry (GET /api/connectors/meta/categories,
@@ -30,7 +31,7 @@ const AUTH_METHOD_LABEL = {
   connectionString: 'Connection String', awsKeys: 'AWS Access Keys', sshKey: 'SSH Key',
   serviceAccount: 'Service Account (JSON)', hmac: 'HMAC Signature', sasl: 'SASL/SCRAM',
   wsSecurity: 'WS-Security', clientCert: 'Client Certificate', appPassword: 'App Password',
-  apifyToken: 'Apify API Token',
+  apifyToken: 'Apify API Token', browserLogin: 'Browser Login (form + 2FA)',
 };
 const DB_ENGINE_LABEL_TO_KEY = { PostgreSQL: 'postgres', MySQL: 'mysql', 'SQL Server': 'sqlserver' };
 
@@ -205,7 +206,7 @@ export default function StudioPage() {
           </div>
         </div>
 
-        <div style={{ minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
+        <div style={{ minHeight: 0, overflowY: authoring ? 'visible' : 'auto', paddingRight: 4 }}>
           {authoring && (
             <AuthoringFlow
               categories={categories}
@@ -419,6 +420,32 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
   const fieldKeys = fields.map((f) => f.key).filter(Boolean);
   const authChoices = (cat?.authMethods || ['none']);
 
+  // Not every system needs all six stages. SharePoint/Database runtimes own their
+  // auth + operations, and categories with no design-time test have nothing to
+  // validate — so those stages are disabled (skipped on Next/Back, dimmed in the
+  // stepper, with a hover note explaining why). 1-based stage index → state.
+  const ownsAuthAndOps = runtimeKind === 'sharepoint' || runtimeKind === 'database';
+  const stepState = (i) => {
+    if (i === 2 && ownsAuthAndOps)
+      return { enabled: false, reason: `The ${runtimeKind} runtime handles authentication — no setup needed here.` };
+    if (i === 3 && ownsAuthAndOps)
+      return { enabled: false, reason: `The ${runtimeKind} runtime defines its own operations — nothing to select here.` };
+    if (i === 5 && !canTest)
+      return { enabled: false, reason: cat?.real
+        ? 'This runtime connects at Operator time — there is nothing to test at design time.'
+        : 'This category has no execution runtime yet — there is nothing to test at design time.' };
+    return { enabled: true };
+  };
+  // Skip over disabled stages when stepping forward/backward (clamped to 1..6).
+  const nextStep = (from) => { let n = from + 1; while (n <= 6 && !stepState(n).enabled) n++; return Math.min(n, 6); };
+  const prevStep = (from) => { let n = from - 1; while (n >= 1 && !stepState(n).enabled) n--; return Math.max(n, 1); };
+
+  // Never sit on a disabled stage (e.g. edit mode opens at step 2, which is
+  // disabled for SharePoint/Database) — advance to the nearest enabled one.
+  useEffect(() => {
+    if (registered && step != null && !stepState(step).enabled) setStep(nextStep(step));
+  }, [step, runtimeKind, registered]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const loadDraft = async (cId, vId) => {
     const [credRes, rcRes, entRes, opRes] = await Promise.all([
       api.call(`/api/connectors/${cId}/credential-schema?versionId=${vId}`, undefined, 'GET'),
@@ -479,7 +506,7 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
       setConnectorId(cId); setVersionId(vId);
       await loadDraft(cId, vId);
       setRegistered(true);
-      setStep(2);
+      setStep(nextStep(1));
       showToast('System registered — continue the design');
     } finally { setBusy(false); }
   };
@@ -547,18 +574,29 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
   const stageOk = registered;
 
   return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden' }}>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap', flexShrink: 0 }}>
-        {STAGES.map((s, i) => (
-          <div key={s} onClick={() => stageOk && setStep(i + 1)} style={{
-            padding: '4px 10px', borderRadius: 14, fontSize: '.72rem', cursor: stageOk ? 'pointer' : 'default',
-            background: step === i + 1 ? 'var(--primary)' : 'var(--bg-main)', color: step === i + 1 ? '#fff' : 'var(--text-dim)',
-            border: '1px solid var(--border)',
-          }}>{i + 1}. {s}</div>
-        ))}
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'visible' }}>
+      <div className="studio-stepper" style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap', flexShrink: 0 }}>
+        {STAGES.map((s, i) => {
+          const st = stepState(i + 1);
+          const active = step === i + 1;
+          return (
+            <div key={s}
+              className={st.enabled ? undefined : (i + 1 === 2 ? 'tip tip-aboveright' : 'tip tip-below')}
+              data-tip={st.enabled ? undefined : st.reason}
+              onClick={() => stageOk && st.enabled && setStep(i + 1)}
+              style={{
+                padding: '4px 10px', borderRadius: 14, fontSize: '.72rem',
+                cursor: !st.enabled ? 'not-allowed' : stageOk ? 'pointer' : 'default',
+                background: active ? 'var(--primary)' : 'var(--bg-main)',
+                color: active ? '#fff' : 'var(--text-dim)',
+                border: '1px solid var(--border)',
+                opacity: st.enabled ? 1 : 0.45,
+              }}>{i + 1}. {s}</div>
+          );
+        })}
         <button className="btn btn-ghost btn-sm" title="Close" onClick={onCancel} style={{ marginLeft: 'auto', fontSize: '1.05rem', lineHeight: 1, padding: '2px 9px' }}>{'✕'}</button>
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
+      <div className="studio-stage-body" style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
 
       {/* ── Stage 1: System Registration ── */}
       {step === 1 && (
@@ -688,7 +726,7 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
               </tr>
             ))}</tbody>
           </table>
-          <StageNav onCancel={onCancel} onBack={() => setStep(1)} onNext={() => setStep(3)} />
+          <StageNav onCancel={onCancel} onBack={() => setStep(prevStep(step))} onNext={() => setStep(nextStep(step))} />
         </div>
       )}
 
@@ -696,6 +734,11 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
       {step === 3 && registered && (
         <div>
           <div style={{ fontWeight: 700, marginBottom: 10 }}>3. Operation Selection</div>
+          {runtimeKind === 'scrape' && (
+            <div style={{ marginBottom: 14 }}>
+              <CrawlRecorder connectorId={connectorId} versionId={versionId} />
+            </div>
+          )}
           {runtimeKind === 'sharepoint' || runtimeKind === 'database' ? (
             <div style={{ padding: '8px 12px', background: 'var(--bg-main)', borderRadius: 6, fontSize: '.8rem', color: 'var(--text-dim)' }}>The {runtimeKind} runtime defines its own operations.</div>
           ) : (
@@ -719,7 +762,7 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
               </table>
             </>
           )}
-          <StageNav onCancel={onCancel} onBack={() => setStep(2)} onNext={() => setStep(4)} />
+          <StageNav onCancel={onCancel} onBack={() => setStep(prevStep(step))} onNext={() => setStep(nextStep(step))} />
         </div>
       )}
 
@@ -763,7 +806,7 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
               )}
             </Collapsible>
           ))}
-          <StageNav onCancel={onCancel} onBack={() => setStep(3)} onNext={() => setStep(5)} />
+          <StageNav onCancel={onCancel} onBack={() => setStep(prevStep(step))} onNext={() => setStep(nextStep(step))} />
         </div>
       )}
 
@@ -797,7 +840,7 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
                 : 'This category has no execution runtime yet, so there is no live test — publish it as a design-only template.'}
             </div>
           )}
-          <StageNav onCancel={onCancel} onBack={() => setStep(4)} onNext={() => setStep(6)} />
+          <StageNav onCancel={onCancel} onBack={() => setStep(prevStep(step))} onNext={() => setStep(nextStep(step))} />
         </div>
       )}
 
@@ -811,7 +854,7 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
           <button className="btn btn-outline btn-sm" disabled={busy} onClick={saveDraft} style={{ marginBottom: 12 }}>Save Draft</button>
           <StageNav
             onCancel={onCancel}
-            onBack={() => setStep(5)}
+            onBack={() => setStep(prevStep(step))}
             customNext={
               <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 {canTest && !tested && <span style={{ fontSize: '.72rem', color: 'var(--text-dim)' }}>Pass a test to publish</span>}

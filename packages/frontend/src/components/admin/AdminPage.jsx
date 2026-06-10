@@ -206,6 +206,7 @@ export default function AdminPage() {
         </div>
       </div>
 
+      <div className="page-body">
       <div className="tab-bar">
         <button
           className={`tab-btn${activeTab === 'users' ? ' active' : ''}`}
@@ -350,6 +351,7 @@ export default function AdminPage() {
             </tbody>
           </table>
         </div>
+      </div>
       </div>
     </div>
   );
