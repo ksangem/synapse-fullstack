@@ -989,9 +989,9 @@ export default function WizardPage() {
     // Kind/engine-based dispatch (NOT display-label) — so a cloned DB connector
     // like "pg-prod" routes correctly instead of falling through to SharePoint.
     if (isDbDest(selectedDest)) {
-      // SharePoint source uses the dedicated SP→DB handlers (the backend re-reads from
-      // the SP list). Any record-based source (Jira, …) pushes its fetched+mapped rows
-      // through the generic records→DB writer.
+      // Every record source — SharePoint, Jira, … — pushes its fetched+transformed
+      // rows through the generic records→DB writer so mapping presets/aggregations are
+      // applied. (The per-engine SP→DB handlers now just delegate to that writer.)
       if (isSpSource(selectedSource)) {
         const engine = dbCfg(selectedDest)?.engine;
         if (engine === 'mysql') handlePushToMysql();
@@ -1084,15 +1084,18 @@ export default function WizardPage() {
     setPushStatus('pushing'); setPushError(''); setPushResult(null);
     try {
       const cfg = dbCfg(selectedDest);
+      // Conn values may live on the saved/tested connection (SharePoint→DB) or
+      // directly on the destination creds (REST→DB).
+      const dbc = destConnectionData || destCreds;
       // Apply transforms client-side, then push the computed rows with identity mappings.
       const records = mapRecordsToDest();
       const dbMappings = mappings.flatMap((m) => (m.destinations || []).map((d, j) => ({ from: d, to: d, type: m.destTypes?.[j] || m.srcTypes?.[0] || 'string' }))).filter((m) => m.from);
       const result = await api.call('/api/connectors/runtime/push-to-db', {
         engine: cfg.engine,
         conn: {
-          host: destCreds.host, port: Number(destCreds.port) || cfg.defaultPort, database: destCreds.database,
-          username: destCreds.username, password: destCreds.password,
-          schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
+          host: dbc.host, port: Number(dbc.port) || cfg.defaultPort, database: dbc.database,
+          username: dbc.username, password: dbc.password,
+          schema: cfg.hasSchema ? (dbc.schema || cfg.defaultSchema) : undefined,
         },
         table: destCreds.table || 'rest_data',
         records,
@@ -1136,172 +1139,17 @@ export default function WizardPage() {
     }
   };
 
-  const handlePushToPg = async () => {
-    if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
-    setPushStatus('pushing');
-    setPushError('');
-    setPushResult(null);
-    try {
-      const pgCfg = destConnectionData || destCreds;
-      const targetTable = destCreds.table || 'sp_data';
-      const targetSchema = destCreds.schema || 'public';
+  // SharePoint-source → DB now flows through the same transform-aware path as every
+  // other record source (handleRestToDbPush), so mapping presets AND aggregations
+  // (sum/avg/min/max/count) are applied to the written rows. The old SP→DB endpoints
+  // (api.pushToPg/pushToMysql/pushToMssql) re-read the list server-side and did a raw
+  // column copy, which silently dropped every transform. The Step-5 fetch already
+  // pages the full list, so routing through the records writer loses no data.
+  const handlePushToPg = () => handleRestToDbPush();
 
-      // Build mappings from wizard mappings
-      const dbMappings = mappings.map(m => ({
-        from: m.sources[0] || '',
-        to: m.destinations[0] || '',
-        type: mapSpTypeToPgType(m.srcTypes?.[0] || 'text'),
-      }));
+  const handlePushToMysql = () => handleRestToDbPush();
 
-      const result = await api.pushToPg({
-        spConfig: {
-          siteId: srcConnectionData?.siteId,
-          listId: selectedEntity,
-          tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret,
-        },
-        pgConfig: {
-          host: pgCfg.host, port: Number(pgCfg.port) || 5432,
-          database: pgCfg.database, username: pgCfg.username, password: pgCfg.password,
-        },
-        targetSchema,
-        targetTable,
-        mappings: dbMappings,
-      });
-
-      if (result.ok && result.data?.success) {
-        const d = result.data.data;
-        setPushResult({
-          pushRunId: 'pg-' + Date.now(),
-          total: d.total,
-          status: 'success',
-          created: d.inserted,
-          updated: d.updated,
-          skipped: d.skipped || 0,
-          failed: d.errors,
-          tableCreated: d.tableCreated,
-          totalColumnsChanged: d.totalColumnsChanged || 0,
-          columnChanges: d.columnChanges || [],
-        });
-        setPushStatus('done');
-      } else {
-        setPushError(result.data?.error || 'Push failed');
-        setPushStatus('error');
-      }
-    } catch (err) {
-      setPushError('Network error during push');
-      setPushStatus('error');
-    }
-  };
-
-  const handlePushToMysql = async () => {
-    if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
-    setPushStatus('pushing');
-    setPushError('');
-    setPushResult(null);
-    try {
-      const mysqlCfg = destConnectionData || destCreds;
-      const targetTable = destCreds.table || 'sp_data';
-
-      const dbMappings = mappings.map(m => ({
-        from: m.sources[0] || '',
-        to: m.destinations[0] || '',
-        type: mapSpTypeToPgType(m.srcTypes?.[0] || 'text'),
-      }));
-
-      const result = await api.pushToMysql({
-        spConfig: {
-          siteId: srcConnectionData?.siteId,
-          listId: selectedEntity,
-          tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret,
-        },
-        mysqlConfig: {
-          host: mysqlCfg.host, port: Number(mysqlCfg.port) || 3306,
-          database: mysqlCfg.database, username: mysqlCfg.username, password: mysqlCfg.password,
-        },
-        targetTable,
-        mappings: dbMappings,
-      });
-
-      if (result.ok && result.data?.success) {
-        const d = result.data.data;
-        setPushResult({
-          pushRunId: 'mysql-' + Date.now(),
-          total: d.total,
-          status: 'success',
-          created: d.inserted,
-          updated: d.updated,
-          skipped: d.skipped || 0,
-          failed: d.errors,
-          tableCreated: d.tableCreated,
-          totalColumnsChanged: d.totalColumnsChanged || 0,
-          columnChanges: d.columnChanges || [],
-        });
-        setPushStatus('done');
-      } else {
-        setPushError(result.data?.error || 'Push failed');
-        setPushStatus('error');
-      }
-    } catch (err) {
-      setPushError('Network error during push');
-      setPushStatus('error');
-    }
-  };
-
-  const handlePushToMssql = async () => {
-    if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
-    setPushStatus('pushing');
-    setPushError('');
-    setPushResult(null);
-    try {
-      const mssqlCfg = destConnectionData || destCreds;
-      const targetTable = destCreds.table || 'sp_data';
-      const targetSchema = destCreds.schema || 'dbo';
-
-      const dbMappings = mappings.map(m => ({
-        from: m.sources[0] || '',
-        to: m.destinations[0] || '',
-        type: mapSpTypeToPgType(m.srcTypes?.[0] || 'text'),
-      }));
-
-      const result = await api.pushToMssql({
-        spConfig: {
-          siteId: srcConnectionData?.siteId,
-          listId: selectedEntity,
-          tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret,
-        },
-        mssqlConfig: {
-          host: mssqlCfg.host, port: Number(mssqlCfg.port) || 1433,
-          database: mssqlCfg.database, username: mssqlCfg.username, password: mssqlCfg.password,
-        },
-        targetSchema,
-        targetTable,
-        mappings: dbMappings,
-      });
-
-      if (result.ok && result.data?.success) {
-        const d = result.data.data;
-        setPushResult({
-          pushRunId: 'mssql-' + Date.now(),
-          total: d.total,
-          status: 'success',
-          created: d.inserted,
-          updated: d.updated,
-          skipped: d.skipped || 0,
-          failed: d.errors,
-          tableCreated: d.tableCreated,
-          totalColumnsChanged: d.totalColumnsChanged || 0,
-          columnChanges: d.columnChanges || [],
-        });
-        setPushStatus('done');
-      } else {
-        setPushError(result.data?.error || 'Push failed');
-        setPushStatus('error');
-      }
-    } catch (err) {
-      setPushError('Network error during push');
-      setPushStatus('error');
-    }
-  };
+  const handlePushToMssql = () => handleRestToDbPush();
 
   const handlePushToSharePoint = async () => {
     if (!fetchResult?.runId) { setPushError('No Jira data fetched. Go back and fetch first.'); return; }
@@ -2135,6 +1983,25 @@ export default function WizardPage() {
     setExpandedMapping(mappings.length);
   }, [mappings.length]);
 
+  // Flush any new columns typed into mapping rows ("+ New column…") into the
+  // destination pane so they show up on the right. The columns are physically
+  // created at push time (ensure-list for SharePoint, dbMappings for databases);
+  // this reflects them in the UI now so the mapping is visibly complete.
+  const applyMappedColumns = useCallback(() => {
+    setDestFields(prev => {
+      const existing = new Set(prev.map(f => f.name));
+      const seen = new Set();
+      const additions = [];
+      mappings.forEach(m => (m.destinations || []).forEach((d, j) => {
+        const name = (d || '').trim();
+        if (!name || existing.has(name) || seen.has(name)) return;
+        seen.add(name);
+        additions.push({ name, displayName: name, type: (m.destTypes || [])[j] || 'string', required: false, isNew: true });
+      }));
+      return additions.length ? [...prev, ...additions] : prev;
+    });
+  }, [mappings]);
+
   // ─── Filtered field lists for Step 4 ────────────────────
   const filteredSrc = useMemo(() => {
     if (!srcSearch) return srcFields;
@@ -2151,6 +2018,13 @@ export default function WizardPage() {
   // Which fields are mapped?
   const mappedSrcNames = useMemo(() => new Set(mappings.flatMap(m => m.sources)), [mappings]);
   const mappedDestNames = useMemo(() => new Set(mappings.flatMap(m => m.destinations)), [mappings]);
+
+  // Mapped destination columns that aren't yet shown in the right pane — the ones
+  // "Apply changes" will flush in.
+  const pendingNewCols = useMemo(() => {
+    const existing = new Set(destFields.map(f => f.name));
+    return [...mappedDestNames].filter(name => name && !existing.has(name));
+  }, [mappedDestNames, destFields]);
 
   // Validation
   const requiredUnmapped = useMemo(() =>
@@ -2730,6 +2604,10 @@ export default function WizardPage() {
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button className="btn btn-primary btn-sm" onClick={handleAutoMap}>Auto-Map</button>
                     <button className="btn btn-outline btn-sm" onClick={() => { setMappings([]); setExpandedMapping(-1); }}>Clear All</button>
+                    <button className="btn btn-outline btn-sm" onClick={applyMappedColumns} disabled={pendingNewCols.length === 0}
+                      title={pendingNewCols.length ? `Add ${pendingNewCols.length} new mapped column(s) to ${selectedDest}: ${pendingNewCols.join(', ')}` : 'No new columns to apply — every mapped column already exists on the right'}>
+                      &#10003; Apply changes{pendingNewCols.length ? ` (${pendingNewCols.length})` : ''}
+                    </button>
                     <button className="btn btn-outline btn-sm" onClick={openInCanvas} title="Open these fields + mappings in the full Mapping Canvas (AI auto-map, transforms)">&#10138; Edit in Mapping Canvas</button>
                   </div>
                   <div className="mapper-stats">
@@ -2846,6 +2724,7 @@ export default function WizardPage() {
                           <span className="map-indicator"></span>
                           <span className="field-name">{f.displayName || f.name}</span>
                           <span className="field-type-tag">{f.type}</span>
+                          {f.isNew && <span className="field-type-tag" style={{ background: 'var(--primary-dim)', color: 'var(--primary)' }} title="Will be created on push">new</span>}
                           {f.required && <span className="field-required">*</span>}
                         </div>
                       ))}

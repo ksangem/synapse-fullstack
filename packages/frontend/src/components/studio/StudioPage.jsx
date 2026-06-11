@@ -39,10 +39,18 @@ const DB_ENGINE_LABEL_TO_KEY = { PostgreSQL: 'postgres', MySQL: 'mysql', 'SQL Se
 // Minimal offline fallback so the Studio still renders the real categories if the
 // backend is unreachable.
 const FALLBACK_CATEGORIES = [
-  { key: 'rest', label: 'REST API', icon: '\u{1F310}', runtimeKind: 'rest', defaultRole: 'both', real: true, authMethods: ['apiKey', 'bearer', 'basic', 'oauth2_client', 'none'], configFields: [{ key: 'baseUrl', label: 'Base URL', type: 'url', required: true }, { key: 'openApiSpec', label: 'OpenAPI Spec (JSON)', type: 'code' }], capabilities: { canTestAtDesignTime: true } },
-  { key: 'database', label: 'Database', icon: '\u{1F5C3}', runtimeKind: 'database', defaultRole: 'destination', real: true, authMethods: ['basic'], configFields: [{ key: 'engine', label: 'Engine', type: 'select', required: true, options: ['PostgreSQL', 'MySQL', 'SQL Server'] }], capabilities: { canTestAtDesignTime: false } },
-  { key: 'sharepoint', label: 'SharePoint', icon: '\u{1F4C1}', runtimeKind: 'sharepoint', defaultRole: 'both', real: true, authMethods: ['oauth2_client'], configFields: [], capabilities: { canTestAtDesignTime: true } },
+  { key: 'rest', label: 'REST API', icon: '\u{1F310}', runtimeKind: 'rest', defaultRole: 'both', real: true, status: 'ga', authMethods: ['apiKey', 'bearer', 'basic', 'oauth2_client', 'none'], configFields: [{ key: 'baseUrl', label: 'Base URL', type: 'url', required: true }, { key: 'openApiSpec', label: 'OpenAPI Spec (JSON)', type: 'code' }], capabilities: { canTestAtDesignTime: true } },
+  { key: 'database', label: 'Database', icon: '\u{1F5C3}', runtimeKind: 'database', defaultRole: 'destination', real: true, status: 'ga', authMethods: ['basic'], configFields: [{ key: 'engine', label: 'Engine', type: 'select', required: true, options: ['PostgreSQL', 'MySQL', 'SQL Server'] }], capabilities: { canTestAtDesignTime: false } },
+  { key: 'sharepoint', label: 'SharePoint', icon: '\u{1F4C1}', runtimeKind: 'sharepoint', defaultRole: 'both', real: true, status: 'ga', authMethods: ['oauth2_client'], configFields: [], capabilities: { canTestAtDesignTime: true } },
 ];
+
+// Runtime maturity badge shown on each category card in System Registration.
+const STATUS_BADGE = {
+  ga:      { label: 'GA',      color: 'var(--success)' },
+  beta:    { label: 'Beta',    color: 'var(--warning)' },
+  partial: { label: 'Partial', color: 'var(--text-dim)' },
+  planned: { label: 'Planned', color: 'var(--text-dim)' },
+};
 
 // ── Generic config-field renderer (FSD §5 per-category fields) ──
 function FieldInput({ field, value, onChange }) {
@@ -630,14 +638,23 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
           <div style={{ fontWeight: 700, marginBottom: 10 }}>1. System Registration</div>
           <div style={{ fontSize: '.8rem', color: 'var(--text-dim)', marginBottom: 8 }}>Choose the system category ({categories.length})</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px,1fr))', gap: 8, marginBottom: 14 }}>
-            {categories.map((c) => (
-              <div key={c.key} className="card" style={{ cursor: 'pointer', padding: 10, textAlign: 'center', borderColor: cat?.key === c.key ? 'var(--primary)' : undefined }}
-                onClick={() => { setCat(c); setRuntimeKind(c.runtimeKind); setDirection(c.defaultRole || 'source'); setConfig({}); }}>
+            {categories.map((c) => {
+              const badge = STATUS_BADGE[c.status] || (c.real ? STATUS_BADGE.ga : STATUS_BADGE.planned);
+              // Partial/Planned runtimes can't run an end-to-end flow yet, so their
+              // cards are disabled — dimmed, unclickable, with a hover reason — the
+              // same pattern the 6-stage stepper uses for skipped stages.
+              const disabled = c.status === 'partial' || c.status === 'planned';
+              return (
+              <div key={c.key} className="card"
+                title={disabled ? `Not selectable yet — ${c.statusNote || 'runtime incomplete'}` : (c.statusNote || c.note || '')}
+                style={{ cursor: disabled ? 'not-allowed' : 'pointer', padding: 10, textAlign: 'center', opacity: disabled ? 0.45 : 1, borderColor: cat?.key === c.key ? 'var(--primary)' : undefined }}
+                onClick={() => { if (disabled) return; setCat(c); setRuntimeKind(c.runtimeKind); setDirection(c.defaultRole || 'source'); setConfig({}); }}>
                 <div><ConnectorIcon icon={c.icon} size={22} /></div>
                 <div style={{ fontSize: '.75rem', fontWeight: 600 }}>{c.label}</div>
-                {c.real ? <div style={{ fontSize: '.58rem', color: 'var(--success)' }}>runtime ✓</div> : <div style={{ fontSize: '.58rem', color: 'var(--text-dim)' }}>design-only</div>}
+                <div style={{ fontSize: '.58rem', color: badge.color, fontWeight: 600 }}>{badge.label}</div>
               </div>
-            ))}
+            );
+            })}
           </div>
 
           <div className="form-row">
@@ -661,6 +678,11 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
               {cat.key === 'sharepoint' && <div style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>SharePoint uses the built-in Microsoft Graph runtime — credential fields and list discovery are set up for you.</div>}
               {cat.key === 'database' && <div style={{ fontSize: '.76rem', color: 'var(--text-dim)', marginBottom: 8 }}>Builds a reusable engine template (Docker-image model). <strong>No database is contacted now</strong> — the Operator connects in the Wizard.</div>}
               <ConfigFields fields={cat.configFields} values={config} onChange={(k, v) => setConfig((c) => ({ ...c, [k]: v }))} />
+              {cat.status && cat.status !== 'ga' && cat.statusNote && (
+                <div style={{ fontSize: '.74rem', color: cat.status === 'beta' ? 'var(--warning)' : 'var(--text-dim)', marginTop: 8 }}>
+                  {cat.status === 'beta' ? 'β Beta — ' : '◐ Partial — '}{cat.statusNote}
+                </div>
+              )}
               {!cat.real && <div style={{ fontSize: '.74rem', color: 'var(--warning)', marginTop: 8 }}>⚠ This category has no execution runtime yet — you can fully design &amp; publish it, but it won't move data until its runtime is added.</div>}
               {cat.note && <div style={{ fontSize: '.7rem', color: 'var(--text-dim)', marginTop: 6 }}>{cat.note}</div>}
             </div>

@@ -7,7 +7,8 @@
  * the marked values off the final page. Used by Studio Test/Validate and by the
  * Operator fetch (replay mode).
  */
-import { extractRecords } from './CrawlEngine';
+import { extractRecords, extractJsonRecords, type JsonSource } from './CrawlEngine';
+import type { FieldRule } from './fieldTransform';
 import type { StorageState } from './BrowserSessionService';
 import type { RecordedStep } from './BrowserStreamService';
 
@@ -31,6 +32,10 @@ export interface ReplayOptions {
   steps: RecordedStep[];
   rowSelector?: string;
   selectors: Record<string, string>;
+  /** Phase-1 field rules (selector + regex + type); take precedence over `selectors`. */
+  fields?: FieldRule[];
+  /** Phase-2 source: mine the final page's embedded JSON blob instead of the DOM. */
+  jsonSource?: JsonSource;
   storageState?: StorageState | null;
   extraHeaders?: Record<string, string> | null;
   stepTimeoutMs?: number;
@@ -101,7 +106,10 @@ export class StepReplayer {
       // Give the final view a moment to settle (SPA), then extract.
       await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
       if (opts.rowSelector) await page.waitForSelector(opts.rowSelector, { timeout: 8_000 }).catch(() => undefined);
-      const records = await extractRecords(page, opts.rowSelector || '', opts.selectors || {}, page.url());
+      const js = opts.jsonSource;
+      const records = (js && (js.scriptSelector || js.jsonVar))
+        ? await extractJsonRecords(page, js, opts.fields ?? [], page.url())
+        : await extractRecords(page, opts.rowSelector || '', opts.selectors || {}, page.url(), undefined, opts.fields);
       return { records, finalUrl: page.url(), stepsRun, errors };
     } finally {
       await browser.close().catch(() => undefined);

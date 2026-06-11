@@ -359,6 +359,14 @@ router.post('/push-to-pg', async (req: Request, res: Response) => {
         ];
         const ddl = `CREATE TABLE "${schema}"."${targetTable}" (\n  ${colDefs.join(',\n  ')}\n)`;
         await writer.applyDdl([ddl]);
+      } else {
+        // Schema evolution: add any mapped columns the existing table is missing, so a
+        // newly-mapped destination column is actually created instead of silently dropped.
+        const existing = new Set((await introspector.getColumnNames(schema, targetTable)).map((c) => c.toLowerCase()));
+        const missing = (mappings as DbColumnMapping[]).filter((m) => m.to && !existing.has(m.to.toLowerCase()));
+        if (missing.length) {
+          await writer.applyDdl(missing.map((m) => `ALTER TABLE "${schema}"."${targetTable}" ADD COLUMN IF NOT EXISTS "${m.to}" ${mapTypeToPg(m.type)}`));
+        }
       }
 
       // 3. Fetch SP items
@@ -697,6 +705,14 @@ router.post('/push-to-mysql', async (req: Request, res: Response) => {
         ];
         const ddl = `CREATE TABLE \`${dbName}\`.\`${targetTable}\` (\n  ${colDefs.join(',\n  ')}\n) ENGINE=InnoDB`;
         await writer.applyDdl([ddl]);
+      } else {
+        // Schema evolution: add any mapped columns the existing table is missing, so a
+        // newly-mapped destination column is actually created instead of silently dropped.
+        const existing = new Set((await introspector.getColumnNames(dbName, targetTable)).map((c) => c.toLowerCase()));
+        const missing = (mappings as DbColumnMapping[]).filter((m) => m.to && !existing.has(m.to.toLowerCase()));
+        if (missing.length) {
+          await writer.applyDdl(missing.map((m) => `ALTER TABLE \`${dbName}\`.\`${targetTable}\` ADD COLUMN \`${m.to}\` ${mapTypeToMysql(m.type)}`));
+        }
       }
 
       // Fetch SP items
@@ -975,6 +991,14 @@ router.post('/push-to-mssql', async (req: Request, res: Response) => {
         ];
         const ddl = `CREATE TABLE [${schema}].[${targetTable}] (\n  ${colDefs.join(',\n  ')}\n)`;
         await writer.applyDdl([ddl]);
+      } else {
+        // Schema evolution: add any mapped columns the existing table is missing, so a
+        // newly-mapped destination column is actually created instead of silently dropped.
+        const existing = new Set((await introspector.getColumnNames(schema, targetTable)).map((c) => c.toLowerCase()));
+        const missing = (mappings as DbColumnMapping[]).filter((m) => m.to && !existing.has(m.to.toLowerCase()));
+        if (missing.length) {
+          await writer.applyDdl(missing.map((m) => `ALTER TABLE [${schema}].[${targetTable}] ADD [${m.to}] ${mapTypeToMssql(m.type)}`));
+        }
       }
 
       // 2. Fetch SP items

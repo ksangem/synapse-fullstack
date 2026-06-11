@@ -27,6 +27,9 @@ export interface ConfigField {
   showWhen?: { field: string; in: Array<string | boolean> };
 }
 
+/** Runtime maturity, surfaced as a badge + tooltip in Studio's System Registration. */
+export type CategoryStatus = 'ga' | 'beta' | 'partial' | 'planned';
+
 export type AuthMethod =
   | 'none' | 'apiKey' | 'bearer' | 'basic' | 'oauth2_client' | 'oauth2_authcode'
   | 'connectionString' | 'awsKeys' | 'sshKey' | 'serviceAccount' | 'hmac'
@@ -41,6 +44,10 @@ export interface CategorySpec {
   defaultRole: RuntimeRole;
   /** does a working runtime exist yet? */
   real: boolean;
+  /** runtime maturity for the Studio badge (defaults to 'ga' when omitted). */
+  status?: CategoryStatus;
+  /** honest one-line limitation, shown on hover for non-GA categories. */
+  statusNote?: string;
   /** FSD §4 — supported auth methods for this category. */
   authMethods: AuthMethod[];
   /** FSD §5 — category-specific config fields (base §5.1 fields are universal, added by the UI). */
@@ -68,7 +75,7 @@ const baseCaps = (role: RuntimeRole, over: Partial<RuntimeCapabilities> = {}): R
 
 export const CATEGORY_REGISTRY: CategorySpec[] = [
   {
-    key: 'rest', label: 'REST API', icon: '\u{1F310}', runtimeKind: 'rest', defaultRole: 'both', real: true,
+    key: 'rest', label: 'REST API', icon: '\u{1F310}', runtimeKind: 'rest', defaultRole: 'both', real: true, status: 'ga',
     authMethods: ['apiKey', 'bearer', 'basic', 'oauth2_client', 'oauth2_authcode', 'none'],
     entityModel: 'spec',
     configFields: [
@@ -84,7 +91,7 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
     capabilities: baseCaps('both'),
   },
   {
-    key: 'database', label: 'Database', icon: '\u{1F5C3}', runtimeKind: 'database', defaultRole: 'destination', real: true,
+    key: 'database', label: 'Database', icon: '\u{1F5C3}', runtimeKind: 'database', defaultRole: 'destination', real: true, status: 'ga',
     authMethods: ['basic', 'connectionString'],
     entityModel: 'introspect',
     configFields: [
@@ -102,7 +109,7 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
     note: 'Generic template (Docker-image model): the Operator connects in the Wizard, not at design time.',
   },
   {
-    key: 'sharepoint', label: 'SharePoint', icon: '\u{1F4C1}', runtimeKind: 'sharepoint', defaultRole: 'both', real: true,
+    key: 'sharepoint', label: 'SharePoint', icon: '\u{1F4C1}', runtimeKind: 'sharepoint', defaultRole: 'both', real: true, status: 'ga',
     authMethods: ['oauth2_client'],
     entityModel: 'live',
     configFields: [
@@ -112,7 +119,8 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
     capabilities: baseCaps('both', { pushIsAsync: true }),
   },
   {
-    key: 'fileshare', label: 'File Share / Storage', icon: '\u{1F4C2}', runtimeKind: 'fileshare', defaultRole: 'both', real: true,
+    key: 'fileshare', label: 'File Share / Storage', icon: '\u{1F4C2}', runtimeKind: 'fileshare', defaultRole: 'both', real: true, status: 'partial',
+    statusNote: 'SFTP file listing works. S3, Azure Blob and Google Drive need their SDKs; content parsing is a follow-up.',
     authMethods: ['oauth2_client', 'awsKeys', 'sshKey', 'serviceAccount'],
     entityModel: 'sample',
     configFields: [
@@ -131,7 +139,7 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
     note: 'SFTP supported (list files); S3/Azure/Drive need their SDK. Content parsing via the Flat File parser is the follow-up.',
   },
   {
-    key: 'saas', label: 'SaaS Application', icon: '☁', runtimeKind: 'rest', defaultRole: 'both', real: true,
+    key: 'saas', label: 'SaaS Application', icon: '☁', runtimeKind: 'rest', defaultRole: 'both', real: true, status: 'ga',
     authMethods: ['oauth2_authcode', 'oauth2_client', 'apiKey', 'basic'],
     entityModel: 'spec',
     configFields: [
@@ -146,7 +154,8 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
     note: 'Runs on the REST runtime (pre-built vendor templates).',
   },
   {
-    key: 'mq', label: 'Message Queue / Event Bus', icon: '\u{1F4E9}', runtimeKind: 'mq', defaultRole: 'source', real: true,
+    key: 'mq', label: 'Message Queue / Event Bus', icon: '\u{1F4E9}', runtimeKind: 'mq', defaultRole: 'source', real: true, status: 'partial',
+    statusNote: 'Redis Streams works (peek/drain). Kafka, RabbitMQ, Azure Service Bus and SQS are not wired yet; no continuous consumer.',
     authMethods: ['sasl', 'basic', 'connectionString', 'awsKeys'],
     entityModel: 'live',
     configFields: [
@@ -165,7 +174,8 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
     note: 'Redis Streams supported (peek/drain via XRANGE); Kafka/RabbitMQ/SQS need their client. Continuous consumer worker is the follow-up.',
   },
   {
-    key: 'webhook', label: 'Webhook / Event Receiver', icon: '\u{1F517}', runtimeKind: 'webhook', defaultRole: 'source', real: true,
+    key: 'webhook', label: 'Webhook / Event Receiver', icon: '\u{1F517}', runtimeKind: 'webhook', defaultRole: 'source', real: true, status: 'partial',
+    statusNote: 'Inbound receiver works — POST events to /api/ingest/<id>; they drain on fetch. HMAC verification and replay are still maturing.',
     authMethods: ['hmac', 'bearer', 'none'],
     entityModel: 'sample',
     configFields: [
@@ -180,7 +190,8 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
     note: 'Inverted (inbound) — POST events to /api/ingest/<connectorId>; they land in the hub inbox and are drained on fetch.',
   },
   {
-    key: 'scrape', label: 'Web Scraping', icon: '\u{1F577}', runtimeKind: 'scrape', defaultRole: 'source', real: true,
+    key: 'scrape', label: 'Web Scraping', icon: '\u{1F577}', runtimeKind: 'scrape', defaultRole: 'source', real: true, status: 'partial',
+    statusNote: 'Playwright record-and-replay crawler works. Apify Cloud and some 2FA login flows are still maturing.',
     authMethods: ['browserLogin', 'apifyToken', 'none'],
     entityModel: 'sample',
     configFields: [
@@ -235,7 +246,8 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
     note: 'Record-and-replay crawler: use the Crawl Recorder (Operation step) to capture login + navigation + fields. Advanced mode exposes manual selectors/pagination.',
   },
   {
-    key: 'graphql', label: 'GraphQL API', icon: '\u{25C8}', runtimeKind: 'graphql', defaultRole: 'both', real: true,
+    key: 'graphql', label: 'GraphQL API', icon: '\u{25C8}', runtimeKind: 'graphql', defaultRole: 'both', real: true, status: 'partial',
+    statusNote: 'Queries, variables and auth work. Schema introspection, pagination and mutations are still maturing.',
     authMethods: ['none', 'bearer', 'apiKey', 'oauth2_client'],
     entityModel: 'live',
     configFields: [
@@ -249,7 +261,8 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
     note: 'Single-endpoint GraphQL runtime (query/mutation). Bind list queries + create mutations per entity.',
   },
   {
-    key: 'soap', label: 'SOAP / XML Web Service', icon: '\u{1F4E0}', runtimeKind: 'soap', defaultRole: 'both', real: true,
+    key: 'soap', label: 'SOAP / XML Web Service', icon: '\u{1F4E0}', runtimeKind: 'soap', defaultRole: 'both', real: true, status: 'partial',
+    statusNote: 'Reading works — WSDL parse and operation invoke. Writing (push) is not wired yet.',
     authMethods: ['wsSecurity', 'basic', 'clientCert'],
     entityModel: 'spec',
     configFields: [
@@ -259,10 +272,11 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
       { key: 'namespacePrefix', label: 'Custom Namespace Prefix', type: 'keyvalue' },
     ],
     capabilities: baseCaps('both'),
-    note: 'Runtime planned (Phase 5).',
+    note: 'WSDL parse + read (operation invoke) work. Write/push is not wired yet.',
   },
   {
-    key: 'email', label: 'Email / IMAP', icon: '\u{1F4E7}', runtimeKind: 'email', defaultRole: 'source', real: true,
+    key: 'email', label: 'Email / IMAP', icon: '\u{1F4E7}', runtimeKind: 'email', defaultRole: 'source', real: true, status: 'beta',
+    statusNote: 'Gmail and Generic IMAP work today via app password. Outlook 365 needs OAuth, which is not supported yet.',
     authMethods: ['oauth2_authcode', 'appPassword', 'basic'],
     entityModel: 'live',
     configFields: [
@@ -275,10 +289,10 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
       { key: 'markRead', label: 'Mark as Read on Ingest', type: 'checkbox' },
     ],
     capabilities: baseCaps('source', { lifecycle: 'long-running' }),
-    note: 'Runtime planned (Phase 4).',
+    note: 'IMAP read works (Gmail / Generic IMAP via app password). Outlook 365 needs OAuth — not yet wired.',
   },
   {
-    key: 'flatfile', label: 'Flat File / ERP Export', icon: '\u{1F4C4}', runtimeKind: 'flatfile', defaultRole: 'source', real: true,
+    key: 'flatfile', label: 'Flat File / ERP Export', icon: '\u{1F4C4}', runtimeKind: 'flatfile', defaultRole: 'source', real: true, status: 'ga',
     authMethods: ['none'],
     entityModel: 'sample',
     configFields: [

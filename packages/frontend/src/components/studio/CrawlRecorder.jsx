@@ -21,6 +21,19 @@ import { api } from '../../services/api';
 const WS_BASE = `ws://${window.location.hostname}:4000/api/crawl-studio/stream`;
 const CS = '/api/crawl-studio';
 
+// Entity-model field types (Phase 1). 'string' is the default / no-op.
+const FIELD_TYPES = ['string', 'number', 'boolean', 'datetime', 'json'];
+
+// Show the designer what their regex pulls out of the captured sample, live.
+function regexPreview(sample, regex) {
+  if (!regex) return null;
+  try {
+    const m = new RegExp(regex).exec(sample || '');
+    if (!m) return '∅ no match';
+    return `→ ${m[m.length > 1 ? 1 : 0]}`;
+  } catch { return '⚠ bad regex'; }
+}
+
 function Phase({ n, title, hint, children }) {
   return (
     <div style={{ borderTop: '1px solid var(--border)', paddingTop: 10, marginTop: 12 }}>
@@ -46,6 +59,9 @@ export default function CrawlRecorder({ connectorId, versionId }) {
   const [busy, setBusy] = useState('');
   const [testRecords, setTestRecords] = useState(null);
   const [savedMsg, setSavedMsg] = useState('');
+  const [sourceMode, setSourceMode] = useState('dom');                          // 'dom' | 'json'
+  const [jsonCfg, setJsonCfg] = useState({ scriptSelector: '', jsonVar: '', rootPath: '' });
+  const [jsonCands, setJsonCands] = useState(null);
 
   const imgRef = useRef(null);
   const wsRef = useRef(null);
@@ -140,21 +156,38 @@ export default function CrawlRecorder({ connectorId, versionId }) {
   const setF = (i, p) => setDiscovered((a) => a.map((f, idx) => (idx === i ? { ...f, ...p } : f)));
   const addManual = () => setDiscovered((a) => [...a, { label: '', name: '', selector: '', sample: '', attr: null, keep: true, manual: true }]);
 
-  // ── ④ save + test ──
-  const buildSelectors = () => {
-    const sel = {};
-    discovered.forEach((f) => {
-      if (!f.keep || !f.name || !f.selector) return;
-      sel[f.name] = f.attr ? `${f.selector}@${f.attr}` : f.selector;
-    });
-    return sel;
+  // ── JSON source (Phase 2) ──
+  const setJ = (p) => setJsonCfg((j) => ({ ...j, ...p }));
+  const detectJson = async () => {
+    setBusy('detect'); setStatus('Scanning page for embedded JSON…');
+    const r = await api.call(`${CS}/session/${sessionId}/detect-json`);
+    setBusy('');
+    if (r.data?.success) { setJsonCands(r.data.data.candidates || []); setStatus(`Found ${r.data.data.candidates?.length ?? 0} JSON source(s)`); }
+    else setStatus(r.data?.error || 'Detect failed');
   };
+  const useCand = (c) => setJ({ scriptSelector: c.scriptSelector || '', jsonVar: c.jsonVar || '' });
+
+  // ── ④ save + test ──
+  // Field rules: selector (DOM) or path (JSON) + optional regex + entity type.
+  const buildFields = () => discovered
+    .filter((f) => f.keep && f.name && (sourceMode === 'json' ? true : f.selector))
+    .map((f) => ({
+      name: f.name,
+      selector: f.selector || '',
+      attr: f.attr || null,
+      ...(sourceMode === 'json' && f.path ? { path: f.path } : {}),
+      ...(f.regex ? { regex: f.regex } : {}),
+      ...(f.type && f.type !== 'string' ? { type: f.type } : {}),
+    }));
   const saveRecipe = async () => {
     setBusy('save');
-    const selectors = buildSelectors();
-    const r = await api.call(`${CS}/session/${sessionId}/save-recipe`, { connectorId, versionId, rowSelector, selectors });
+    const fields = buildFields();
+    const jsonSource = sourceMode === 'json' && (jsonCfg.scriptSelector || jsonCfg.jsonVar)
+      ? { scriptSelector: jsonCfg.scriptSelector || undefined, jsonVar: jsonCfg.jsonVar || undefined, rootPath: jsonCfg.rootPath || undefined }
+      : undefined;
+    const r = await api.call(`${CS}/session/${sessionId}/save-recipe`, { connectorId, versionId, rowSelector, fields, jsonSource });
     setBusy('');
-    setSavedMsg(r.data?.success ? `Recipe saved (${r.data.data.stepCount} steps, ${Object.keys(selectors).length} fields)` : (r.data?.error || 'Save failed'));
+    setSavedMsg(r.data?.success ? `Recipe saved (${r.data.data.stepCount} steps, ${fields.length} fields)` : (r.data?.error || 'Save failed'));
   };
   const testReplay = async () => {
     setBusy('test'); setStatus('Replaying recipe headless…');
@@ -216,33 +249,92 @@ export default function CrawlRecorder({ connectorId, versionId }) {
             )}
           </Phase>
 
-          {/* ③ manual field picker */}
-          <Phase n="③" title="Pick fields" hint="Turn on Pick mode, hover a value in the browser above, and press S to capture it. Rename the labels below; Esc exits pick mode.">
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <button className={pickMode ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm'} onClick={() => togglePick()}>
-                {pickMode ? '🎯 Pick mode: ON — hover + press S' : '🎯 Pick mode'}
-              </button>
-              <button className="btn btn-ghost btn-sm" onClick={scanAll} disabled={busy === 'scan'}>Scan page (grab all)</button>
-              <button className="btn btn-ghost btn-sm" onClick={addManual}>+ Manual field</button>
-              <span style={{ fontSize: '.7rem', color: 'var(--text-dim)' }}>{keepCount} selected</span>
+          {/* ③ pick fields — from the DOM, or from an embedded JSON blob */}
+          <Phase n="③" title="Pick fields" hint="Capture the data from page elements, or — for SPAs like Jira — straight from an embedded JSON blob the page ships.">
+            {/* source toggle */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+              {[['dom', '🖱 Page elements'], ['json', '{ } Embedded JSON']].map(([m, lbl]) => (
+                <button key={m} className={sourceMode === m ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm'} onClick={() => setSourceMode(m)}>{lbl}</button>
+              ))}
             </div>
-            <div className="form-row" style={{ marginTop: 8 }}>
-              <div className="form-group" style={{ flex: 1 }}><label style={{ fontSize: '.72rem' }}>Row selector (optional — one record per match, for lists)</label>
-                <input value={rowSelector} onChange={(e) => setRowSelector(e.target.value)} placeholder="div.issue-row" style={{ fontFamily: 'monospace' }} />
-              </div>
-            </div>
+
+            {sourceMode === 'dom' && (
+              <>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button className={pickMode ? 'btn btn-primary btn-sm' : 'btn btn-outline btn-sm'} onClick={() => togglePick()}>
+                    {pickMode ? '🎯 Pick mode: ON — hover + press S' : '🎯 Pick mode'}
+                  </button>
+                  <button className="btn btn-ghost btn-sm" onClick={scanAll} disabled={busy === 'scan'}>Scan page (grab all)</button>
+                  <button className="btn btn-ghost btn-sm" onClick={addManual}>+ Manual field</button>
+                  <span style={{ fontSize: '.7rem', color: 'var(--text-dim)' }}>{keepCount} selected</span>
+                </div>
+                <div className="form-row" style={{ marginTop: 8 }}>
+                  <div className="form-group" style={{ flex: 1 }}><label style={{ fontSize: '.72rem' }}>Row selector (optional — one record per match, for lists)</label>
+                    <input value={rowSelector} onChange={(e) => setRowSelector(e.target.value)} placeholder="div.issue-row" style={{ fontFamily: 'monospace' }} />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {sourceMode === 'json' && (
+              <>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
+                  <button className="btn btn-outline btn-sm" onClick={detectJson} disabled={busy === 'detect'}>🔍 Detect embedded JSON</button>
+                  <button className="btn btn-ghost btn-sm" onClick={addManual}>+ Field</button>
+                </div>
+                {jsonCands && (
+                  <div style={{ fontSize: '.7rem', marginBottom: 6 }}>
+                    {jsonCands.length === 0 && <span style={{ color: 'var(--text-dim)' }}>No embedded JSON found on this page.</span>}
+                    {jsonCands.map((c, i) => (
+                      <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '2px 0' }}>
+                        <button className="btn btn-ghost btn-sm" onClick={() => useCand(c)}>Use</button>
+                        <code>{c.scriptSelector || c.jsonVar}</code>
+                        <span style={{ color: 'var(--text-dim)' }}>{Math.round((c.bytes || 0) / 1024)} KB · {(c.topKeys || []).slice(0, 6).join(', ')}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="form-row">
+                  <div className="form-group" style={{ flex: 1 }}><label style={{ fontSize: '.72rem' }}>Script selector</label>
+                    <input value={jsonCfg.scriptSelector} onChange={(e) => setJ({ scriptSelector: e.target.value })} placeholder='script#__NEXT_DATA__' style={{ fontFamily: 'monospace' }} />
+                  </div>
+                  <div className="form-group" style={{ flex: 1 }}><label style={{ fontSize: '.72rem' }}>…or JSON variable</label>
+                    <input value={jsonCfg.jsonVar} onChange={(e) => setJ({ jsonVar: e.target.value })} placeholder='__APOLLO_STATE__' style={{ fontFamily: 'monospace' }} />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group" style={{ flex: 1 }}><label style={{ fontSize: '.72rem' }}>Root path (to the array of items)</label>
+                    <input value={jsonCfg.rootPath} onChange={(e) => setJ({ rootPath: e.target.value })} placeholder='props.pageProps.issues' style={{ fontFamily: 'monospace' }} />
+                  </div>
+                </div>
+              </>
+            )}
             {discovered.length > 0 && (
               <table style={{ marginTop: 6, fontSize: '.72rem' }}>
-                <thead><tr><th style={{ width: 28 }}>✓</th><th>Field name</th><th>Selector</th><th>Sample</th></tr></thead>
+                <thead><tr><th style={{ width: 28 }}>✓</th><th>Field name</th><th>{sourceMode === 'json' ? 'JSON path' : 'Selector'}</th><th>Type</th><th>Regex</th><th>Sample</th></tr></thead>
                 <tbody>
-                  {discovered.map((f, i) => (
+                  {discovered.map((f, i) => {
+                    const prev = regexPreview(f.sample, f.regex);
+                    return (
                     <tr key={i} style={{ opacity: f.keep ? 1 : 0.5 }}>
                       <td style={{ textAlign: 'center' }}><input type="checkbox" checked={!!f.keep} onChange={(e) => setF(i, { keep: e.target.checked })} /></td>
-                      <td><input value={f.name} onChange={(e) => setF(i, { name: e.target.value })} placeholder={f.label || 'name'} style={{ width: 150 }} /></td>
-                      <td><input value={f.selector} onChange={(e) => setF(i, { selector: e.target.value })} style={{ fontFamily: 'monospace', width: 220 }} /></td>
-                      <td style={{ color: 'var(--text-dim)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.sample}>{f.sample}</td>
+                      <td><input value={f.name} onChange={(e) => setF(i, { name: e.target.value })} placeholder={f.label || 'name'} style={{ width: 130 }} /></td>
+                      <td>{sourceMode === 'json'
+                        ? <input value={f.path || ''} onChange={(e) => setF(i, { path: e.target.value })} placeholder="fields.summary" style={{ fontFamily: 'monospace', width: 200 }} />
+                        : <input value={f.selector} onChange={(e) => setF(i, { selector: e.target.value })} style={{ fontFamily: 'monospace', width: 200 }} />}</td>
+                      <td>
+                        <select value={f.type || 'string'} onChange={(e) => setF(i, { type: e.target.value })}>
+                          {FIELD_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </td>
+                      <td>
+                        <input value={f.regex || ''} onChange={(e) => setF(i, { regex: e.target.value })} placeholder="(\d+)\s*pts" style={{ fontFamily: 'monospace', width: 140 }} />
+                        {prev && <div style={{ fontSize: '.66rem', color: prev.startsWith('⚠') ? 'var(--danger, #e66)' : 'var(--text-dim)' }}>{prev}</div>}
+                      </td>
+                      <td style={{ color: 'var(--text-dim)', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={f.sample}>{f.sample}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             )}

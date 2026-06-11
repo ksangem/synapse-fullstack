@@ -22,7 +22,7 @@
  */
 import { connectorService } from '../ConnectorService';
 import { CredentialService } from '../CredentialService';
-import { crawlEngine, type CrawlSpec, type PaginationType, type PaginationSpec } from './CrawlEngine';
+import { crawlEngine, type CrawlSpec, type PaginationType, type PaginationSpec, type FieldRule, type JsonSource } from './CrawlEngine';
 import { browserSessionService, buildSessionKey, type LoginConfig, type LoginCreds } from './BrowserSessionService';
 import { stepReplayer } from './StepReplayer';
 import type { RecordedStep } from './BrowserStreamService';
@@ -60,6 +60,23 @@ export class ScrapeRuntime implements IConnectorRuntime {
   private fieldTypes(cfg: Cfg, creds: Creds): Record<string, string> | undefined {
     const m = this.parseJsonMap(creds.fieldTypes || cfg.fieldTypes);
     return Object.keys(m).length ? m : undefined;
+  }
+
+  /** Phase-1 field rules (selector + regex + type), authored as a JSON array on the connector. */
+  private fieldRules(cfg: Cfg, creds: Creds): FieldRule[] | undefined {
+    const raw = creds.fields || cfg.fields;
+    if (!raw) return undefined;
+    try { const a = JSON.parse(raw); return Array.isArray(a) && a.length ? (a as FieldRule[]) : undefined; }
+    catch { return undefined; }
+  }
+
+  /** Phase-2 `script-json` source: where the embedded JSON blob lives + its root path. */
+  private jsonSource(cfg: Cfg, creds: Creds): JsonSource | undefined {
+    const scriptSelector = creds.jsonScriptSelector || cfg.jsonScriptSelector;
+    const jsonVar = creds.jsonVar || cfg.jsonVar;
+    const rootPath = creds.jsonRootPath || cfg.jsonRootPath;
+    if (!scriptSelector && !jsonVar) return undefined;
+    return { scriptSelector: scriptSelector || undefined, jsonVar: jsonVar || undefined, rootPath: rootPath || undefined };
   }
 
   private parseJsonMap(raw: string | undefined): Record<string, string> {
@@ -137,6 +154,8 @@ export class ScrapeRuntime implements IConnectorRuntime {
       rowSelector: creds.rowSelector || cfg.rowSelector || undefined,
       selectors: this.selectors(cfg, creds),
       fieldTypes: this.fieldTypes(cfg, creds),
+      fields: this.fieldRules(cfg, creds),
+      jsonSource: this.jsonSource(cfg, creds),
       waitUntil,
       waitForSelector: cfg.waitForSelector || undefined,
       pagination: this.pagination(cfg),
@@ -233,9 +252,14 @@ export class ScrapeRuntime implements IConnectorRuntime {
 
   async discoverFields(creds: Creds, ctx: RuntimeContext): Promise<FieldDef[]> {
     const cfg = await this.cfg(ctx);
-    const base: FieldDef[] = (creds.rowSelector || cfg.rowSelector)
+    const version = await connectorService.getVersion(ctx.connectorId, ctx.versionId);
+    const recipe = (version?.runtimeConfig as { categoryConfig?: { recipe?: { fields?: FieldRule[]; rowSelector?: string } } })?.categoryConfig?.recipe;
+    const rules = this.fieldRules(cfg, creds) ?? recipe?.fields;
+    const isList = !!(creds.rowSelector || cfg.rowSelector || recipe?.rowSelector);
+    const base: FieldDef[] = isList
       ? [{ name: 'url', type: 'string' }]
       : [{ name: 'url', type: 'string' }, { name: 'title', type: 'string' }];
+    if (rules?.length) return [...base, ...rules.map((r) => ({ name: r.name, type: r.type ?? 'string' }))];
     return [...base, ...Object.keys(this.selectors(cfg, creds)).map((name) => ({ name, type: 'string' }))];
   }
 
@@ -265,12 +289,12 @@ export class ScrapeRuntime implements IConnectorRuntime {
   private async tryReplayRecipe(ctx: RuntimeContext): Promise<FetchResult | null> {
     const version = await connectorService.getVersion(ctx.connectorId, ctx.versionId);
     const cc = (version?.runtimeConfig as { categoryConfig?: Record<string, unknown> })?.categoryConfig ?? {};
-    const recipe = cc.recipe as { steps?: RecordedStep[]; rowSelector?: string; selectors?: Record<string, string> } | undefined;
+    const recipe = cc.recipe as { steps?: RecordedStep[]; rowSelector?: string; selectors?: Record<string, string>; fields?: FieldRule[]; jsonSource?: JsonSource } | undefined;
     if (!recipe?.steps?.length) return null;
     let storageState = null;
     if (typeof cc.sessionState === 'string') { try { storageState = JSON.parse(credentialService.decrypt(cc.sessionState)); } catch { /* no/expired session */ } }
     const result = await stepReplayer.replay({
-      steps: recipe.steps, rowSelector: recipe.rowSelector, selectors: recipe.selectors ?? {},
+      steps: recipe.steps, rowSelector: recipe.rowSelector, selectors: recipe.selectors ?? {}, fields: recipe.fields, jsonSource: recipe.jsonSource,
       storageState, paceMs: 600,
     });
     return { records: result.records, totalCount: result.records.length };

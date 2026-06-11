@@ -140,7 +140,6 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
           <circle cx="21" cy="21" r="1.5" fill="#a5b4fc" opacity=".8"/>
         </svg>
         Synapse
-        <span style={{ fontSize: '.65rem', fontWeight: 400, color: 'var(--text-dim)', background: 'var(--primary-dim)', padding: '2px 6px', borderRadius: '3px' }}>v2.4.1</span>
       </div>
 
       <div className="topbar-center">

@@ -231,6 +231,49 @@ const SUGGEST_SCRIPT = `
 })()
 `;
 
+export interface JsonSourceCandidate {
+  kind: 'script' | 'global';
+  label: string;
+  /** for a script tag: a CSS selector; for a global: the variable path. */
+  scriptSelector?: string;
+  jsonVar?: string;
+  /** top-level keys of the blob, to help the designer recognise + path into it. */
+  topKeys: string[];
+  bytes: number;
+}
+
+// Find embedded JSON: known SPA script tags + app-state globals. Returns a small,
+// serialisable summary per candidate (no megabyte blobs over the wire).
+const DETECT_JSON_SCRIPT = `
+(() => {
+  var out = [];
+  function summarise(obj) {
+    try {
+      var keys = (obj && typeof obj === 'object' && !Array.isArray(obj)) ? Object.keys(obj).slice(0, 25)
+        : (Array.isArray(obj) ? ['[array len ' + obj.length + ']'] : []);
+      var bytes = 0; try { bytes = JSON.stringify(obj).length; } catch (e) { bytes = 0; }
+      return { topKeys: keys, bytes: bytes };
+    } catch (e) { return { topKeys: [], bytes: 0 }; }
+  }
+  var scripts = document.querySelectorAll('script[type="application/json"], script[type="application/ld+json"], script#__NEXT_DATA__, script[id]');
+  for (var i = 0; i < scripts.length && out.length < 20; i++) {
+    var s = scripts[i];
+    var txt = (s.textContent || '').trim();
+    if (txt.length < 2 || (txt[0] !== '{' && txt[0] !== '[')) continue;
+    var parsed; try { parsed = JSON.parse(txt); } catch (e) { continue; }
+    var selector = s.id ? ('script#' + s.id) : ('script[type="' + (s.getAttribute('type') || 'application/json') + '"]');
+    var sum = summarise(parsed);
+    out.push({ kind: 'script', label: s.id || s.getAttribute('type') || 'json script', scriptSelector: selector, topKeys: sum.topKeys, bytes: sum.bytes });
+  }
+  var globals = ['__NEXT_DATA__', '__INITIAL_STATE__', '__APOLLO_STATE__', '__NUXT__', '__PRELOADED_STATE__', '__REDUX_STATE__', 'INITIAL_STATE'];
+  for (var j = 0; j < globals.length; j++) {
+    var v = window[globals[j]];
+    if (v && typeof v === 'object') { var g = summarise(v); out.push({ kind: 'global', label: 'window.' + globals[j], jsonVar: globals[j], topKeys: g.topKeys, bytes: g.bytes }); }
+  }
+  return out;
+})()
+`;
+
 export class BrowserStreamService {
   private sessions = new Map<string, LiveSession>();
 
@@ -370,6 +413,12 @@ export class BrowserStreamService {
     const candidates = await s.page.evaluate<FieldCandidate[]>(SUGGEST_SCRIPT);
     const title = await s.page.title().catch(() => '');
     return { url: s.page.url(), title, candidates: Array.isArray(candidates) ? candidates : [] };
+  }
+
+  /** Scan the live page for embedded JSON blobs (Phase-2 script-json source). */
+  async detectJsonSources(id: string): Promise<JsonSourceCandidate[]> {
+    const found = await this.get(id).page.evaluate<JsonSourceCandidate[]>(DETECT_JSON_SCRIPT);
+    return Array.isArray(found) ? found : [];
   }
 
   /** Turn the in-page hover highlight on/off (used while the designer picks fields). */

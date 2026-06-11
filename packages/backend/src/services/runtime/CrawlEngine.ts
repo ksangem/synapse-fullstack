@@ -17,6 +17,20 @@
  *  - Cleanup: the browser is always closed in a `finally`.
  */
 import type { StorageState } from './BrowserSessionService';
+import { applyFieldRules, coerceTypes, type FieldRule } from './fieldTransform';
+import { extractFromJson } from './jsonExtract';
+
+export type { FieldRule } from './fieldTransform';
+
+/** Phase-2 `script-json` source: where the embedded JSON blob lives on the page. */
+export interface JsonSource {
+  /** CSS selector for a `<script>` tag whose textContent is JSON (e.g. `script#__NEXT_DATA__`). */
+  scriptSelector?: string;
+  /** global variable path holding the data, e.g. `__NEXT_DATA__` or `window.__APOLLO_STATE__`. */
+  jsonVar?: string;
+  /** JSON path to the array of items within the blob (optional — whole doc if absent). */
+  rootPath?: string;
+}
 
 export type PaginationType = 'none' | 'urlParam' | 'nextButton' | 'infiniteScroll';
 
@@ -41,6 +55,11 @@ export interface CrawlSpec {
   selectors: Record<string, string>;
   /** optional field → canonical type for value coercion (number/boolean/datetime/json). */
   fieldTypes?: Record<string, string>;
+  /** optional Phase-1 field rules (selector + regex + type). When set, these define
+   *  the fields and their transforms, taking precedence over `selectors`/`fieldTypes`. */
+  fields?: FieldRule[];
+  /** optional Phase-2 source: mine records from an embedded JSON blob instead of the DOM. */
+  jsonSource?: JsonSource;
   waitUntil?: 'domcontentloaded' | 'load' | 'networkidle';
   waitForSelector?: string;
   pagination?: PaginationSpec;
@@ -110,12 +129,18 @@ export interface ExtractablePage {
  */
 export async function extractRecords(
   page: ExtractablePage, rowSel: string, selectors: Record<string, string>, url: string,
-  fieldTypes?: Record<string, string>,
+  fieldTypes?: Record<string, string>, rules?: FieldRule[],
 ): Promise<Record<string, unknown>[]> {
+  // Phase-1 field rules, when present, define both the selectors AND the post-extract
+  // transforms (regex + type). Otherwise fall back to the legacy `selectors` map.
+  const hasRules = !!(rules && rules.length);
+  const effectiveSelectors = hasRules
+    ? Object.fromEntries(rules!.map((r) => [r.name, r.attr ? `${r.selector}@${r.attr}` : r.selector]))
+    : (selectors || {});
   // Flatten to {name, candidates:[{css,attr}]} — each field can list `a || b` fallback
   // selectors (first that yields a value wins = lightweight self-healing). No inner
   // named functions inside the evaluate callback (esbuild keep-names → undefined __name).
-  const fields = Object.entries(selectors || {}).map(([name, s]) => ({
+  const fields = Object.entries(effectiveSelectors).map(([name, s]) => ({
     name,
     candidates: String(s).split('||').map((part) => parseFieldSpec(part)).filter((c) => c.css || c.attr),
   }));
@@ -157,30 +182,45 @@ export async function extractRecords(
   );
   const title = rowSel ? null : await page.title().catch(() => null);
   return rows.map((r) => {
-    const typed = fieldTypes ? coerceTypes(r, fieldTypes) : r;
+    const typed = hasRules
+      ? applyFieldRules(r, rules!).record
+      : (fieldTypes ? coerceTypes(r, fieldTypes) : r);
     return rowSel ? { url, ...typed } : { url, title, ...typed };
   });
 }
 
-/** Coerce extracted string values to canonical types (number/boolean/datetime/json). */
-function coerceTypes(rec: Record<string, string | null>, types: Record<string, string>): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...rec };
-  for (const [name, t] of Object.entries(types)) {
-    const raw = rec[name];
-    if (raw == null || raw === '') continue;
-    if (t === 'number') {
-      const n = Number(String(raw).replace(/[^0-9.\-]/g, ''));
-      if (Number.isFinite(n)) out[name] = n;
-    } else if (t === 'boolean') {
-      out[name] = /^(true|yes|1|✓|on|done|closed|complete)/i.test(String(raw).trim());
-    } else if (t === 'datetime') {
-      const d = new Date(String(raw));
-      if (!Number.isNaN(d.getTime())) out[name] = d.toISOString();
-    } else if (t === 'json') {
-      try { out[name] = JSON.parse(String(raw)); } catch { /* leave as string */ }
-    }
-  }
-  return out;
+/**
+ * Grab an embedded JSON blob off the current page and extract records from it
+ * (Phase-2 `script-json` source). Shared by the CrawlEngine and the StepReplayer.
+ * Reads either a `<script>` tag's text or a global variable, parses in Node, and
+ * applies the recipe's field rules via `extractFromJson`. Never throws — a missing
+ * blob or unparseable JSON yields `[]`.
+ */
+export async function extractJsonRecords(
+  page: ExtractablePage, src: JsonSource, rules: FieldRule[], url: string,
+): Promise<Record<string, unknown>[]> {
+  const raw = await page.evaluate<string | null, { scriptSelector: string; jsonVar: string }>(
+    ({ scriptSelector, jsonVar }) => {
+      const g = globalThis as unknown as { document: { querySelector(s: string): { textContent: string | null } | null } };
+      if (jsonVar) {
+        const parts = jsonVar.replace(/^window\./, '').split('.').filter(Boolean);
+        let cur: unknown = globalThis;
+        for (let i = 0; i < parts.length && cur != null; i++) cur = (cur as Record<string, unknown>)[parts[i]];
+        if (cur == null) return null;
+        try { return JSON.stringify(cur); } catch { return null; }
+      }
+      if (scriptSelector) {
+        const el = g.document.querySelector(scriptSelector);
+        return el ? el.textContent : null;
+      }
+      return null;
+    },
+    { scriptSelector: src.scriptSelector || '', jsonVar: src.jsonVar || '' },
+  );
+  if (!raw) return [];
+  let json: unknown;
+  try { json = JSON.parse(raw); } catch { return []; }
+  return extractFromJson(json, src.rootPath, rules).map((r) => ({ url, ...r }));
 }
 
 export class CrawlEngine {
@@ -377,7 +417,9 @@ export class CrawlEngine {
 
   /** Delegates to the shared `extractRecords` (also used by the step-replayer). */
   private async extractPage(page: PwPage, spec: CrawlSpec, url: string): Promise<Record<string, unknown>[]> {
-    return extractRecords(page, spec.rowSelector || '', spec.selectors || {}, url, spec.fieldTypes);
+    const js = spec.jsonSource;
+    if (js && (js.scriptSelector || js.jsonVar)) return extractJsonRecords(page, js, spec.fields ?? [], url);
+    return extractRecords(page, spec.rowSelector || '', spec.selectors || {}, url, spec.fieldTypes, spec.fields);
   }
 
   // ── robots.txt (opt-in) ──

@@ -104,6 +104,15 @@ router.post('/session/:id/scan-fields', async (req: Request, res: Response) => {
   } catch (err) { fail(res, err); }
 });
 
+// Scan the live page for embedded JSON blobs (Next.js, Apollo, ld+json, app globals)
+// so the designer can pick a `script-json` source without hunting through the DOM.
+router.post('/session/:id/detect-json', async (req: Request, res: Response) => {
+  try {
+    const candidates = await browserStreamService.detectJsonSources(String(req.params.id));
+    res.json({ success: true, data: { candidates } });
+  } catch (err) { fail(res, err); }
+});
+
 // Capture the authenticated session → encrypt → store as the connector's reusable creds.
 router.post('/session/:id/save-auth', async (req: Request, res: Response) => {
   try {
@@ -125,11 +134,12 @@ router.post('/session/:id/save-auth', async (req: Request, res: Response) => {
 // Persist the recorded steps + field selectors as the connector's crawl recipe.
 router.post('/session/:id/save-recipe', async (req: Request, res: Response) => {
   try {
-    const { connectorId, versionId, rowSelector, selectors } = req.body ?? {};
+    const { connectorId, versionId, rowSelector, selectors, fields, jsonSource } = req.body ?? {};
     if (!connectorId || !versionId) { fail(res, 'connectorId and versionId required'); return; }
     const steps = browserStreamService.getSteps(String(req.params.id));
+    const js = jsonSource && (jsonSource.scriptSelector || jsonSource.jsonVar) ? jsonSource : undefined;
     await patchCategoryConfig(connectorId, versionId, {
-      recipe: { steps, rowSelector: rowSelector || '', selectors: selectors || {} },
+      recipe: { steps, rowSelector: rowSelector || '', selectors: selectors || {}, fields: Array.isArray(fields) ? fields : [], jsonSource: js },
     });
     res.json({ success: true, data: { stepCount: steps.length } });
   } catch (err) { fail(res, err); }
@@ -147,12 +157,12 @@ router.post('/replay-test', async (req: Request, res: Response) => {
     const { connectorId, versionId } = req.body ?? {};
     const version = await connectorService.getVersion(connectorId, versionId);
     const cc = (version?.runtimeConfig as { categoryConfig?: Record<string, unknown> })?.categoryConfig ?? {};
-    const recipe = (cc.recipe as { steps?: unknown[]; rowSelector?: string; selectors?: Record<string, string> }) ?? {};
+    const recipe = (cc.recipe as { steps?: unknown[]; rowSelector?: string; selectors?: Record<string, string>; fields?: import('../services/runtime/fieldTransform').FieldRule[]; jsonSource?: import('../services/runtime/CrawlEngine').JsonSource }) ?? {};
     if (!recipe.steps?.length) { fail(res, 'No recorded recipe on this connector version'); return; }
     let storageState = null;
     if (typeof cc.sessionState === 'string') { try { storageState = JSON.parse(credentialService.decrypt(cc.sessionState)); } catch { /* none */ } }
     const result = await stepReplayer.replay({
-      steps: recipe.steps as never, rowSelector: recipe.rowSelector, selectors: recipe.selectors ?? {},
+      steps: recipe.steps as never, rowSelector: recipe.rowSelector, selectors: recipe.selectors ?? {}, fields: recipe.fields, jsonSource: recipe.jsonSource,
       storageState, paceMs: 400,
     });
     res.json({ success: true, data: result });
