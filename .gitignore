@@ -36,6 +36,13 @@ verify-*.png
 *.log
 npm-debug.log*
 
+# Debug/scratch probe output (leading-underscore files at repo/package root only;
+# scoped so it never shadows tracked files like src/db/migrations/meta/_journal.json)
+/_*.json
+/_*.txt
+/packages/backend/_*.json
+/packages/backend/_*.txt
+
 # Docker volumes
 synapse_pgdata/
 
