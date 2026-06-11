@@ -74,6 +74,7 @@ function AlertDetailContent({ alert, showToast, navigate }) {
 export default function AlertsPage() {
   const [severityFilter, setSeverityFilter] = useState('all');
   const [alerts, setAlerts] = useState([]);
+  const [loading, setLoading] = useState(true);
   const { openDetailPane } = useDetailPane();
   const { showToast } = useToast();
   const navigate = useNavigate();
@@ -81,9 +82,15 @@ export default function AlertsPage() {
   useEffect(() => {
     (async () => {
       const res = await api.getAlerts();
-      setAlerts((res.ok && Array.isArray(res.data?.data)) ? res.data.data : []);
+      if (res.ok && Array.isArray(res.data?.data)) {
+        setAlerts(res.data.data);
+      } else {
+        setAlerts([]);
+        showToast(res.data?.error || 'Could not load alerts');
+      }
+      setLoading(false);
     })();
-  }, []);
+  }, [showToast]);
 
   const unresolvedCount = alerts.filter(a => !a.resolved).length;
 
@@ -123,8 +130,13 @@ export default function AlertsPage() {
 
       <div className="page-body">
       <div id="alertsList">
-        {filteredAlerts.length === 0 && (
-          <div className="card" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>No alerts.</div>
+        {loading && (
+          <div className="card" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>Loading alerts…</div>
+        )}
+        {!loading && filteredAlerts.length === 0 && (
+          <div className="card" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>
+            {alerts.length === 0 ? 'No alerts — everything looks healthy.' : 'No alerts match this filter.'}
+          </div>
         )}
         {filteredAlerts.map((a, idx) => {
           const bgColor = a.severity === 'critical' && !a.resolved ? 'var(--error-dim)' : 'transparent';

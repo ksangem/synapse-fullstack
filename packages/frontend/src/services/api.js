@@ -6,7 +6,9 @@
 // → On your PC (localhost:5173) it calls localhost:4000.
 // → On QA's PC (http://192.168.x.x:5173) it calls http://192.168.x.x:4000 — same host, no config.
 // Override with VITE_API_URL in an .env file if backend runs elsewhere.
-const API = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:4000`;
+// VITE_API_URL='' (empty) → same-origin relative calls, so the Vite dev-server
+// proxy forwards /api to the backend (works over LAN IP and public tunnels alike).
+const API = import.meta.env.VITE_API_URL ?? `http://${window.location.hostname}:4000`;
 
 async function fetchApi(path, options = {}) {
   try {

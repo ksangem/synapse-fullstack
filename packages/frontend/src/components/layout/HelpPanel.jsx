@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 const helpArticles = [
   {
@@ -68,6 +68,14 @@ export default function HelpPanel({ isOpen, onClose }) {
     }
   }
 
+  // Close the panel on Escape while it's open.
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    function handleKey(e) { if (e.key === 'Escape') onClose(); }
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [isOpen, onClose]);
+
   const filteredArticles = helpArticles.map((cat) => ({
     ...cat,
     articles: cat.articles.filter(
@@ -78,10 +86,16 @@ export default function HelpPanel({ isOpen, onClose }) {
   })).filter((cat) => cat.articles.length > 0);
 
   return (
-    <div className={`help-panel${isOpen ? ' open' : ''}`}>
+    <div
+      className={`help-panel${isOpen ? ' open' : ''}`}
+      role="dialog"
+      aria-modal="false"
+      aria-label="Help Center"
+      aria-hidden={!isOpen}
+    >
       <div className="help-panel-header">
         <span style={{ fontWeight: 700, fontSize: '.95rem' }}>Help Center</span>
-        <button className="dp-close" onClick={onClose}>&times;</button>
+        <button className="dp-close" onClick={onClose} aria-label="Close help" title="Close">&times;</button>
       </div>
 
       <div className="help-tabs">
@@ -105,6 +119,7 @@ export default function HelpPanel({ isOpen, onClose }) {
             <input
               type="text"
               placeholder="Search articles..."
+              aria-label="Search help articles"
               value={articleSearch}
               onChange={(e) => setArticleSearch(e.target.value)}
               style={{ width: '100%' }}
@@ -136,13 +151,14 @@ export default function HelpPanel({ isOpen, onClose }) {
                   {i === 0 && msg.role === 'bot' && (
                     <div style={{ marginTop: '10px' }}>
                       {suggestions.map((s) => (
-                        <span
+                        <button
                           key={s}
+                          type="button"
                           className="ai-chip"
                           onClick={() => sendAIChat(s)}
                         >
                           {s}
-                        </span>
+                        </button>
                       ))}
                     </div>
                   )}

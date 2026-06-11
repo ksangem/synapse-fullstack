@@ -81,6 +81,9 @@ export class ConnectorAuthoringService {
    * connector for the matching engine, never from a live introspection.
    */
   private applyKindPreset(input: { runtimeKind?: string; engine?: string; runtimeConfig?: unknown; credentialSchema?: unknown; entities?: EntityInput[] }): void {
+    // Web Scraping (crawler): give the operator the fields they fill at connection
+    // time — the target URL plus, for authenticated crawls, the login credentials.
+    if (input.runtimeKind === 'scrape') { this.applyScrapePreset(input); return; }
     let key: string | null = null;
     let idField = 'host';
     if (input.runtimeKind === 'sharepoint') { key = 'sharepoint'; idField = 'siteUrl'; }
@@ -96,6 +99,36 @@ export class ConnectorAuthoringService {
     if (!fields.some((f) => f.key === idField)) input.credentialSchema = tpl.credentialSchema;
     if (!input.entities || input.entities.length === 0) {
       input.entities = tpl.entities.map((e) => ({ key: e.key, name: e.name, description: e.description, defaultOn: e.defaultOn, discovery: e.discovery }));
+    }
+  }
+
+  /** Inject the operator-facing credential fields for a crawler connector. */
+  private applyScrapePreset(input: { runtimeConfig?: unknown; credentialSchema?: unknown; entities?: EntityInput[] }): void {
+    const cc = (input.runtimeConfig as { categoryConfig?: Record<string, string> } | undefined)?.categoryConfig ?? {};
+    const browserLogin = cc.authMode === 'Browser Login' || !!cc.loginUrl;
+    const headerAuth = (cc.authMode || '').toLowerCase().includes('header') || (cc.authMode || '').toLowerCase().includes('token');
+    const existing = (input.credentialSchema as { version?: number; fields?: Array<{ key: string }> } | undefined)?.fields ?? [];
+    const have = new Set(existing.map((f) => f.key));
+    const add: Array<{ key: string; label: string; type: string; required?: boolean; secret?: boolean; defaultValue?: string }> = [];
+    const want = (f: { key: string; label: string; type: string; required?: boolean; secret?: boolean; defaultValue?: string }) => { if (!have.has(f.key)) add.push(f); };
+
+    want({ key: 'connectionName', label: 'Connection Name', type: 'text' });
+    // The target URL — operator can override the designer's default.
+    want({ key: 'targetUrls', label: 'Target URL(s) — one per line', type: 'textarea', defaultValue: cc.targetUrls || '' });
+    if (browserLogin) {
+      want({ key: 'loginUrl', label: 'Login URL', type: 'text', required: true, defaultValue: cc.loginUrl || '' });
+      want({ key: 'username', label: 'Username / Email', type: 'text', required: true });
+      want({ key: 'password', label: 'Password', type: 'password', required: true, secret: true });
+      want({ key: 'totpSecret', label: '2FA TOTP secret (if authenticator-app 2FA)', type: 'password', secret: true });
+    } else if (headerAuth) {
+      // e.g. Jira Cloud: email + API token → Basic auth header on every request.
+      want({ key: 'username', label: 'Username / Email', type: 'text', required: true });
+      want({ key: 'password', label: 'API token / password', type: 'password', required: true, secret: true });
+    }
+    input.credentialSchema = { version: 1, fields: [...existing, ...add] };
+
+    if (!input.entities || input.entities.length === 0) {
+      input.entities = [{ key: 'page', name: 'Scraped Page', description: 'One record per page, or per row when a row selector is set', discovery: 'live' }];
     }
   }
 

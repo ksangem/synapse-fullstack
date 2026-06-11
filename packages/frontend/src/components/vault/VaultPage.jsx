@@ -62,8 +62,8 @@ export default function VaultPage() {
         payload: { engine: dbForm.engine, host: dbForm.host, port: Number(dbForm.port), database: dbForm.database, username: dbForm.username, password: dbForm.password },
       });
       if (res.data?.success) { setDbSaveStatus('saved'); showToast('Database credential saved to vault'); loadCreds(); }
-      else setDbSaveStatus('error');
-    } catch { setDbSaveStatus('error'); }
+      else { setDbSaveStatus('error'); showToast(res.data?.error || 'Could not save credential to vault'); }
+    } catch (err) { setDbSaveStatus('error'); showToast(err.message || 'Network error while saving credential'); }
   };
 
   const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : '—');

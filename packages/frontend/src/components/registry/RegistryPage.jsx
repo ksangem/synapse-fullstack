@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDetailPane } from '../../hooks/useDetailPane';
+import { useToast } from '../../hooks/useToast';
 import { api } from '../../services/api';
 import { mapToCard, statusLabel } from '../../services/integrationMap';
 
 export default function RegistryPage() {
   const navigate = useNavigate();
   const { openDetailPane } = useDetailPane();
+  const { showToast } = useToast();
   const [searchTerm, setSearchTerm] = useState('');
   const [activeFilters, setActiveFilters] = useState(['All']);
 
@@ -21,13 +23,14 @@ export default function RegistryPage() {
       setLoading(true);
       const res = await api.getConnected();
       if (!alive) return;
+      if (!res.ok) showToast(res.data?.error || 'Could not load integrations');
       const rows = (res.ok && Array.isArray(res.data?.data)) ? res.data.data : [];
       setCards(rows.map(mapToCard));
       setUsingSample(false);
       setLoading(false);
     })();
     return () => { alive = false; };
-  }, []);
+  }, [showToast]);
 
   const filterOptions = ['All', 'Jira', 'SharePoint', 'PostgreSQL', 'SQL Server', 'Active', 'Error'];
 

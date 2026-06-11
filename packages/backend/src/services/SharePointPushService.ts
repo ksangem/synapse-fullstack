@@ -17,6 +17,43 @@ export interface GraphBatchRequest {
   body?: unknown;
 }
 
+export type SpColType = 'text' | 'number' | 'dateTime' | 'boolean' | 'other';
+
+// Fetch the destination list's ACTUAL column types once, so values can be coerced to match.
+// An existing list may have a column typed differently than the mapper assumes (e.g. a
+// StoryPoints column auto-created as Text on an older push) — writing a mismatched value
+// there fails the whole item with an opaque `generalException` (HTTP 500).
+export async function getColumnTypeMap(siteId: string, listId: string, token: string): Promise<Map<string, SpColType>> {
+  const map = new Map<string, SpColType>();
+  try {
+    const r = await fetch(`${GRAPH_BASE}/sites/${siteId}/lists/${listId}/columns?$select=name,text,number,dateTime,boolean`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) return map;
+    const d = await r.json() as { value?: Array<Record<string, unknown>> };
+    for (const c of d.value || []) {
+      const t: SpColType = c.text ? 'text' : c.number ? 'number' : c.dateTime ? 'dateTime' : c.boolean ? 'boolean' : 'other';
+      if (typeof c.name === 'string') map.set(c.name, t);
+    }
+  } catch { /* best-effort; empty map = no coercion */ }
+  return map;
+}
+
+// Coerce each field value to the destination column's actual type. The dominant fix is
+// "Text column ← non-string value" → stringify (SharePoint 500s on a number sent to a Text
+// column). Also handles "Number column ← numeric string" → number. Unknown columns are
+// left untouched.
+export function coerceToColumnTypes(fields: Record<string, unknown>, typeMap: Map<string, SpColType>): Record<string, unknown> {
+  if (!typeMap.size) return fields;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    const t = typeMap.get(k);
+    if (t === 'text' && typeof v !== 'string' && v !== null && v !== undefined) out[k] = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    else if (t === 'number' && typeof v === 'string') { const n = Number(v); out[k] = Number.isFinite(n) ? n : v; }
+    else out[k] = v;
+  }
+  return out;
+}
+
 // In-memory progress tracking for polling
 interface PushProgress {
   total: number;
@@ -293,9 +330,14 @@ export class SharePointPushService {
         })),
       }),
     });
+    // SharePoint returns `generalException` (HTTP 500) under list write contention,
+    // alongside the usual 429/503 throttling. When one sub-request in a $batch fails,
+    // the rest cascade to `FailedDependency` (HTTP 424). All of these are transient and
+    // must be re-queued — otherwise a single contended write fails the whole batch.
+    const isTransient = (s: number) => s === 429 || s === 503 || s === 500 || s === 424;
     try {
       let resp = await call();
-      for (let attempt = 0; !resp.ok && (resp.status === 429 || resp.status === 503) && attempt < 3; attempt++) {
+      for (let attempt = 0; !resp.ok && isTransient(resp.status) && attempt < 3; attempt++) {
         await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
         resp = await call();
       }
@@ -307,7 +349,7 @@ export class SharePointPushService {
       const data = await resp.json() as { responses?: Array<{ id: string; status: number; body?: unknown }> };
       const throttled: GraphBatchRequest[] = [];
       for (const rr of data.responses || []) {
-        if ((rr.status === 429 || rr.status === 503) && depth > 0) {
+        if (isTransient(rr.status) && depth > 0) {
           const orig = reqs.find((r) => r.id === rr.id);
           if (orig) { throttled.push(orig); continue; }
         }

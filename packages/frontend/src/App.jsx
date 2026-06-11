@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider } from './contexts/ToastContext';
+import { ConfirmProvider } from './contexts/ConfirmContext';
 import { DetailPaneProvider } from './contexts/DetailPaneContext';
 import { SidebarProvider } from './contexts/SidebarContext';
 
@@ -48,6 +49,7 @@ function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
+       <ConfirmProvider>
         <DetailPaneProvider>
           <SidebarProvider>
             <CriticalBanner />
@@ -81,6 +83,7 @@ function App() {
             <ToastNotification />
           </SidebarProvider>
         </DetailPaneProvider>
+       </ConfirmProvider>
       </ToastProvider>
     </ThemeProvider>
   );

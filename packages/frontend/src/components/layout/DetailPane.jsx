@@ -15,14 +15,20 @@ export default function DetailPane() {
   }, [isOpen, closeDetailPane]);
 
   return (
-    <div className={`detail-pane${isOpen ? ' open' : ''}`}>
+    <div
+      className={`detail-pane${isOpen ? ' open' : ''}`}
+      role="dialog"
+      aria-modal="false"
+      aria-label={title || 'Details'}
+      aria-hidden={!isOpen}
+    >
       <div className="detail-pane-header">
         <div className="dp-title">{title}</div>
-        <button className="dp-close" onClick={closeDetailPane}>&times;</button>
+        <button className="dp-close" onClick={closeDetailPane} aria-label="Close details" title="Close">&times;</button>
       </div>
       {breadcrumb && (
         <div className="detail-pane-breadcrumb">
-          <a onClick={closeDetailPane}>Home</a> &rsaquo; {breadcrumb}
+          <button type="button" className="link-btn" onClick={closeDetailPane}>Home</button> &rsaquo; {breadcrumb}
         </div>
       )}
       <div className="detail-pane-body">

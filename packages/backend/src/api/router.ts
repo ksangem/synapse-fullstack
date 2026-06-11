@@ -13,10 +13,12 @@ import connectorsRoutes from './connectors.routes';
 import entitiesRoutes from './entities.routes';
 import ingestRoutes from './ingest.routes';
 import alertsRoutes from './alerts.routes';
+import crawlStudioRoutes from './crawl-studio.routes';
 
 const apiRouter = Router();
 
 apiRouter.use('/connectors', connectorsRoutes);
+apiRouter.use('/crawl-studio', crawlStudioRoutes);
 apiRouter.use('/entities', entitiesRoutes);
 apiRouter.use('/ingest', ingestRoutes); // public inbound webhook ingestion
 apiRouter.use('/integrations', integrationsRoutes);

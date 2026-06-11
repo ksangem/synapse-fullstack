@@ -59,10 +59,9 @@ export default function CatalogPage() {
         <button className="btn btn-outline btn-sm" onClick={() => navigate('/studio')}>&#9881; Manage in Studio</button>
       </div>
 
-      <div className="page-body">
-      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20 }}>
-        {/* ── Tree (connector → entities) ── */}
-        <div className="card" style={{ padding: 12, alignSelf: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20, flex: 1, minHeight: 0, paddingBottom: 16 }}>
+        {/* ── Tree (connector → entities) — scrolls internally when tall ── */}
+        <div className="card" style={{ padding: 12, minHeight: 0, overflowY: 'auto' }}>
           {loading && <div style={{ color: 'var(--text-dim)', fontSize: '.82rem' }}>Loading…</div>}
           {!loading && groups.length === 0 && <div style={{ color: 'var(--text-dim)', fontSize: '.82rem' }}>No connectors yet.</div>}
           {groups.map((g) => (
@@ -94,8 +93,8 @@ export default function CatalogPage() {
           ))}
         </div>
 
-        {/* ── Detail ── */}
-        <div>
+        {/* ── Detail — scrolls independently of the tree ── */}
+        <div className="panel" style={{ minHeight: 0, overflowY: 'auto', padding: 16 }}>
           {!selected && !loading && (
             <div className="card" style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)' }}>Select an entity to inspect its fields.</div>
           )}
@@ -168,7 +167,6 @@ export default function CatalogPage() {
             </>
           )}
         </div>
-      </div>
       </div>
     </div>
   );

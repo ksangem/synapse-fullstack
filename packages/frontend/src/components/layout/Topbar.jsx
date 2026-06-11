@@ -16,6 +16,21 @@ const categoryIcons = {
   entities: '⚏',
 };
 
+// App pages (mirrors the sidebar). `kw` adds extra search aliases beyond the label.
+const pages = [
+  { label: 'Health Dashboard', to: '/dashboard', icon: '◉', kw: 'home overview status health' },
+  { label: 'Integration Registry', to: '/registry', icon: '⚙', kw: 'integrations registry list' },
+  { label: 'Message Monitor', to: '/monitor', icon: '⇄', kw: 'messages monitor logs runs' },
+  { label: 'Alerts', to: '/alerts', icon: '⚠', kw: 'alerts notifications warnings' },
+  { label: 'Connector Studio', to: '/studio', icon: '✎', kw: 'connector studio build design' },
+  { label: 'Connection Wizard', to: '/wizard', icon: '⚩', kw: 'connection wizard connect setup new' },
+  { label: 'Mapping Canvas', to: '/canvas', icon: '⇌', kw: 'mapping canvas fields map' },
+  { label: 'Entity Catalog', to: '/catalog', icon: '⚏', kw: 'entity catalog entities schema' },
+  { label: 'My Connections', to: '/connected', icon: '🔗', kw: 'my connections connected instances' },
+  { label: 'Credential Vault', to: '/vault', icon: '🔒', kw: 'credential vault secrets keys' },
+  { label: 'Administration', to: '/admin', icon: '👥', kw: 'administration admin settings users' },
+];
+
 export default function Topbar({ onNotificationToggle, onHelpToggle }) {
   const { theme, toggleTheme } = useTheme();
   const { toggleMobile } = useContext(SidebarContext);
@@ -35,30 +50,46 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Build the global search index from REAL data (no mock).
+  // Build the global search index from REAL data (no mock). Each item carries its
+  // id so a match can open that specific record (e.g. the connector's detail).
   useEffect(() => {
     (async () => {
       const [conn, integ, ents] = await Promise.all([api.getConnectors(), api.getConnected(), api.getEntityCatalog()]);
       const data = {};
-      const connectors = (conn.ok && conn.data?.data || []).map((c) => c.name).filter(Boolean);
-      const connections = (integ.ok && integ.data?.data || []).map((i) => i.name).filter(Boolean);
+      const connectors = (conn.ok && conn.data?.data || [])
+        .filter((c) => c.name).map((c) => ({ id: c.connectorId, name: c.name }));
+      const connections = (integ.ok && integ.data?.data || [])
+        .filter((i) => i.name).map((i) => ({ id: i.integrationId, name: i.name }));
       const entities = [];
-      (ents.ok && ents.data?.data?.groups || []).forEach((g) => (g.entities || []).forEach((e) => entities.push(e.name || e.key)));
-      if (connectors.length) data.connectors = [...new Set(connectors)];
-      if (connections.length) data.connections = [...new Set(connections)];
-      if (entities.length) data.entities = [...new Set(entities)];
+      (ents.ok && ents.data?.data?.groups || []).forEach((g) => (g.entities || []).forEach((e) => entities.push({ id: e.key, name: e.name || e.key })));
+      if (connectors.length) data.connectors = connectors;
+      if (connections.length) data.connections = connections;
+      if (entities.length) data.entities = entities;
       setSearchData(data);
     })();
   }, []);
 
+  // Each result is normalized to { key, label, route, icon } so any match can navigate.
   const filteredResults = {};
   if (searchQuery.trim().length > 0) {
     const q = searchQuery.toLowerCase();
+    // Pages first — direct navigation to a screen.
+    const pageMatches = pages
+      .filter((p) => p.label.toLowerCase().includes(q) || p.kw.includes(q))
+      .map((p) => ({ key: p.to, label: p.label, route: p.to, icon: p.icon }));
+    if (pageMatches.length > 0) filteredResults.pages = pageMatches;
+    // Data-driven categories (connectors / connections / entities).
     for (const [category, items] of Object.entries(searchData)) {
-      const matches = items.filter((item) => item.toLowerCase().includes(q));
-      if (matches.length > 0) {
-        filteredResults[category] = matches;
-      }
+      const matches = items
+        .filter((item) => item.name.toLowerCase().includes(q))
+        .map((item) => ({
+          key: `${category}:${item.id || item.name}`,
+          label: item.name,
+          route: categoryRoutes[category] || '/dashboard',
+          icon: categoryIcons[category] || '●',
+          focus: { type: category, id: item.id }, // tells the target page which record to open
+        }));
+      if (matches.length > 0) filteredResults[category] = matches;
     }
   }
 
@@ -69,11 +100,22 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
     setShowResults(e.target.value.trim().length > 0);
   }
 
-  function handleResultClick(category, item) {
-    const route = categoryRoutes[category] || '/dashboard';
+  function handleResultClick(result) {
     setSearchQuery('');
     setShowResults(false);
-    navigate(route);
+    // `focus` (when present) tells the destination page which record to open.
+    navigate(result.route, result.focus?.id ? { state: { focus: result.focus } } : undefined);
+  }
+
+  function handleSearchKeyDown(e) {
+    if (e.key === 'Enter') {
+      // Go to the first match (pages are listed first).
+      const first = Object.values(filteredResults)[0]?.[0];
+      if (first) handleResultClick(first);
+    } else if (e.key === 'Escape') {
+      setShowResults(false);
+      e.currentTarget.blur();
+    }
   }
 
   return (
@@ -107,22 +149,30 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
           <input
             type="text"
             placeholder="Search integrations, entities, help..."
+            aria-label="Search pages, integrations and entities"
+            role="combobox"
+            aria-expanded={showResults && hasResults}
+            aria-controls="global-search-results"
             value={searchQuery}
             onChange={handleSearchChange}
+            onKeyDown={handleSearchKeyDown}
             onFocus={() => { if (searchQuery.trim()) setShowResults(true); }}
           />
-          <div className={`search-results-dropdown${showResults && hasResults ? ' show' : ''}`}>
+          <div id="global-search-results" role="listbox" className={`search-results-dropdown${showResults && hasResults ? ' show' : ''}`}>
             {Object.entries(filteredResults).map(([category, items]) => (
               <div key={category}>
                 <div className="search-category-label">{category}</div>
                 {items.map((item) => (
                   <div
-                    key={item}
+                    key={item.key}
                     className="search-result-item"
-                    onClick={() => handleResultClick(category, item)}
+                    role="option"
+                    tabIndex={0}
+                    onClick={() => handleResultClick(item)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleResultClick(item); } }}
                   >
-                    <span className="sri-icon">{categoryIcons[category] || '●'}</span>
-                    {item}
+                    <span className="sri-icon">{item.icon}</span>
+                    {item.label}
                   </div>
                 ))}
               </div>
@@ -141,8 +191,8 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
         </button>
         <button className="icon-btn" onClick={onHelpToggle} title="Help">?</button>
         <div className="user-menu">
-          <div className="user-avatar">AK</div>
-          <span className="user-name">Anita Kumar</span>
+          <div className="user-avatar">AJ</div>
+          <span className="user-name">Ananthu Jayakumar</span>
         </div>
       </div>
     </div>

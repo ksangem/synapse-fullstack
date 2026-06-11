@@ -2190,9 +2190,8 @@ export default function WizardPage() {
         </div>
       </div>
 
-      <div className="page-body">
       {/* Stepper */}
-      <div className="stepper">
+      <div className="stepper" style={{ flexShrink: 0 }}>
         {stepLabels.map((label, i) => {
           const stepNum = i + 1;
           let cls = 'step';
@@ -2214,7 +2213,7 @@ export default function WizardPage() {
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
-        padding: '10px 16px', marginTop: 20,
+        padding: '10px 16px', marginTop: 20, flexShrink: 0,
       }}>
         <button className="btn btn-outline" onClick={goBack} disabled={wizardStep === 1}>&larr; Back</button>
         <div style={{ fontSize: '.82rem', color: 'var(--text-dim)' }}>
@@ -2235,15 +2234,16 @@ export default function WizardPage() {
         </button>
       </div>
 
+      <div className="page-body" style={{ display: 'flex', flexDirection: 'column' }}>
       {/* Wizard content */}
-      <div className="wizard-content" style={{ marginTop: 16 }}>
+      <div className="wizard-content" style={{ marginTop: 16, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
 
         {/* ── Step 1: Select Systems ── */}
         {wizardStep === 1 && (
-          <div className="wizard-step active">
+          <div className="wizard-step active" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             {/* Saved Connections */}
             {savedConnections.length > 0 && (
-              <div className="card" style={{ marginBottom: 20, padding: 16 }}>
+              <div className="card" style={{ marginBottom: 20, padding: 16, flexShrink: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
                   <span style={{ fontSize: '1.1rem' }}>&#128279;</span>
                   <span style={{ fontWeight: 700, fontSize: '.95rem' }}>My Connections</span>
@@ -2314,12 +2314,12 @@ export default function WizardPage() {
               <div style={{ marginBottom: 16, fontSize: '.82rem', color: 'var(--text-dim)' }}>Loading saved connections...</div>
             )}
 
-            <div className="grid-2" style={{ gap: 24 }}>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.95rem' }}>&#9664; Source System</div>
+            <div className="grid-2" style={{ gap: 24, flex: 1, minHeight: 240, gridTemplateRows: 'minmax(0, 1fr)' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.95rem', flexShrink: 0 }}>&#9664; Source System</div>
                 <input value={srcSysSearch} onChange={(e) => setSrcSysSearch(e.target.value)} placeholder="Search source systems..."
-                  style={{ width: '100%', marginBottom: 10, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.82rem' }} />
-                <div style={{ maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
+                  style={{ width: '100%', marginBottom: 10, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.82rem', flexShrink: 0 }} />
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
                     {sourceCards.filter((c) => c.label.toLowerCase().includes(srcSysSearch.trim().toLowerCase())).map((c, i) => (
                       <div key={i} className="card connector-card"
@@ -2332,11 +2332,11 @@ export default function WizardPage() {
                   </div>
                 </div>
               </div>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.95rem' }}>Destination System &#9654;</div>
+              <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.95rem', flexShrink: 0 }}>Destination System &#9654;</div>
                 <input value={destSysSearch} onChange={(e) => setDestSysSearch(e.target.value)} placeholder="Search destination systems..."
-                  style={{ width: '100%', marginBottom: 10, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.82rem' }} />
-                <div style={{ maxHeight: 300, overflowY: 'auto', paddingRight: 4 }}>
+                  style={{ width: '100%', marginBottom: 10, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.82rem', flexShrink: 0 }} />
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
                     {destCards.filter((c) => c.label.toLowerCase().includes(destSysSearch.trim().toLowerCase())).map((c, i) => (
                       <div key={i} className="card connector-card"
@@ -3221,7 +3221,20 @@ export default function WizardPage() {
                         )}
                       </div>
                     )}
-                    <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginTop: 4 }}>
+                    {pushResult?.total > 0 && (() => {
+                      const p = pushProgress || {};
+                      const processed = (p.createdCount ?? p.created_count ?? 0) + (p.updatedCount ?? p.updated_count ?? 0) + (p.failedCount ?? p.failed_count ?? 0) + (p.skippedCount ?? p.skipped_count ?? 0);
+                      const pct = Math.min(100, Math.round((processed / pushResult.total) * 100));
+                      return (
+                        <div style={{ marginTop: 14, maxWidth: 360, marginLeft: 'auto', marginRight: 'auto' }}>
+                          <div style={{ height: 9, background: 'var(--bg-main)', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
+                            <div style={{ width: `${pct}%`, height: '100%', background: 'var(--primary)', borderRadius: 6, transition: 'width .3s ease' }} />
+                          </div>
+                          <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', marginTop: 5 }}>{processed} / {pushResult.total} records &middot; {pct}%</div>
+                        </div>
+                      );
+                    })()}
+                    <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginTop: 8 }}>
                       Push Run: <span style={{ fontFamily: 'monospace' }}>{pushResult?.pushRunId || '...'}</span>
                     </div>
                   </div>

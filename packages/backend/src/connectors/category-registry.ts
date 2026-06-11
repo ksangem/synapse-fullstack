@@ -24,13 +24,13 @@ export interface ConfigField {
   options?: string[];
   help?: string;
   /** show only when another field has one of these values */
-  showWhen?: { field: string; in: string[] };
+  showWhen?: { field: string; in: Array<string | boolean> };
 }
 
 export type AuthMethod =
   | 'none' | 'apiKey' | 'bearer' | 'basic' | 'oauth2_client' | 'oauth2_authcode'
   | 'connectionString' | 'awsKeys' | 'sshKey' | 'serviceAccount' | 'hmac'
-  | 'sasl' | 'wsSecurity' | 'clientCert' | 'appPassword' | 'apifyToken';
+  | 'sasl' | 'wsSecurity' | 'clientCert' | 'appPassword' | 'apifyToken' | 'browserLogin';
 
 export interface CategorySpec {
   key: string;
@@ -181,22 +181,58 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
   },
   {
     key: 'scrape', label: 'Web Scraping', icon: '\u{1F577}', runtimeKind: 'scrape', defaultRole: 'source', real: true,
-    authMethods: ['apifyToken', 'none'],
+    authMethods: ['browserLogin', 'apifyToken', 'none'],
     entityModel: 'sample',
     configFields: [
-      { key: 'engine', label: 'Scraping Engine', type: 'select', required: true, options: ['Apify Cloud', 'Playwright Self-hosted', 'Both (fallback)'] },
-      { key: 'targetUrls', label: 'Target URL(s)', type: 'textarea', required: true },
+      // Minimal registration — just the starting URL. The Crawl Recorder (Operation
+      // step) captures login, navigation and fields, so nothing else is needed here.
+      { key: 'targetUrls', label: 'Base / login URL', type: 'text', required: true, help: 'Just the starting URL (e.g. https://nalashaa.atlassian.net). Use the Crawl Recorder in the Operation step to record login, navigation and fields.' },
+      { key: 'advanced', label: 'Advanced — configure the crawl by hand (skip the recorder)', type: 'checkbox' },
+      // ── Everything below is hidden unless "Advanced" is ticked ──
+      { key: 'engine', label: 'Scraping Engine', type: 'select', options: ['Playwright Self-hosted', 'Apify Cloud', 'Both (fallback)'], showWhen: { field: 'advanced', in: [true] } },
       { key: 'apifyActorId', label: 'Apify Actor ID', type: 'text', showWhen: { field: 'engine', in: ['Apify Cloud', 'Both (fallback)'] } },
       { key: 'actorInput', label: 'Apify Actor Input (JSON)', type: 'code', showWhen: { field: 'engine', in: ['Apify Cloud', 'Both (fallback)'] } },
-      { key: 'rowSelector', label: 'Row selector (list scraping — one record per match)', type: 'text', showWhen: { field: 'engine', in: ['Playwright Self-hosted', 'Both (fallback)'] } },
-      { key: 'selectors', label: 'CSS / XPath Selectors (relative to each row if a row selector is set)', type: 'keyvalue', showWhen: { field: 'engine', in: ['Playwright Self-hosted', 'Both (fallback)'] } },
-      { key: 'userAgent', label: 'User Agent', type: 'text' },
-      { key: 'requestDelay', label: 'Request Delay (ms)', type: 'number' },
-      { key: 'maxPages', label: 'Max Pages', type: 'number' },
-      { key: 'schedule', label: 'Schedule (cron)', type: 'text' },
+      { key: 'rowSelector', label: 'Row selector (list scraping — one record per match)', type: 'text', help: 'e.g. div.quote — leave blank for one record per page.', showWhen: { field: 'advanced', in: [true] } },
+      { key: 'selectors', label: 'Field Selectors (field → CSS, relative to the row; @attr for attributes; a || b for fallbacks)', type: 'keyvalue', showWhen: { field: 'advanced', in: [true] } },
+      // ── Two-phase (list → open each item → extract full detail) ──
+      { key: 'twoPhase', label: 'Two-phase crawl — open each list item for its full detail page', type: 'checkbox', showWhen: { field: 'advanced', in: [true] }, help: 'e.g. Jira project issue list → each issue page. Pairs with Row selector (the list rows).' },
+      { key: 'linkSelector', label: 'Detail link selector (per row → the item URL, e.g. a@href)', type: 'text', showWhen: { field: 'twoPhase', in: [true] } },
+      { key: 'detailSelectors', label: 'Detail page fields — JSON {"name":"selector"} ( || for fallbacks, @attr for attributes )', type: 'code', showWhen: { field: 'twoPhase', in: [true] } },
+      { key: 'detailWaitForSelector', label: 'Detail: wait for selector (SPA pages)', type: 'text', showWhen: { field: 'twoPhase', in: [true] } },
+      { key: 'maxItems', label: 'Max items (detail pages to visit)', type: 'number', showWhen: { field: 'twoPhase', in: [true] } },
+      { key: 'fieldTypes', label: 'Field types — JSON {"field":"number|boolean|datetime|json"}', type: 'code', showWhen: { field: 'advanced', in: [true] } },
+      { key: 'respectRobots', label: 'Respect robots.txt (skip disallowed URLs)', type: 'checkbox', showWhen: { field: 'advanced', in: [true] } },
+      // ── Rendering ──
+      { key: 'waitUntil', label: 'Wait until', type: 'select', options: ['domcontentloaded', 'load', 'networkidle'], help: 'Use networkidle for JS/SPA pages that render after load.', showWhen: { field: 'advanced', in: [true] } },
+      { key: 'waitForSelector', label: 'Wait for selector (optional)', type: 'text', help: 'Block until this element appears — for slow/JS-rendered content.', showWhen: { field: 'advanced', in: [true] } },
+      // ── Pagination ──
+      { key: 'paginationType', label: 'Pagination', type: 'select', options: ['none', 'urlParam', 'nextButton', 'infiniteScroll'], showWhen: { field: 'advanced', in: [true] } },
+      { key: 'paginationParam', label: 'Page query param (e.g. page, startAt)', type: 'text', showWhen: { field: 'paginationType', in: ['urlParam'] } },
+      { key: 'paginationStart', label: 'Start value', type: 'number', showWhen: { field: 'paginationType', in: ['urlParam'] } },
+      { key: 'paginationStep', label: 'Step', type: 'number', showWhen: { field: 'paginationType', in: ['urlParam'] } },
+      { key: 'nextSelector', label: 'Next-page selector', type: 'text', showWhen: { field: 'paginationType', in: ['nextButton'] }, help: 'e.g. li.next > a' },
+      { key: 'scrollDelay', label: 'Scroll delay (ms)', type: 'number', showWhen: { field: 'paginationType', in: ['infiniteScroll'] } },
+      // ── Authenticated crawl (browser login) — only for the manual, no-recorder path ──
+      { key: 'authMode', label: 'Access', type: 'select', options: ['Anonymous', 'Browser Login', 'Header Auth (Basic / API token)'], help: 'For the recorder flow leave this — “Record login” sets it automatically. Browser Login = form login + 2FA. Header Auth = send Basic email:token on every request (e.g. crawl Jira Cloud with an API token).', showWhen: { field: 'advanced', in: [true] } },
+      { key: 'loginUrl', label: 'Login URL', type: 'url', showWhen: { field: 'authMode', in: ['Browser Login'] }, help: 'Where the login form lives. Operators can override per connection.' },
+      { key: 'twoStep', label: 'Two-step form (username then password)', type: 'checkbox', showWhen: { field: 'authMode', in: ['Browser Login'] }, help: 'For Atlassian/Microsoft-style logins.' },
+      { key: 'usernameSelector', label: 'Username field selector (optional)', type: 'text', showWhen: { field: 'authMode', in: ['Browser Login'] } },
+      { key: 'passwordSelector', label: 'Password field selector (optional)', type: 'text', showWhen: { field: 'authMode', in: ['Browser Login'] } },
+      { key: 'submitSelector', label: 'Submit button selector (optional)', type: 'text', showWhen: { field: 'authMode', in: ['Browser Login'] } },
+      { key: 'totpSelector', label: 'TOTP/code field selector (optional)', type: 'text', showWhen: { field: 'authMode', in: ['Browser Login'] }, help: 'For authenticator-app 2FA. Operator supplies the TOTP secret.' },
+      { key: 'successSelector', label: 'Logged-in indicator selector (optional)', type: 'text', showWhen: { field: 'authMode', in: ['Browser Login'] }, help: 'An element that only appears once logged in.' },
+      { key: 'successUrlIncludes', label: 'Logged-in URL contains (optional)', type: 'text', showWhen: { field: 'authMode', in: ['Browser Login'] } },
+      { key: 'attended', label: 'Attended login (visible browser for push/SMS 2FA)', type: 'checkbox', showWhen: { field: 'authMode', in: ['Browser Login'] }, help: 'Use when 2FA is Duo push / SMS / hardware key — a human approves once, the session is then cached.' },
+      { key: 'sessionTtlMinutes', label: 'Session TTL (minutes)', type: 'number', showWhen: { field: 'authMode', in: ['Browser Login'] }, help: 'How long a captured login session is reused before re-authenticating (default 480).' },
+      // ── Limits ──
+      { key: 'maxPages', label: 'Max Pages', type: 'number', showWhen: { field: 'advanced', in: [true] } },
+      { key: 'maxRows', label: 'Max Rows', type: 'number', showWhen: { field: 'advanced', in: [true] } },
+      { key: 'requestDelay', label: 'Request Delay (ms)', type: 'number', showWhen: { field: 'advanced', in: [true] } },
+      { key: 'userAgent', label: 'User Agent', type: 'text', showWhen: { field: 'advanced', in: [true] } },
+      { key: 'schedule', label: 'Schedule (cron)', type: 'text', showWhen: { field: 'advanced', in: [true] } },
     ],
     capabilities: baseCaps('source', { lifecycle: 'long-running' }),
-    note: 'Runtime planned (Phase 5); reuses Playwright.',
+    note: 'Record-and-replay crawler: use the Crawl Recorder (Operation step) to capture login + navigation + fields. Advanced mode exposes manual selectors/pagination.',
   },
   {
     key: 'graphql', label: 'GraphQL API', icon: '\u{25C8}', runtimeKind: 'graphql', defaultRole: 'both', real: true,

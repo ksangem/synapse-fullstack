@@ -163,10 +163,13 @@ export class SharePointRuntime implements IConnectorRuntime {
       else { reqs.push({ id, method: 'POST', url: itemsRel, body: { fields } }); meta.set(id, { isCreate: true }); }
     }
 
-    // Execute in parallel Graph $batch chunks (20/req, 4 concurrent). Retry 400/429
-    // sub-failures over a few rounds with backoff — this absorbs freshly-created columns
-    // that aren't writable yet (the slow case the per-row path handled with 15s/item).
-    const SIZE = 20, CONCURRENCY = 4;
+    // Execute Graph $batch chunks (20/req) SERIALLY per list. SharePoint serialises
+    // writes to a single list, so parallel batches collide: one sub-request fails with
+    // `generalException` (500) and the rest cascade to `FailedDependency` (424), which
+    // previously got written off as permanent failures. Sequential dispatch removes that
+    // contention; we still retry transient/cascade sub-failures (400/429/424/500/0) over
+    // a few rounds with backoff (also absorbs freshly-created columns not yet writable).
+    const SIZE = 20, CONCURRENCY = 1;
     const results = new Map<string, { status: number; body: unknown }>();
     let pending = reqs;
     for (let round = 0; round <= 4 && pending.length; round++) {
@@ -178,7 +181,7 @@ export class SharePointRuntime implements IConnectorRuntime {
         const maps = await Promise.all(wave.map((ch) => this.pushSvc.sendBatch(ch, token)));
         for (const m of maps) for (const [k, v] of m) results.set(k, v);
       }
-      pending = pending.filter((rq) => { const s = results.get(rq.id)?.status ?? 0; return (s === 400 || s === 429) && round < 4; });
+      pending = pending.filter((rq) => { const s = results.get(rq.id)?.status ?? 0; return (s === 400 || s === 429 || s === 424 || s === 500 || s === 0) && round < 4; });
     }
 
     let created = 0, updated = 0, failed = 0;

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDetailPane } from '../../hooks/useDetailPane';
+import { useToast } from '../../hooks/useToast';
 import { api } from '../../services/api';
 import { mapToCard, computeKpis, statusLabel } from '../../services/integrationMap';
 
@@ -97,6 +98,7 @@ function MiniBars({ series, color = '#6366f1', empty }) {
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { openDetailPane } = useDetailPane();
+  const { showToast } = useToast();
   const [activeFilter, setActiveFilter] = useState('All');
   const [timeRange, setTimeRange] = useState('Last 24 hours');
 
@@ -112,6 +114,7 @@ export default function DashboardPage() {
       setLoading(true);
       const res = await api.getConnected();
       if (!alive) return;
+      if (!res.ok) showToast(res.data?.error || 'Could not load dashboard data');
       const rows = (res.ok && Array.isArray(res.data?.data)) ? res.data.data : [];
       const mapped = rows.map(mapToCard);
       setCards(mapped);
@@ -120,7 +123,7 @@ export default function DashboardPage() {
       setLoading(false);
     })();
     return () => { alive = false; };
-  }, []);
+  }, [showToast]);
 
   const filters = ['All', 'Active', 'Paused', 'Error'];
 
@@ -239,6 +242,10 @@ export default function DashboardPage() {
 
       {loading ? (
         <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)' }}>Loading adapters…</div>
+      ) : filteredTiles.length === 0 ? (
+        <div className="card mb-20" style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)' }}>
+          {cards.length === 0 ? 'No integrations yet — create one from the Connection Wizard.' : 'No adapters match this filter.'}
+        </div>
       ) : (
         <div
           style={{

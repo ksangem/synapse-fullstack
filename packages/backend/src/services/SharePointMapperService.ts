@@ -94,6 +94,19 @@ export const DEFAULT_MAPPING: FieldMapping[] = [
   { spColumn: 'PushedAt',            jiraPath: 'auto: current timestamp',                 value: () => new Date().toISOString() },
 ];
 
+// Canonical SharePoint column type per mapped column. Provisioning MUST use this rather
+// than inferring from a single sample row — e.g. StoryPoints is null on unestimated
+// tickets, so value-inference would create it as Text, and a later numeric value then
+// fails the whole insert with an opaque `generalException`. 'text' is the default for
+// anything not listed here.
+export const SP_COLUMN_TYPES: Record<string, 'number' | 'datetime' | 'boolean' | 'text'> = {
+  JiraID: 'number', HierarchyLevel: 'number', StoryPoints: 'number',
+  SprintID: 'number', SprintBoardID: 'number', CycleTimeDays: 'number', SprintNumber: 'number',
+  CreatedDate: 'datetime', UpdatedDate: 'datetime', ResolutionDate: 'datetime',
+  SprintStartDate: 'datetime', SprintEndDate: 'datetime', SprintCompleteDate: 'datetime', PushedAt: 'datetime',
+  IsSubtask: 'boolean', IsResolved: 'boolean', HasLabels: 'boolean', IsOverdue: 'boolean',
+};
+
 export class SharePointMapperService {
   /**
    * Transform a raw Jira issue into a SharePoint list item payload.

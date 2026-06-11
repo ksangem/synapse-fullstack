@@ -44,10 +44,17 @@ export default function NotificationDropdown({ isOpen, onClose }) {
         onClose();
       }
     }
+    function handleKey(e) {
+      if (e.key === 'Escape') onClose();
+    }
     if (isOpen) {
       document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKey);
     }
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKey);
+    };
   }, [isOpen, onClose]);
 
   function handleItemClick(notif) {
@@ -61,6 +68,8 @@ export default function NotificationDropdown({ isOpen, onClose }) {
     <div
       ref={ref}
       className={`notification-dropdown${isOpen ? ' show' : ''}`}
+      role="dialog"
+      aria-label="Notifications"
     >
       <div className="notif-header">
         <span>Notifications</span>
@@ -70,7 +79,10 @@ export default function NotificationDropdown({ isOpen, onClose }) {
         <div
           key={notif.id}
           className={`notif-item${notif.type ? ` ${notif.type}` : ''}`}
+          role="button"
+          tabIndex={0}
           onClick={() => handleItemClick(notif)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleItemClick(notif); } }}
         >
           <div className="notif-title">{notif.title}</div>
           <div className="notif-meta">{notif.meta}</div>

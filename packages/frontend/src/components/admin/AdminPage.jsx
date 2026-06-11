@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useDetailPane } from '../../hooks/useDetailPane';
 import { useToast } from '../../hooks/useToast';
+import { useConfirm } from '../../hooks/useConfirm';
 import { useNavigate } from 'react-router-dom';
 
 // User management + client-app registry have no backend yet — no mock data.
@@ -156,6 +157,7 @@ export default function AdminPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const { openDetailPane, closeDetailPane } = useDetailPane();
   const { showToast } = useToast();
+  const confirm = useConfirm();
   const navigate = useNavigate();
 
   const filteredUsers = users.filter(u =>
@@ -181,9 +183,15 @@ export default function AdminPage() {
     );
   };
 
-  const handleDeactivate = (e, user) => {
+  const handleDeactivate = async (e, user) => {
     e.stopPropagation();
-    if (window.confirm('Deactivate user ' + user.name + '? This will revoke all access.')) {
+    const ok = await confirm({
+      title: 'Deactivate user',
+      message: `Deactivate ${user.name}? This will revoke all of their access.`,
+      confirmLabel: 'Deactivate',
+      danger: true,
+    });
+    if (ok) {
       showToast(user.name + ' has been deactivated');
     }
   };

@@ -1,6 +1,7 @@
 import { useContext } from 'react';
 import { NavLink } from 'react-router-dom';
 import { SidebarContext } from '../../contexts/SidebarContext';
+import nalashaaLogo from '../../assets/nalashaa-logo1.png';
 
 const navSections = [
   {
@@ -42,10 +43,16 @@ export default function Sidebar() {
         onClick={closeMobile}
       />
       <div className={`sidebar${collapsed ? ' collapsed' : ''}${mobileOpen ? ' mobile-open' : ''}`}>
-        <div className="sidebar-toggle" onClick={toggleSidebar}>
-          {collapsed ? '\u2630' : '\u2630'}
+        <button
+          type="button"
+          className="sidebar-toggle"
+          onClick={toggleSidebar}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!collapsed}
+        >
+          {'\u2630'}
           {!collapsed && <span>Menu</span>}
-        </div>
+        </button>
 
         <nav className="sidebar-nav">
           {navSections.map((section) => (
@@ -71,11 +78,11 @@ export default function Sidebar() {
         </nav>
 
         <div className="sidebar-branding">
-          <div className="nalashaa-logo">N</div>
-          <div className="brand-text">
-            <div className="brand-name">Nalashaa</div>
-            <div className="brand-tagline">Digital Solutions</div>
-          </div>
+          <img
+            src={nalashaaLogo}
+            alt="Nalashaa — Think Simple. Build Powerful."
+            className="nalashaa-logo-img"
+          />
         </div>
       </div>
     </>

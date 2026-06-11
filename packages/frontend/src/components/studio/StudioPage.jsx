@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from '../../services/api';
 import { runtimeClient } from '../../services/runtimeClient';
 import { useToast } from '../../hooks/useToast';
+import { useConfirm } from '../../hooks/useConfirm';
 import CrawlRecorder from './CrawlRecorder';
 
 /* Connector Studio — design-time authoring over the real connector registry.
@@ -88,7 +89,9 @@ function ConfigFields({ fields, values, onChange }) {
 
 export default function StudioPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { showToast } = useToast();
+  const confirm = useConfirm();
 
   const [connectors, setConnectors] = useState([]);
   const [categories, setCategories] = useState(FALLBACK_CATEGORIES);
@@ -130,6 +133,16 @@ export default function StudioPage() {
     });
   }, []);
 
+  // Opened from the global search (Topbar): auto-open the matched connector's detail,
+  // then clear the navigation state so it doesn't re-open on re-render/back.
+  useEffect(() => {
+    const focus = location.state?.focus;
+    if (focus?.type === 'connectors' && focus.id) {
+      openDetail(focus.id);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.state, openDetail, navigate, location.pathname]);
+
   const publishVersion = async (connectorId, versionId) => {
     const res = await api.call(`/api/connectors/${connectorId}/versions/${versionId}/publish`, { tested: true });
     if (res.ok && res.data?.success) { showToast('Version published'); await loadConnectors(); await openDetail(connectorId); }
@@ -141,8 +154,13 @@ export default function StudioPage() {
     else showToast(res.data?.error || 'Failed to create version');
   };
   const cloneConnector = async (connectorId, defaultName) => {
-    const name = window.prompt('Name for the new connector', defaultName);
-    if (!name) return;
+    const name = await confirm({
+      title: 'Clone connector',
+      message: 'Enter a name for the new connector. It will be created as a draft.',
+      input: { label: 'Connector name', placeholder: 'e.g. Acme CRM (copy)', defaultValue: defaultName },
+      confirmLabel: 'Clone',
+    });
+    if (!name || !name.trim()) return;
     const res = await api.call(`/api/connectors/${connectorId}/clone`, { name });
     if (res.ok && res.data?.success) { showToast('Connector cloned (draft)'); await loadConnectors(); await openDetail(res.data.data?.connector?.connectorId); }
     else showToast(res.data?.error || 'Clone failed');
@@ -164,7 +182,15 @@ export default function StudioPage() {
     else showToast(res.data?.error || 'Rollback failed');
   };
   const deprecateVersion = async (connectorId, versionId) => {
-    const sunsetDate = window.prompt('Sunset date (YYYY-MM-DD), or leave blank') || undefined;
+    const answer = await confirm({
+      title: 'Deprecate version',
+      message: 'Mark this version as deprecated. Optionally set a sunset date after which it should no longer be used.',
+      input: { label: 'Sunset date', type: 'date', placeholder: 'YYYY-MM-DD (optional)' },
+      confirmLabel: 'Deprecate',
+      danger: true,
+    });
+    if (answer === null) return; // cancelled
+    const sunsetDate = answer.trim() ? answer.trim() : undefined;
     const res = await api.call(`/api/connectors/${connectorId}/versions/${versionId}/deprecate`, { sunsetDate });
     if (res.ok && res.data?.success) { showToast('Version deprecated'); await openDetail(connectorId); }
     else showToast(res.data?.error || 'Deprecate failed');
@@ -185,7 +211,7 @@ export default function StudioPage() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 20, flex: 1, minHeight: 0 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div className="panel" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: 12 }}>
           <div style={{ fontWeight: 600, fontSize: '.85rem', marginBottom: 10 }}>Connectors {loading ? '…' : `(${connectors.length})`}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
             {connectors.map((c) => (
@@ -206,7 +232,7 @@ export default function StudioPage() {
           </div>
         </div>
 
-        <div style={{ minHeight: 0, overflowY: authoring ? 'visible' : 'auto', paddingRight: 4 }}>
+        <div className="panel" style={{ minHeight: 0, overflowY: authoring ? 'visible' : 'auto', padding: 16 }}>
           {authoring && (
             <AuthoringFlow
               categories={categories}

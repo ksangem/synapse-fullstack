@@ -4,7 +4,7 @@ import { eq, desc } from 'drizzle-orm';
 import { PushLogRepository } from '../db/repositories/pushLogRepository';
 import { SyncStateRepository } from '../db/repositories/syncStateRepository';
 import { JiraItemCacheRepository } from '../db/repositories/jiraItemCacheRepository';
-import { SharePointPushService } from './SharePointPushService';
+import { SharePointPushService, getColumnTypeMap, coerceToColumnTypes } from './SharePointPushService';
 import { SharePointMapperService } from './SharePointMapperService';
 import { applyMappings, type MappingConfig } from './MappingEngine';
 import { isTerminalStatus } from '../mappers/jiraToSharePoint';
@@ -96,6 +96,12 @@ export async function runSync(
 
     const creds = getSpCreds(siteUrl, listName);
     const { token, listId } = await spPushService.resolveIds(creds, siteId, listIdOverride);
+
+    // Learn the destination list's actual column types once, so each mapped value is coerced
+    // to match before writing (e.g. a numeric StoryPoints → string for a Text column).
+    // Without this, a single type-mismatched column fails the whole item with an opaque
+    // `generalException`. Same fix the /push route applies.
+    const colTypes = await getColumnTypeMap(siteId, listId, token);
 
     // ─── STEP 1: Resolve sync window ──────────────────────
     const state = await syncStateRepo.getByIntegration(integrationId);
@@ -205,9 +211,10 @@ export async function runSync(
         const userMappingConfig = (fieldMappings as Record<string, unknown>)?.mappings
           ? (fieldMappings as unknown as MappingConfig)
           : null;
-        const mapped = userMappingConfig?.mappings?.length
+        const rawMapped = userMappingConfig?.mappings?.length
           ? applyMappings(issue, userMappingConfig)
           : mapper.mapToSharePointItem(issue, { source: triggeredBy, runId: integrationId }).fields;
+        const mapped = coerceToColumnTypes(rawMapped, colTypes);
         const statusName = (mapped.StatusName as string) ?? '';
         const newIsTerminal = isTerminalStatus(statusName);
 

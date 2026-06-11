@@ -7,5 +7,14 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    // Allow ngrok / tunnel hostnames to reach the dev server.
+    allowedHosts: true,
+    // Proxy API calls to the backend so a single tunnel (port 5173) carries everything.
+    proxy: {
+      '/api': {
+        target: 'http://localhost:4000',
+        changeOrigin: true,
+      },
+    },
   },
 })
