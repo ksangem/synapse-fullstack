@@ -94,8 +94,9 @@ export function registerBuiltinConnectors(): void {
         orgId: s.orgId,
         projectKey: str(s.config.projectKey || s.config.jiraProject || 'AIP'),
         limit: Number(s.config.limit) || 50,
+        sourceKey: s.sourceKey,
       }),
-    () => 'jira.issues',
+    (s) => `${seg(s.sourceKey ?? 'jira')}.issues`,
   );
 
   registerSourceFactory('sharepoint', async (s: ConnectorBuildSpec) => {
@@ -115,6 +116,7 @@ export function registerBuiltinConnectors(): void {
       s.orgId,
       { siteId, listId, triggerMode: 'delta', pollIntervalSec: 0, tenantId: creds.tenantId, clientId: creds.clientId, clientSecret: creds.clientSecret },
       slug,
+      s.sourceKey,
     );
     // Persist the delta cursor against the owning integration.
     const cursors = new SourceCursorRepository(db);
@@ -123,7 +125,7 @@ export function registerBuiltinConnectors(): void {
       (v) => cursors.save(s.orgId, s.integrationId, s.connectorId, 'deltaLink', v),
     );
     return source;
-  }, (s) => `sharepoint.${seg(str(s.config.listSlug || s.config.listName || 'list'))}`);
+  }, (s) => `${seg(s.sourceKey ?? 'sharepoint')}.${seg(str(s.config.listSlug || s.config.listName || 'list'))}`);
 
   // ── Destinations ─────────────────────────────────────────
   registerDestinationFactory('database', (s: ConnectorBuildSpec) =>

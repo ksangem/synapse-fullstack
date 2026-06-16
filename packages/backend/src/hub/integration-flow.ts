@@ -27,6 +27,17 @@ function seg(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'x';
 }
 
+/**
+ * A topic source segment UNIQUE to this adapter: `<base>-<id8>`. Uniqueness stops
+ * two adapters on the same connector kind (which would otherwise emit identical
+ * topics, e.g. two Jira projects → `jira.issues.*`) from cross-delivering. An
+ * explicit config.sourceKey lets adapters deliberately share a topic (fan-out).
+ */
+function adapterSourceKey(base: string, integrationId: string, explicit?: string): string {
+  if (explicit) return seg(explicit);
+  return `${seg(base)}-${integrationId.slice(0, 8)}`;
+}
+
 export interface FlowResult {
   loaded: number;
   skipped: number;
@@ -83,7 +94,11 @@ export async function registerIntegrationFlow(
 
   // Subscription scoped to the source's actual topic prefix, so adapters never
   // cross-deliver (the prefix is supplied by the source plug-in, not the core).
-  const sourceKey = (config.sourceKey as string) || srcHead.key || srcHead.runtimeKind || 'source';
+  const sourceKey = adapterSourceKey(
+    srcHead.key || srcHead.runtimeKind || 'source',
+    integration.integrationId,
+    config.sourceKey as string | undefined,
+  );
   const prefix = sourceTopicPrefix({
     connectorId: srcHead.connectorId,
     orgId: integration.orgId,
@@ -127,7 +142,7 @@ export async function buildIntegrationSource(integration: Integration): Promise<
     config,
     creds,
     entity: (config.sourceEntity as string) ?? (config.entity as string) ?? undefined,
-    sourceKey: (config.sourceKey as string) || srcHead.key || undefined,
+    sourceKey: adapterSourceKey(srcHead.key || srcHead.runtimeKind || 'source', integration.integrationId, config.sourceKey as string | undefined),
     integrationId: integration.integrationId,
   });
 }

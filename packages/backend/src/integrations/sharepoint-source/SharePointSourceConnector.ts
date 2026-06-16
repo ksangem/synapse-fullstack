@@ -18,6 +18,7 @@ export class SharePointSourceConnector implements ISourceConnector {
   readonly orgId: string;
   private readonly reader: SharePointGraphReader;
   private readonly listSlug: string;
+  private readonly sourceKey: string;
   private columnTypes: Map<string, SpFieldType> | null = null;
 
   // Cursor management callbacks — injected by the hub wiring layer
@@ -29,6 +30,8 @@ export class SharePointSourceConnector implements ISourceConnector {
     orgId: string,
     private readonly config: SharePointListConfig,
     listSlug: string,
+    /** Topic source segment (unique per adapter). Defaults to "sharepoint". */
+    sourceKey = 'sharepoint',
   ) {
     this.connectorId = connectorId;
     this.orgId = orgId;
@@ -37,6 +40,7 @@ export class SharePointSourceConnector implements ISourceConnector {
     // single internal hyphens, no leading/trailing hyphens. Collapse runs of
     // non-alphanumerics to one hyphen and trim; fall back to "list" if empty.
     this.listSlug = listSlug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'list';
+    this.sourceKey = sourceKey.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'sharepoint';
   }
 
   /**
@@ -85,7 +89,7 @@ export class SharePointSourceConnector implements ISourceConnector {
       if (signal.aborted) break;
 
       const mapped = SharePointFieldTypeMapper.mapItem(rawItem, this.columnTypes);
-      const topic = `sharepoint.${this.listSlug}.${mapped.event}`;
+      const topic = `${this.sourceKey}.${this.listSlug}.${mapped.event}`;
 
       yield createEnvelope({
         topic,

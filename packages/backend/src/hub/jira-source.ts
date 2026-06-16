@@ -31,6 +31,8 @@ export interface JiraSourceOptions {
   orgId: string;
   projectKey: string;
   limit?: number;
+  /** Topic source segment (unique per adapter). Defaults to "jira". */
+  sourceKey?: string;
 }
 
 export class JiraSourceConnector implements ISourceConnector {
@@ -54,7 +56,7 @@ export class JiraSourceConnector implements ISourceConnector {
       const event = updated && created && updated !== created ? 'updated' : 'created';
 
       yield createEnvelope({
-        topic: `jira.issues.${event}`,
+        topic: `${this.opts.sourceKey ?? 'jira'}.issues.${event}`,
         sourceConnectorId: this.connectorId,
         orgId: this.orgId,
         sequenceNo: seq++,
