@@ -11,6 +11,7 @@
 import { connectorService } from '../services/ConnectorService';
 import { getRuntime } from '../services/runtime/registry';
 import { createEnvelope } from './envelope';
+import { H } from './envelope-meta';
 import type { ISourceConnector, MessageEnvelope, JsonValue } from './interfaces';
 
 export interface AuthoredSourceOptions {
@@ -57,13 +58,15 @@ export class AuthoredConnectorSource implements ISourceConnector {
     for (const rec of records) {
       if (signal.aborted) break;
       const idVal = (rec.id ?? rec.Id ?? rec.key) as unknown;
+      const recordId = idVal != null ? String(idVal) : '';
       yield createEnvelope({
         topic,
         sourceConnectorId: this.connectorId,
         orgId: this.orgId,
         sequenceNo: n++,
         payload: rec as JsonValue,
-        idempotencyKey: idVal != null ? String(idVal) : undefined,
+        idempotencyKey: recordId || undefined,
+        headers: { [H.EVENT]: 'created', [H.RECORD_ID]: recordId },
       });
     }
   }

@@ -16,6 +16,7 @@ import { jiraTickets } from '../db/schema';
 import { config } from '../config';
 import { RedGoldApiClient } from '../integrations/jira/approaches/red-gold/RedGoldApiClient';
 import { createEnvelope } from './envelope';
+import { H } from './envelope-meta';
 import type { ISourceConnector, MessageEnvelope, JsonValue } from './interfaces';
 
 // Fields the Jira→SharePoint mapper reads (mapJiraIssueToSPItem).
@@ -59,6 +60,7 @@ export class JiraSourceConnector implements ISourceConnector {
         sequenceNo: seq++,
         payload: issue as JsonValue,
         idempotencyKey: `${key}:${updated || created}`,
+        headers: { [H.EVENT]: event, [H.RECORD_ID]: key },
       });
     }
   }

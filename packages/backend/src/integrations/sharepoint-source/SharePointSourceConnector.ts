@@ -83,13 +83,16 @@ export class SharePointSourceConnector implements ISourceConnector {
         // Stable key = item + its last-modified stamp: an unchanged re-read dedups
         // through the inbox, while a genuine edit (new lastModified) flows again.
         idempotencyKey: `${mapped.spItemId}:${rawItem.lastModifiedDateTime}`,
+        // Normalized source contract: payload = the record (its fields + a stable
+        // `id`); change/identity metadata on the headers. A generic mapping step
+        // then reshapes it with no SharePoint-specific knowledge.
         payload: {
-          spItemId: mapped.spItemId,
-          event: mapped.event,
-          fields: mapped.fields as Record<string, JsonValue>,
+          ...(mapped.fields as Record<string, JsonValue>),
+          id: mapped.spItemId,
           createdDateTime: rawItem.createdDateTime,
           lastModifiedDateTime: rawItem.lastModifiedDateTime,
         },
+        headers: { event: mapped.event, recordId: mapped.spItemId },
       });
     }
 
