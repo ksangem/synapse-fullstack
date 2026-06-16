@@ -37,6 +37,13 @@ const envSchema = z.object({
   SP_DEMO_LIST_ID: z.string().default('ee5e8e3c-5185-4111-9dc3-0a371b76ae58'),
   SP_DEMO_LIST_SLUG: z.string().default('synapse-source-test1'),
 
+  // Day-10 demo Jira -> SharePoint: which project + list, and how many issues to
+  // push (capped — the target is a throwaway list).
+  JIRA_DEMO_PROJECT: z.string().default('AIP'),
+  JIRA_DEMO_LIMIT: z.coerce.number().default(5),
+  SP_DEST_SITE_URL: z.string().default('https://mynalashaa.sharepoint.com/sites/sow2jira'),
+  SP_DEST_LIST_NAME: z.string().default('Synapse Demo Out'),
+
   // Jira - Flatiron
   FLATIRON_JIRA_URL: z.string().optional(),
   FLATIRON_JIRA_EMAIL: z.string().optional(),

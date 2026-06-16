@@ -30,6 +30,8 @@ import { DbDestinationConnector } from './db-destination';
 import { RestSourceConnector } from './rest-source';
 import { SpFlattenStep, SP_FLATTEN_STEP_ID } from './sp-flatten-step';
 import { SharePointSourceConnector } from '../integrations/sharepoint-source/SharePointSourceConnector';
+import { JiraSourceConnector } from './jira-source';
+import { SharePointDestinationConnector } from './sp-destination';
 import { loadSubscriptionsFromIntegrations } from './load-subscriptions';
 import type { ISourceConnector } from './interfaces';
 import { startHubIntakeWorker } from '../workers/hubIntakeWorker';
@@ -228,6 +230,42 @@ export async function initHub(): Promise<HubRuntime> {
         },
         config.SP_DEMO_LIST_SLUG,
       ),
+    );
+
+    // Day 10: Jira issues → SharePoint list (the throwaway "Synapse Demo Out").
+    hubService.registerDestination(
+      new SharePointDestinationConnector({
+        connectorId: 'test-jira-sp-dest',
+        orgId: DEFAULT_ORG,
+        creds: {
+          tenantId: config.AZURE_TENANT_ID,
+          clientId: config.AZURE_CLIENT_ID,
+          clientSecret: config.AZURE_CLIENT_SECRET,
+          siteUrl: config.SP_DEST_SITE_URL,
+          listName: config.SP_DEST_LIST_NAME,
+        },
+      }),
+    );
+    hubService.registry.register({
+      id: 'test-jira-sp-sub',
+      orgId: DEFAULT_ORG,
+      integrationId: 'test-jira-sp',
+      topic: 'jira.issues.*',
+      destinationConnectorId: 'test-jira-sp-dest',
+      transformSteps: [],
+      processingMode: 'serial',
+      workerCount: 1,
+      batchSize: 1,
+      channelCapacity: 100,
+    });
+    sources.set(
+      'jira-demo',
+      new JiraSourceConnector({
+        connectorId: 'jira-source-demo',
+        orgId: DEFAULT_ORG,
+        projectKey: config.JIRA_DEMO_PROJECT,
+        limit: config.JIRA_DEMO_LIMIT,
+      }),
     );
   }
 

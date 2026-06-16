@@ -75,8 +75,8 @@ This plan turns on the **distributed `IntegrationBus` (BullMQ/Redis)** as the li
 | 7 | REST(WireMock)→DB source run | ✅ run-source→6 rows products_demo; re-run idempotent; inbox/outbox/idem=6 |
 | 8 | Operator adapter via Wizard | ✅ loader: 7 subs from active integrations; wiremock.*→op_demo 6 rows via bus; reload endpoint |
 | 9 | SharePoint→DB via bus *(Azure)* | ✅ "synapse source test1" (3 items) → sp_demo via bus; idempotent; soft-delete flag |
-| 10 | Jira→SharePoint via bus *(Jira+Azure)* | ⬜ NEXT — WRITES to live SharePoint (needs explicit OK) |
-| 11 | run_messages + /api/messages | ⬜ |
+| 10 | Jira→SharePoint via bus *(Jira+Azure)* | ✅ 5 AIP issues → "Synapse Demo Out" list via bus; 0 DLQ; re-run no dup |
+| 11 | run_messages + /api/messages | ⬜ NEXT |
 | 12 | Monitor UI live flow | ⬜ |
 | 13 | 202 async + scheduler | ⬜ |
 | 14 | Authored connectors via bus | ⬜ |
