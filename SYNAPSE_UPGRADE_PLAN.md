@@ -80,5 +80,18 @@ This plan turns on the **distributed `IntegrationBus` (BullMQ/Redis)** as the li
 | 12 | Monitor UI live flow | ✅ MonitorPage polls /api/messages (topic/dir/src→dest/status/payload); frontend builds |
 | 13 | 202 async + scheduler | ✅ initScheduler() + integration-runner worker wired (gated); run-source 202 |
 | 14 | Authored connectors via bus | ✅ run-connector: authored restapi → bus → authored_demo (6 rows) + run_messages |
-| 15 | Flip default on + cut over | ⬜ NEXT |
-| 16 | Delete extra buses + cleanup | ⬜ |
+| 15 | Flip default on + cut over | ✅ HUB_ENABLED defaults ON; off-switch verified; live push endpoints stay direct (supervised cutover) |
+| 16 | Delete extra buses + cleanup | ✅ deleted DurableBus + InMemoryBus + their tests + demo; one bus remains; tsc 0, 461 pass |
+
+## Cutover note (Day 15)
+
+The distributed bus is **on by default** and every flow is proven through it (REST→DB,
+operator-adapter→DB, SharePoint→DB, Jira→SharePoint, authored-connector→DB). The
+existing **direct** production endpoints (`POST /api/push/project` Jira→SP, `POST
+/api/hub/push-to-*` SP→DB) are intentionally **left on the direct path** — they remain
+the working "sync mode." Re-pointing those live HTTP endpoints to publish through the
+bus moves real production data (incl. writes to the live SharePoint tenant) and so is a
+**deliberate, supervised flip**, not part of this automated pass. All the building
+blocks (`SharePointSourceConnector`, `SharePointDestinationConnector`,
+`DbDestinationConnector`, `JiraSourceConnector`, the loader) are in place and verified;
+the cutover is a small, controlled change when you choose to make it.

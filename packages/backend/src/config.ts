@@ -15,9 +15,10 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
-  // Distributed Integration Bus (BullMQ). Default OFF — when 'true', index.ts
-  // dynamically imports + starts the hub (so its workers never run while off).
-  HUB_ENABLED: z.string().transform((v) => v === 'true').default(false),
+  // Distributed Integration Bus (BullMQ). Cut over to ON by default (Day 15) — the
+  // hub now boots with the app. Set HUB_ENABLED=false to run fully without it.
+  // index.ts still dynamically imports the hub so workers only start when enabled.
+  HUB_ENABLED: z.string().transform((v) => v !== 'false').default(true),
 
   // Local "connectors" Postgres (docker connectors-postgres :5556) — used as the
   // demo destination for the hub's local-proof DbDestinationConnector.

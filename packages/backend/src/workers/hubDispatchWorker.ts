@@ -2,9 +2,9 @@
  * Hub dispatch worker — drains the `hub-dispatch` queue (the "delivery half").
  *
  * This is the per-subscription DISPATCH WORKER that the architecture doc calls the
- * single biggest missing piece. It mirrors the inner body of `DurableBus.route`
- * (durable-bus.ts) MINUS the outbox insert (RouterService already wrote the PENDING
- * outbox row), with retry delegated to BullMQ instead of an in-process loop:
+ * single biggest missing piece. It performs the per-destination delivery step
+ * (RouterService already wrote the PENDING outbox row), with retry delegated to
+ * BullMQ instead of an in-process loop:
  *
  *   idempotency.exists? ── yes ─► skip (exactly-once per destination)
  *     │ no
