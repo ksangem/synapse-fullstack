@@ -301,6 +301,23 @@ export async function initHub(): Promise<HubRuntime> {
     ),
   ];
 
+  // Day 13: cron scheduler + BRD async integration-runner worker. Both are
+  // dynamically imported so they only start with HUB_ENABLED (the runner worker
+  // starts a BullMQ consumer on import). initScheduler registers repeatable jobs
+  // for integrations that have a schedule_cron (none → 0 jobs, safe no-op).
+  try {
+    const { initScheduler } = await import('../services/SchedulerService');
+    await initScheduler();
+  } catch (err) {
+    console.error('[Hub] initScheduler failed:', (err as Error).message);
+  }
+  try {
+    await import('../queues/integration-runner.worker');
+    console.log('[Hub] integration-runner worker started');
+  } catch (err) {
+    console.error('[Hub] integration-runner worker failed to start:', (err as Error).message);
+  }
+
   runtime = { bus, router, pipeline, workers, echo, sources };
 
   console.log(

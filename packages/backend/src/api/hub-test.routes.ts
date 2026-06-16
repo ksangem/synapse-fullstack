@@ -18,6 +18,7 @@ import { loadSubscriptionsFromIntegrations } from '../hub/load-subscriptions';
 import { DEFAULT_ORG } from '../hub/hub-service';
 import { createEnvelope } from '../hub/envelope';
 import { startRun, finishRun } from '../hub/run-recorder';
+import { AuthoredConnectorSource } from '../hub/authored-source';
 import type { JsonValue, MessageEnvelope } from '../hub/interfaces';
 
 /** Stamp the runId into an envelope's headers so the workers can audit it. */
@@ -101,6 +102,41 @@ router.post('/reload-subscriptions', async (_req: Request, res: Response) => {
   } catch (err) {
     const e = err as { message?: string };
     res.status(400).json({ success: false, error: e.message ?? 'reload-subscriptions failed' });
+  }
+});
+
+// POST /api/hub/run-connector  { connectorId, versionId?, creds?, entity, sourceKey? }
+// Run a Studio-authored connector through the bus: fetch its records via the
+// runtime registry and publish them as <sourceKey>.<entity>.created envelopes.
+router.post('/run-connector', async (req: Request, res: Response) => {
+  if (hubOff(res)) return;
+  try {
+    const { connectorId, versionId, creds, entity, sourceKey } = (req.body ?? {}) as {
+      connectorId?: string; versionId?: string; creds?: Record<string, string>; entity?: string; sourceKey?: string;
+    };
+    if (!connectorId || !entity) {
+      res.status(400).json({ success: false, error: 'connectorId and entity are required' });
+      return;
+    }
+    const hub = getHub();
+    const source = new AuthoredConnectorSource({ connectorId, versionId, orgId: DEFAULT_ORG, entity, creds, sourceKey });
+
+    let records = 0;
+    let published = 0;
+    let duplicate = 0;
+    const runId = await startRun();
+    for await (const envelope of source.read(new AbortController().signal)) {
+      records++;
+      const inboxId = await hub.bus.publish(withRun(envelope, runId));
+      if (inboxId === null) duplicate++;
+      else published++;
+    }
+    await finishRun(runId, published);
+
+    res.status(202).json({ success: true, data: { connectorId, entity, records, published, duplicate, runId } });
+  } catch (err) {
+    const e = err as { message?: string };
+    res.status(400).json({ success: false, error: e.message ?? 'run-connector failed' });
   }
 });
 

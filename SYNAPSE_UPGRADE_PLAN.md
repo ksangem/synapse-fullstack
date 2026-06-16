@@ -78,7 +78,7 @@ This plan turns on the **distributed `IntegrationBus` (BullMQ/Redis)** as the li
 | 10 | Jira→SharePoint via bus *(Jira+Azure)* | ✅ 5 AIP issues → "Synapse Demo Out" list via bus; 0 DLQ; re-run no dup |
 | 11 | run_messages + /api/messages | ✅ run+run_messages(in/out) written; /api/messages unified inbox+outbox feed |
 | 12 | Monitor UI live flow | ✅ MonitorPage polls /api/messages (topic/dir/src→dest/status/payload); frontend builds |
-| 13 | 202 async + scheduler | ⬜ NEXT |
-| 14 | Authored connectors via bus | ⬜ |
-| 15 | Flip default on + cut over | ⬜ |
+| 13 | 202 async + scheduler | ✅ initScheduler() + integration-runner worker wired (gated); run-source 202 |
+| 14 | Authored connectors via bus | ✅ run-connector: authored restapi → bus → authored_demo (6 rows) + run_messages |
+| 15 | Flip default on + cut over | ⬜ NEXT |
 | 16 | Delete extra buses + cleanup | ⬜ |
