@@ -15,6 +15,21 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
+  // Distributed Integration Bus (BullMQ). Default OFF — when 'true', index.ts
+  // dynamically imports + starts the hub (so its workers never run while off).
+  HUB_ENABLED: z.string().transform((v) => v === 'true').default(false),
+
+  // Local "connectors" Postgres (docker connectors-postgres :5556) — used as the
+  // demo destination for the hub's local-proof DbDestinationConnector.
+  CONNECTORS_PG_HOST: z.string().default('localhost'),
+  CONNECTORS_PG_PORT: z.coerce.number().default(5556),
+  CONNECTORS_PG_DB: z.string().default('connectors_db'),
+  CONNECTORS_PG_USER: z.string().default('connectors'),
+  CONNECTORS_PG_PASSWORD: z.string().default('connectors'),
+
+  // Local WireMock (docker, :8089) — the hub's local REST source for demos.
+  WIREMOCK_URL: z.string().default('http://localhost:8089'),
+
   // Jira - Flatiron
   FLATIRON_JIRA_URL: z.string().optional(),
   FLATIRON_JIRA_EMAIL: z.string().optional(),

@@ -8,6 +8,7 @@ import pushRoutes from './push.routes';
 import syncRoutes from './sync.routes';
 import connectedRoutes from './connectedInstances.routes';
 import hubRoutes from './hub.routes';
+import hubTestRoutes from './hub-test.routes';
 import dlqRoutes from './dlq.routes';
 import connectorsRoutes from './connectors.routes';
 import entitiesRoutes from './entities.routes';
@@ -31,6 +32,7 @@ apiRouter.use('/push', pushRoutes);
 apiRouter.use('/sync', syncRoutes);
 apiRouter.use('/connected', connectedRoutes);
 apiRouter.use('/hub/dlq', dlqRoutes); // mount before /hub so the specific path wins
+apiRouter.use('/hub', hubTestRoutes); // Phase-1 bus test endpoints (test-publish/test-sink)
 apiRouter.use('/hub', hubRoutes);
 
 // JSON 404 for unmatched /api/* routes (so API clients get JSON, not the SPA shell).

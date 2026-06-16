@@ -28,6 +28,19 @@ const server = http.createServer(app);
 // WebSocket: streams the server browser's screencast frames out and input events in.
 attachCrawlStudioStream(server);
 
+// Distributed Integration Bus (gated by HUB_ENABLED, default off). Dynamically
+// imported so its BullMQ workers never start while the flag is off.
+if (config.HUB_ENABLED) {
+  void (async () => {
+    try {
+      const { initHub } = await import('./hub/init-hub');
+      await initHub();
+    } catch (err) {
+      console.error('[Hub] init failed:', err);
+    }
+  })();
+}
+
 server.listen(config.PORT, '0.0.0.0', () => {
   console.log(`Synapse backend running on port ${config.PORT}`);
   console.log(`API router mounted with ${(apiRouter as any).stack?.length ?? 'unknown'} routes`);

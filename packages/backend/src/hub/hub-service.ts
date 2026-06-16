@@ -45,6 +45,11 @@ class HubService {
     this.destinations.set(connector.connectorId, connector);
   }
 
+  /** Resolve a registered destination connector by id (used by the dispatch worker). */
+  getDestination(connectorId: string): IDestinationConnector | undefined {
+    return this.destinations.get(connectorId);
+  }
+
   listDestinations(): string[] {
     return Array.from(this.destinations.keys());
   }

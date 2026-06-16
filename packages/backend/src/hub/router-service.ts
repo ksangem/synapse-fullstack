@@ -1,63 +1,80 @@
 /**
- * RouterService — topic → subscription fan-out.
+ * RouterService — topic → subscription fan-out (the "sorting half" of the bus).
  *
- * Consumes the intake queue and re-enqueues to per-subscription queues.
- * Each subscription has its own BullMQ queue: "subscription:{id}".
+ * Drains the `hub-intake` queue (one job per published envelope) and, for every
+ * subscription whose topic pattern matches, enqueues a job onto the single
+ * constant `hub-dispatch` queue. The dispatch worker (the "delivery half")
+ * consumes those jobs.
+ *
+ * Locked design decisions (SYNAPSE_UPGRADE_PLAN.md):
+ *   #2 — ONE shared `hub-dispatch` queue (not per-subscription queues). The job
+ *        payload carries subscriptionId/destinationConnectorId/transformSteps.
+ *   #3 — matching uses the LIVE `SubscriptionRegistry` (org-scoped
+ *        `findForEnvelope`); inbox is marked `done` right after enqueue. Inbox is
+ *        the "routed" checkpoint; OUTBOX is delivery truth, dead_letter is failure
+ *        truth.
+ *   #5 — retry is BullMQ-native: each dispatch job carries `attempts: 4` +
+ *        exponential backoff (the dispatch worker dead-letters on exhaustion only).
  */
 
 import { Queue, type ConnectionOptions } from 'bullmq';
-import type { MessageEnvelope, Subscription } from './interfaces';
-import { IntegrationBus } from './integration-bus';
-import { topicMatches } from './topic';
+import type { MessageEnvelope } from './interfaces';
+import type { SubscriptionRegistry } from './subscription-registry';
 import type { InboxRepository } from './inbox-repository';
 import type { OutboxRepository } from './outbox-repository';
+import { HUB_DISPATCH_QUEUE } from './queue-names';
+
+/** Payload of a `hub-dispatch` job — everything the dispatch worker needs. */
+export interface DispatchJobData {
+  envelope: MessageEnvelope;
+  subscriptionId: string;
+  destinationConnectorId: string;
+  transformSteps: readonly string[];
+}
 
 export class RouterService {
-  private subscriptionQueues = new Map<string, Queue>();
+  private readonly dispatchQueue: Queue;
 
   constructor(
+    private readonly registry: SubscriptionRegistry,
     private readonly inboxRepo: InboxRepository,
     private readonly outboxRepo: OutboxRepository,
-    private readonly subscriptions: Subscription[],
-    private readonly connection: ConnectionOptions,
-  ) {}
+    connection: ConnectionOptions,
+  ) {
+    this.dispatchQueue = new Queue(HUB_DISPATCH_QUEUE, { connection });
+  }
 
   /**
-   * Route an envelope to all matching subscriptions.
-   * A subscription matches if its topic equals the envelope's topic
-   * (exact match or glob with wildcard support).
+   * Route one envelope to every matching subscription. Returns the number of
+   * dispatch jobs enqueued (0 when no subscription matched, or all were already
+   * dispatched to their destination).
    */
   async route(envelope: MessageEnvelope): Promise<number> {
-    // Mark inbox as processing
-    await this.inboxRepo.markProcessing(envelope.orgId, envelope.messageId);
+    const { orgId, messageId } = envelope;
 
-    const matchingSubs = this.subscriptions.filter((sub) =>
-      topicMatches(sub.topic, envelope.topic),
-    );
+    await this.inboxRepo.markProcessing(orgId, messageId);
 
+    const subs = this.registry.findForEnvelope(envelope);
     let dispatched = 0;
 
-    for (const sub of matchingSubs) {
-      // Write PENDING outbox entry for each destination
-      const outboxId = await this.outboxRepo.insert(
-        envelope,
-        sub.destinationConnectorId,
-      );
+    for (const sub of subs) {
+      // Record dispatch intent per destination BEFORE enqueuing (transactional
+      // outbox). A duplicate (same msg → same dest) is suppressed here.
+      const outboxId = await this.outboxRepo.insert(envelope, sub.destinationConnectorId);
+      if (outboxId === null) continue;
 
-      if (outboxId === null) {
-        // Duplicate — already dispatched to this destination
-        continue;
-      }
-
-      // Enqueue to subscription-specific queue
-      const queue = this.getOrCreateQueue(sub.id);
-      await queue.add('dispatch', {
+      const data: DispatchJobData = {
         envelope,
         subscriptionId: sub.id,
         destinationConnectorId: sub.destinationConnectorId,
         transformSteps: sub.transformSteps,
-      }, {
-        jobId: `${envelope.orgId}:${envelope.messageId}:${sub.id}`,
+      };
+
+      await this.dispatchQueue.add('dispatch', data, {
+        // BullMQ disallows ':' in custom job ids (it's the Redis key separator).
+        jobId: `${orgId}__${messageId}__${sub.id}`,
+        attempts: 4,
+        backoff: { type: 'exponential', delay: 1000 },
         removeOnComplete: 1000,
         removeOnFail: 5000,
       });
@@ -65,30 +82,14 @@ export class RouterService {
       dispatched++;
     }
 
-    // If no subscriptions matched, still mark inbox as done
-    if (dispatched === 0) {
-      await this.inboxRepo.markDone(envelope.orgId, envelope.messageId);
-    }
+    // Inbox = "routed" checkpoint: once fan-out is enqueued the envelope's intake
+    // is complete. Delivery success/failure lives in outbox + dead_letter.
+    await this.inboxRepo.markDone(orgId, messageId);
 
     return dispatched;
   }
 
-  private getOrCreateQueue(subscriptionId: string): Queue {
-    const name = IntegrationBus.subscriptionQueueName(subscriptionId);
-    let queue = this.subscriptionQueues.get(name);
-    if (!queue) {
-      queue = new Queue(name, { connection: this.connection });
-      this.subscriptionQueues.set(name, queue);
-    }
-    return queue;
-  }
-
   async close(): Promise<void> {
-    const closePromises: Promise<void>[] = [];
-    for (const queue of this.subscriptionQueues.values()) {
-      closePromises.push(queue.close());
-    }
-    await Promise.all(closePromises);
-    this.subscriptionQueues.clear();
+    await this.dispatchQueue.close();
   }
 }

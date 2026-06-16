@@ -8,8 +8,9 @@
 import { Queue, type ConnectionOptions } from 'bullmq';
 import type { MessageEnvelope } from './interfaces';
 import type { InboxRepository } from './inbox-repository';
+import { HUB_INTAKE_QUEUE } from './queue-names';
 
-const INTAKE_QUEUE_NAME = 'hub-intake';
+const INTAKE_QUEUE_NAME = HUB_INTAKE_QUEUE;
 
 export class IntegrationBus {
   private intakeQueue: Queue;
@@ -40,7 +41,8 @@ export class IntegrationBus {
       envelope,
       inboxId,
     }, {
-      jobId: `${envelope.orgId}:${envelope.messageId}`,
+      // BullMQ disallows ':' in custom job ids (it's the Redis key separator).
+      jobId: `${envelope.orgId}__${envelope.messageId}`,
       removeOnComplete: 1000,
       removeOnFail: 5000,
     });

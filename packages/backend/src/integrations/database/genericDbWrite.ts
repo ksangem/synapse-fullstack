@@ -65,6 +65,18 @@ export function toSqlDateTime(v: string): string {
   return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : v;
 }
 
+/**
+ * True only when the ENTIRE string is an ISO-8601 datetime (optionally with
+ * fractional seconds and a `Z`/±hh[:]mm offset) — e.g. "2025-10-17T12:09:57.091+0530"
+ * or "2025-10-17T12:09:57Z". Used to catch Jira/REST timestamps and normalize them
+ * for MySQL/SQL Server even when the mapping wasn't explicitly typed `datetime`.
+ * Anchored at both ends so it never truncates ordinary text that merely begins with
+ * a date.
+ */
+export function looksLikeIsoDateTime(v: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?\s*(Z|[+-]\d{2}:?\d{2})?$/.test(v);
+}
+
 /** Pick a surrogate-PK column name that doesn't collide with a mapped column. */
 function resolveAutoPkName(mappings: GenericMapping[]): string {
   const taken = new Set(mappings.map((m) => (m.to || '').toLowerCase()));
@@ -128,8 +140,11 @@ export async function writeRecordsToDb(opts: {
           }
           // Jira/ISO datetimes ("2025-10-17T12:09:57.091+0530") are accepted by Postgres
           // timestamptz but rejected by MySQL datetime / SQL Server datetime2. Normalize
-          // to "YYYY-MM-DD HH:MM:SS" (wall-clock, offset dropped) for those engines.
-          else if (t === 'datetime' && engine !== 'postgres' && typeof v === 'string' && v) {
+          // to "YYYY-MM-DD HH:MM:SS" (wall-clock, offset dropped) for those engines — for
+          // fields declared `datetime` AND for any value that is itself a full ISO-8601
+          // datetime, so Jira timestamps land correctly even when the mapping wasn't typed.
+          else if (engine !== 'postgres' && typeof v === 'string' && v
+                   && (t === 'datetime' || looksLikeIsoDateTime(v))) {
             v = toSqlDateTime(v);
           }
           row[m.to] = v;
