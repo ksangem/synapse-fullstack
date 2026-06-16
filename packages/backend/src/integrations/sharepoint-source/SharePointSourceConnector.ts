@@ -80,6 +80,9 @@ export class SharePointSourceConnector implements ISourceConnector {
         sourceConnectorId: this.connectorId,
         orgId: this.orgId,
         sequenceNo: sequenceNo++,
+        // Stable key = item + its last-modified stamp: an unchanged re-read dedups
+        // through the inbox, while a genuine edit (new lastModified) flows again.
+        idempotencyKey: `${mapped.spItemId}:${rawItem.lastModifiedDateTime}`,
         payload: {
           spItemId: mapped.spItemId,
           event: mapped.event,

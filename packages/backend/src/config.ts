@@ -30,6 +30,13 @@ const envSchema = z.object({
   // Local WireMock (docker, :8089) — the hub's local REST source for demos.
   WIREMOCK_URL: z.string().default('http://localhost:8089'),
 
+  // Day-9 demo SharePoint source (site + list Graph ids). Defaults target the
+  // sow2jira "synapse source test1" list (3 items) used for the bus proof.
+  // (Azure AD creds reuse the AZURE_* keys defined above.)
+  SP_DEMO_SITE_ID: z.string().default('mynalashaa.sharepoint.com,074746ec-5d72-4a4c-8b11-66e806e77f72,7ba11ac8-f6b4-4cdf-9e15-45bfbe57a969'),
+  SP_DEMO_LIST_ID: z.string().default('ee5e8e3c-5185-4111-9dc3-0a371b76ae58'),
+  SP_DEMO_LIST_SLUG: z.string().default('synapse-source-test1'),
+
   // Jira - Flatiron
   FLATIRON_JIRA_URL: z.string().optional(),
   FLATIRON_JIRA_EMAIL: z.string().optional(),

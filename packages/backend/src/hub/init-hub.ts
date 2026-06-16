@@ -28,6 +28,8 @@ import { hubService, DEFAULT_ORG } from './hub-service';
 import { EchoDestinationConnector, ECHO_DEST_ID } from './echo-destination';
 import { DbDestinationConnector } from './db-destination';
 import { RestSourceConnector } from './rest-source';
+import { SpFlattenStep, SP_FLATTEN_STEP_ID } from './sp-flatten-step';
+import { SharePointSourceConnector } from '../integrations/sharepoint-source/SharePointSourceConnector';
 import { loadSubscriptionsFromIntegrations } from './load-subscriptions';
 import type { ISourceConnector } from './interfaces';
 import { startHubIntakeWorker } from '../workers/hubIntakeWorker';
@@ -58,6 +60,8 @@ export async function initHub(): Promise<HubRuntime> {
   const idempotency = new IdempotencyRepository(db);
   const deadLetter = new DeadLetterRepository(db);
   const pipeline = new TransformPipeline();
+  // Transform that flattens a SharePoint item envelope into a flat DB row.
+  pipeline.register(new SpFlattenStep());
 
   // Publish side: writes the inbox checkpoint + enqueues to `hub-intake`.
   const bus = new IntegrationBus(inbox, connection);
@@ -148,6 +152,38 @@ export async function initHub(): Promise<HubRuntime> {
     channelCapacity: 100,
   });
 
+  // Day 9: SharePoint list → bus → DB. Register a flatten-then-write subscription
+  // (`sharepoint.*` → DB table sp_demo) and, when Azure creds are present, a
+  // SharePoint source the run-source endpoint can trigger.
+  const spDbDest = new DbDestinationConnector({
+    connectorId: 'test-sp-dest',
+    orgId: DEFAULT_ORG,
+    engine: 'postgres',
+    conn: {
+      host: config.CONNECTORS_PG_HOST,
+      port: config.CONNECTORS_PG_PORT,
+      database: config.CONNECTORS_PG_DB,
+      username: config.CONNECTORS_PG_USER,
+      password: config.CONNECTORS_PG_PASSWORD,
+      schema: 'public',
+    },
+    table: 'sp_demo',
+    naturalKey: 'sp_item_id',
+  });
+  hubService.registerDestination(spDbDest);
+  hubService.registry.register({
+    id: 'test-sp-sub',
+    orgId: DEFAULT_ORG,
+    integrationId: 'test-sp',
+    topic: 'sharepoint.*',
+    destinationConnectorId: 'test-sp-dest',
+    transformSteps: [SP_FLATTEN_STEP_ID],
+    processingMode: 'serial',
+    workerCount: 1,
+    batchSize: 1,
+    channelCapacity: 100,
+  });
+
   const sources = new Map<string, ISourceConnector>([
     [
       'wiremock-demo',
@@ -173,6 +209,27 @@ export async function initHub(): Promise<HubRuntime> {
       }),
     ],
   ]);
+
+  // SharePoint source — only when Azure creds are configured.
+  if (config.AZURE_TENANT_ID && config.AZURE_CLIENT_ID && config.AZURE_CLIENT_SECRET) {
+    sources.set(
+      'sp-demo',
+      new SharePointSourceConnector(
+        'sp-source-demo',
+        DEFAULT_ORG,
+        {
+          siteId: config.SP_DEMO_SITE_ID,
+          listId: config.SP_DEMO_LIST_ID,
+          triggerMode: 'delta',
+          pollIntervalSec: 0,
+          tenantId: config.AZURE_TENANT_ID,
+          clientId: config.AZURE_CLIENT_ID,
+          clientSecret: config.AZURE_CLIENT_SECRET,
+        },
+        config.SP_DEMO_LIST_SLUG,
+      ),
+    );
+  }
 
   // Day 8: turn every ACTIVE integration with a DB destination into live bus
   // wiring (subscription + destination). Best-effort — a bad row is skipped, not
