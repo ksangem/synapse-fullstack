@@ -17,12 +17,11 @@
  *        exponential backoff (the dispatch worker dead-letters on exhaustion only).
  */
 
-import { Queue, type ConnectionOptions } from 'bullmq';
 import type { MessageEnvelope } from './interfaces';
 import type { SubscriptionRegistry } from './subscription-registry';
 import type { InboxRepository } from './inbox-repository';
 import type { OutboxRepository } from './outbox-repository';
-import { HUB_DISPATCH_QUEUE } from './queue-names';
+import { hubDispatchQueue } from '../queues';
 
 /** Payload of a `hub-dispatch` job — everything the dispatch worker needs. */
 export interface DispatchJobData {
@@ -33,16 +32,14 @@ export interface DispatchJobData {
 }
 
 export class RouterService {
-  private readonly dispatchQueue: Queue;
+  // The shared `hub-dispatch` producer queue (declared in queues/index.ts).
+  private readonly dispatchQueue = hubDispatchQueue;
 
   constructor(
     private readonly registry: SubscriptionRegistry,
     private readonly inboxRepo: InboxRepository,
     private readonly outboxRepo: OutboxRepository,
-    connection: ConnectionOptions,
-  ) {
-    this.dispatchQueue = new Queue(HUB_DISPATCH_QUEUE, { connection });
-  }
+  ) {}
 
   /**
    * Route one envelope to every matching subscription. Returns the number of
@@ -90,6 +87,6 @@ export class RouterService {
   }
 
   async close(): Promise<void> {
-    await this.dispatchQueue.close();
+    // The dispatch queue is shared (owned by queues/index.ts) — nothing to close here.
   }
 }

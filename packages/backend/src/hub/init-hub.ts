@@ -14,9 +14,9 @@
  * and add the publish endpoints/sources that feed `hub-intake`.
  */
 
-import IORedis from 'ioredis';
 import { config } from '../config';
 import { db } from '../db/client';
+import { redisConnection } from '../queues';
 import { IntegrationBus } from './integration-bus';
 import { RouterService } from './router-service';
 import { TransformPipeline } from './transform-pipeline';
@@ -55,8 +55,8 @@ let runtime: HubRuntime | null = null;
 export async function initHub(): Promise<HubRuntime> {
   if (runtime) return runtime;
 
-  // Dedicated Redis connection — BullMQ requires `maxRetriesPerRequest: null`.
-  const connection = new IORedis(config.REDIS_URL, { maxRetriesPerRequest: null });
+  // Shared Redis connection (queues/index.ts) — BullMQ needs maxRetriesPerRequest:null.
+  const connection = redisConnection;
 
   // Synthetic integration that synthetic (test-publish/run-source) trigger runs
   // attribute their run_messages to.
@@ -71,11 +71,11 @@ export async function initHub(): Promise<HubRuntime> {
   pipeline.register(new SpFlattenStep());
 
   // Publish side: writes the inbox checkpoint + enqueues to `hub-intake`.
-  const bus = new IntegrationBus(inbox, connection);
+  const bus = new IntegrationBus(inbox);
 
   // Sorting half: drains `hub-intake`, fans out to `hub-dispatch` via the live
   // registry. Destinations + subscriptions live on the shared hubService.
-  const router = new RouterService(hubService.registry, inbox, outbox, connection);
+  const router = new RouterService(hubService.registry, inbox, outbox);
 
   // ── Phase-1 local proof: echo destination + a `synthetic.echo.*` subscription.
   // Lets POST /api/hub/test-publish move an envelope all the way through the bus

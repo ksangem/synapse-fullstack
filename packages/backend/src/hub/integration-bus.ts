@@ -5,22 +5,18 @@
  * The RouterService consumes intake and re-enqueues to per-subscription queues.
  */
 
-import { Queue, type ConnectionOptions } from 'bullmq';
 import type { MessageEnvelope } from './interfaces';
 import type { InboxRepository } from './inbox-repository';
 import { HUB_INTAKE_QUEUE } from './queue-names';
+import { hubIntakeQueue } from '../queues';
 
 const INTAKE_QUEUE_NAME = HUB_INTAKE_QUEUE;
 
 export class IntegrationBus {
-  private intakeQueue: Queue;
+  // The shared `hub-intake` producer queue (declared in queues/index.ts, decision #2).
+  private readonly intakeQueue = hubIntakeQueue;
 
-  constructor(
-    private readonly inboxRepo: InboxRepository,
-    connection: ConnectionOptions,
-  ) {
-    this.intakeQueue = new Queue(INTAKE_QUEUE_NAME, { connection });
-  }
+  constructor(private readonly inboxRepo: InboxRepository) {}
 
   /**
    * Publish a message to the hub.
@@ -65,6 +61,6 @@ export class IntegrationBus {
   }
 
   async close(): Promise<void> {
-    await this.intakeQueue.close();
+    // The intake queue is shared (owned by queues/index.ts) — nothing to close here.
   }
 }
