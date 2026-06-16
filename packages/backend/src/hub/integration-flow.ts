@@ -16,7 +16,7 @@ import { integrations } from '../db/schema';
 import { connectorService } from '../services/ConnectorService';
 import { hubService } from './hub-service';
 import { resolveCredentials } from './credentials';
-import { buildSource, buildDestination, hasSourceFactory, hasDestinationFactory, type ConnectorBuildSpec } from './connector-registry';
+import { buildSource, buildDestination, hasSourceFactory, hasDestinationFactory, sourceTopicPrefix, type ConnectorBuildSpec } from './connector-registry';
 import { FieldMappingStep, type FieldMapping } from './field-mapping-step';
 import type { TransformPipeline } from './transform-pipeline';
 import type { ISourceConnector } from './interfaces';
@@ -81,14 +81,26 @@ export async function registerIntegrationFlow(
     transformSteps.push(stepId);
   }
 
-  // Subscription: <sourceKey>.* → destination
-  const sourceKey = seg((config.sourceKey as string) || srcHead.key || srcHead.runtimeKind || 'source');
+  // Subscription scoped to the source's actual topic prefix, so adapters never
+  // cross-deliver (the prefix is supplied by the source plug-in, not the core).
+  const sourceKey = (config.sourceKey as string) || srcHead.key || srcHead.runtimeKind || 'source';
+  const prefix = sourceTopicPrefix({
+    connectorId: srcHead.connectorId,
+    orgId: integration.orgId,
+    kind: srcHead.runtimeKind ?? '',
+    config,
+    creds: {},
+    entity: (config.sourceEntity as string) ?? (config.entity as string) ?? undefined,
+    sourceKey,
+    integrationId: integration.integrationId,
+  });
+  const topic = `${prefix}.*`;
   const subId = `intg-${integration.integrationId}`;
   hubService.registry.register({
     id: subId,
     orgId: integration.orgId,
     integrationId: integration.integrationId,
-    topic: `${sourceKey}.*`,
+    topic,
     destinationConnectorId: destHead.connectorId,
     transformSteps,
     processingMode: 'serial',
@@ -97,7 +109,7 @@ export async function registerIntegrationFlow(
     channelCapacity: 100,
   });
 
-  return `${subId}: ${sourceKey}.* → ${destHead.runtimeKind}/${destHead.connectorId}`;
+  return `${subId}: ${topic} → ${destHead.runtimeKind}/${destHead.connectorId}`;
 }
 
 /** Build the source connector for an adapter (for a run trigger). */

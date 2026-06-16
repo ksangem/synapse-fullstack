@@ -34,12 +34,28 @@ export interface ConnectorBuildSpec {
 
 export type SourceFactory = (spec: ConnectorBuildSpec) => ISourceConnector | Promise<ISourceConnector>;
 export type DestinationFactory = (spec: ConnectorBuildSpec) => IDestinationConnector | Promise<IDestinationConnector>;
+/**
+ * Pure function (no I/O) returning the topic prefix a source emits for a spec,
+ * e.g. "restapi.product" or "sharepoint.my-list". The flow builder scopes each
+ * subscription to `${prefix}.*` so adapters never cross-deliver. Plug-in supplied
+ * so the core never knows a connector's topic convention.
+ */
+export type SourceTopicPrefix = (spec: ConnectorBuildSpec) => string;
 
-const sourceFactories = new Map<string, SourceFactory>();
+interface SourceEntry { factory: SourceFactory; topicPrefix?: SourceTopicPrefix }
+
+const sourceFactories = new Map<string, SourceEntry>();
 const destinationFactories = new Map<string, DestinationFactory>();
 
-export function registerSourceFactory(kind: string, factory: SourceFactory): void {
-  sourceFactories.set(kind, factory);
+export function registerSourceFactory(kind: string, factory: SourceFactory, topicPrefix?: SourceTopicPrefix): void {
+  sourceFactories.set(kind, { factory, topicPrefix });
+}
+
+/** The subscription topic prefix for a source spec (defaults to its sourceKey/kind). */
+export function sourceTopicPrefix(spec: ConnectorBuildSpec): string {
+  const entry = sourceFactories.get(spec.kind);
+  if (entry?.topicPrefix) return entry.topicPrefix(spec);
+  return spec.sourceKey ?? spec.kind;
 }
 
 export function registerDestinationFactory(kind: string, factory: DestinationFactory): void {
@@ -47,9 +63,9 @@ export function registerDestinationFactory(kind: string, factory: DestinationFac
 }
 
 export function buildSource(spec: ConnectorBuildSpec): ISourceConnector | Promise<ISourceConnector> {
-  const factory = sourceFactories.get(spec.kind);
-  if (!factory) throw new Error(`No source connector registered for kind "${spec.kind}"`);
-  return factory(spec);
+  const entry = sourceFactories.get(spec.kind);
+  if (!entry) throw new Error(`No source connector registered for kind "${spec.kind}"`);
+  return entry.factory(spec);
 }
 
 export function buildDestination(spec: ConnectorBuildSpec): IDestinationConnector | Promise<IDestinationConnector> {

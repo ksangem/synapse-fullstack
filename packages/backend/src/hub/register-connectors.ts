@@ -18,6 +18,7 @@ import { RestDestinationConnector } from './rest-destination';
 import { SharePointDestinationConnector } from './sp-destination';
 import { SourceCursorRepository } from './source-cursor-repository';
 import { SharePointPushService } from '../services/SharePointPushService';
+import { config } from '../config';
 import { db } from '../db/client';
 import type { DbConn, DbEngine } from '../integrations/database/genericDbWrite';
 import type { SharePointCredentials } from '../integrations/sharepoint/types';
@@ -26,6 +27,11 @@ const REST_KINDS = ['rest', 'saas', 'graphql'];
 
 function str(v: unknown, fallback = ''): string {
   return v == null ? fallback : String(v);
+}
+
+/** Lowercase a single topic segment (a-z 0-9 hyphen). */
+function seg(v: string): string {
+  return v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'x';
 }
 
 function dbEngineOf(config: Record<string, unknown>): DbEngine {
@@ -46,13 +52,14 @@ function dbConnOf(config: Record<string, unknown>, creds: Record<string, string>
   };
 }
 
-function spCredsOf(config: Record<string, unknown>, creds: Record<string, string>): SharePointCredentials {
+function spCredsOf(cfg: Record<string, unknown>, creds: Record<string, string>): SharePointCredentials {
+  // Azure AD app creds: per-adapter vault creds first, else the app-level env app.
   return {
-    tenantId: creds.tenantId || str(config.tenantId),
-    clientId: creds.clientId || str(config.clientId),
-    clientSecret: creds.clientSecret || str(config.clientSecret),
-    siteUrl: str(config.siteUrl || creds.siteUrl),
-    listName: str(config.listName || config.destListName),
+    tenantId: creds.tenantId || str(cfg.tenantId) || str(config.AZURE_TENANT_ID),
+    clientId: creds.clientId || str(cfg.clientId) || str(config.AZURE_CLIENT_ID),
+    clientSecret: creds.clientSecret || str(cfg.clientSecret) || str(config.AZURE_CLIENT_SECRET),
+    siteUrl: str(cfg.siteUrl || creds.siteUrl),
+    listName: str(cfg.listName || cfg.destListName),
   };
 }
 
@@ -62,26 +69,33 @@ export function registerBuiltinConnectors(): void {
   if (registered) return;
   registered = true;
 
-  // ── Sources ──────────────────────────────────────────────
+  // ── Sources (factory + the topic prefix it emits, for subscription scoping) ──
+  const restEntity = (s: ConnectorBuildSpec) => seg(s.entity ?? str(s.config.sourceEntity || s.config.entity));
   for (const kind of REST_KINDS) {
-    registerSourceFactory(kind, (s: ConnectorBuildSpec) =>
-      new AuthoredConnectorSource({
-        connectorId: s.connectorId,
-        orgId: s.orgId,
-        entity: s.entity ?? str(s.config.sourceEntity || s.config.entity),
-        creds: s.creds,
-        sourceKey: s.sourceKey,
-      }),
+    registerSourceFactory(
+      kind,
+      (s: ConnectorBuildSpec) =>
+        new AuthoredConnectorSource({
+          connectorId: s.connectorId,
+          orgId: s.orgId,
+          entity: s.entity ?? str(s.config.sourceEntity || s.config.entity),
+          creds: s.creds,
+          sourceKey: s.sourceKey,
+        }),
+      (s) => `${seg(s.sourceKey ?? s.kind)}.${restEntity(s)}`,
     );
   }
 
-  registerSourceFactory('jira', (s: ConnectorBuildSpec) =>
-    new JiraSourceConnector({
-      connectorId: s.connectorId,
-      orgId: s.orgId,
-      projectKey: str(s.config.projectKey || s.config.jiraProject || 'AIP'),
-      limit: Number(s.config.limit) || 50,
-    }),
+  registerSourceFactory(
+    'jira',
+    (s: ConnectorBuildSpec) =>
+      new JiraSourceConnector({
+        connectorId: s.connectorId,
+        orgId: s.orgId,
+        projectKey: str(s.config.projectKey || s.config.jiraProject || 'AIP'),
+        limit: Number(s.config.limit) || 50,
+      }),
+    () => 'jira.issues',
   );
 
   registerSourceFactory('sharepoint', async (s: ConnectorBuildSpec) => {
@@ -109,7 +123,7 @@ export function registerBuiltinConnectors(): void {
       (v) => cursors.save(s.orgId, s.integrationId, s.connectorId, 'deltaLink', v),
     );
     return source;
-  });
+  }, (s) => `sharepoint.${seg(str(s.config.listSlug || s.config.listName || 'list'))}`);
 
   // ── Destinations ─────────────────────────────────────────
   registerDestinationFactory('database', (s: ConnectorBuildSpec) =>

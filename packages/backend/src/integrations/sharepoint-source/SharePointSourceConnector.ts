@@ -61,11 +61,23 @@ export class SharePointSourceConnector implements ISourceConnector {
       this.columnTypes = await this.reader.buildColumnTypeMap();
     }
 
-    // Get saved delta cursor
-    const deltaLink = this.getCursor ? await this.getCursor() : undefined;
+    // Get saved delta cursor (treat an empty/reset value as "no cursor").
+    const deltaLink = (this.getCursor ? await this.getCursor() : null) || undefined;
 
-    // Fetch delta
-    const result = await this.reader.fetchDelta(deltaLink ?? undefined);
+    // Fetch delta. A saved cursor can go stale (Graph returns 404 itemNotFound);
+    // recover by resetting and doing a fresh full sync rather than failing the run.
+    let result;
+    try {
+      result = await this.reader.fetchDelta(deltaLink);
+    } catch (err) {
+      const msg = (err as Error).message ?? '';
+      if (deltaLink && /\b404\b|itemNotFound/i.test(msg)) {
+        if (this.saveCursor) await this.saveCursor('');
+        result = await this.reader.fetchDelta(undefined);
+      } else {
+        throw err;
+      }
+    }
 
     // Map and emit each item as a MessageEnvelope
     let sequenceNo = 0;
