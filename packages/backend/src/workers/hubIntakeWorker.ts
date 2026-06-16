@@ -14,6 +14,7 @@ import { Worker, type ConnectionOptions } from 'bullmq';
 import type { RouterService } from '../hub/router-service';
 import type { MessageEnvelope } from '../hub/interfaces';
 import { HUB_INTAKE_QUEUE } from '../hub/queue-names';
+import { recordIn } from '../hub/run-recorder';
 
 export function startHubIntakeWorker(
   router: RouterService,
@@ -23,6 +24,8 @@ export function startHubIntakeWorker(
     HUB_INTAKE_QUEUE,
     async (job) => {
       const { envelope } = job.data as { envelope: MessageEnvelope };
+      const runId = envelope.headers?.runId;
+      if (runId) await recordIn(runId, envelope.checksum);
       const dispatched = await router.route(envelope);
       return { dispatched };
     },

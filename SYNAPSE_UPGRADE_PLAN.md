@@ -76,9 +76,9 @@ This plan turns on the **distributed `IntegrationBus` (BullMQ/Redis)** as the li
 | 8 | Operator adapter via Wizard | ✅ loader: 7 subs from active integrations; wiremock.*→op_demo 6 rows via bus; reload endpoint |
 | 9 | SharePoint→DB via bus *(Azure)* | ✅ "synapse source test1" (3 items) → sp_demo via bus; idempotent; soft-delete flag |
 | 10 | Jira→SharePoint via bus *(Jira+Azure)* | ✅ 5 AIP issues → "Synapse Demo Out" list via bus; 0 DLQ; re-run no dup |
-| 11 | run_messages + /api/messages | ⬜ NEXT |
-| 12 | Monitor UI live flow | ⬜ |
-| 13 | 202 async + scheduler | ⬜ |
+| 11 | run_messages + /api/messages | ✅ run+run_messages(in/out) written; /api/messages unified inbox+outbox feed |
+| 12 | Monitor UI live flow | ✅ MonitorPage polls /api/messages (topic/dir/src→dest/status/payload); frontend builds |
+| 13 | 202 async + scheduler | ⬜ NEXT |
 | 14 | Authored connectors via bus | ⬜ |
 | 15 | Flip default on + cut over | ⬜ |
 | 16 | Delete extra buses + cleanup | ⬜ |

@@ -33,6 +33,7 @@ import { SharePointSourceConnector } from '../integrations/sharepoint-source/Sha
 import { JiraSourceConnector } from './jira-source';
 import { SharePointDestinationConnector } from './sp-destination';
 import { loadSubscriptionsFromIntegrations } from './load-subscriptions';
+import { ensureHubIntegration } from './run-recorder';
 import type { ISourceConnector } from './interfaces';
 import { startHubIntakeWorker } from '../workers/hubIntakeWorker';
 import { startHubDispatchWorker } from '../workers/hubDispatchWorker';
@@ -56,6 +57,10 @@ export async function initHub(): Promise<HubRuntime> {
 
   // Dedicated Redis connection — BullMQ requires `maxRetriesPerRequest: null`.
   const connection = new IORedis(config.REDIS_URL, { maxRetriesPerRequest: null });
+
+  // Synthetic integration that synthetic (test-publish/run-source) trigger runs
+  // attribute their run_messages to.
+  await ensureHubIntegration();
 
   const inbox = new InboxRepository(db);
   const outbox = new OutboxRepository(db);

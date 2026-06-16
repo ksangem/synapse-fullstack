@@ -48,6 +48,9 @@ export const api = {
   getCredentials: async () => fetchApi('/api/credentials'),
   getAlerts: async (query = '') => fetchApi(`/api/alerts${query}`),
 
+  // ── Trading Network Console feed (bus per-message flow) ──
+  getMessages: async (query = '') => fetchApi(`/api/messages${query}`),
+
   // ── Real backend endpoints (Jira integration) ──
   testJiraConnection: async (endpointUrl, email, apiToken) => {
     return fetchApi('/api/jira/test-connection', {

@@ -33,6 +33,7 @@ import type { IdempotencyRepository } from '../hub/idempotency-repository';
 import type { DeadLetterRepository } from '../hub/dead-letter-repository';
 import type { DispatchJobData } from '../hub/router-service';
 import { HUB_DISPATCH_QUEUE } from '../hub/queue-names';
+import { recordOut } from '../hub/run-recorder';
 
 export interface HubDispatchDeps {
   /** Resolve a destination connector by id (e.g. hubService.getDestination). */
@@ -72,6 +73,9 @@ export function startHubDispatchWorker(
       await destination.dispatch(outbound, signal);
       await outbox.markDone(orgId, messageId, destinationConnectorId);
       await idempotency.record(orgId, messageId, destinationConnectorId);
+
+      const runId = envelope.headers?.runId;
+      if (runId) await recordOut(runId, 'delivered', envelope.checksum);
     },
     { connection, concurrency: 5 },
   );
@@ -88,6 +92,8 @@ export function startHubDispatchWorker(
       try {
         await outbox.markFailed(envelope.orgId, envelope.messageId, destinationConnectorId, message);
         await deadLetter.insert(envelope, destinationConnectorId, message);
+        const runId = envelope.headers?.runId;
+        if (runId) await recordOut(runId, 'failed', envelope.checksum);
         console.error(`[HubDispatch] dead-lettered ${envelope.messageId} → ${destinationConnectorId}: ${message}`);
       } catch (e) {
         console.error('[HubDispatch] failed to record dead-letter:', e);

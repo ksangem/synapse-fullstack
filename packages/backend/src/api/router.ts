@@ -13,6 +13,7 @@ import dlqRoutes from './dlq.routes';
 import connectorsRoutes from './connectors.routes';
 import entitiesRoutes from './entities.routes';
 import ingestRoutes from './ingest.routes';
+import messagesRoutes from './messages.routes';
 import alertsRoutes from './alerts.routes';
 import crawlStudioRoutes from './crawl-studio.routes';
 
@@ -23,6 +24,7 @@ apiRouter.use('/crawl-studio', crawlStudioRoutes);
 apiRouter.use('/entities', entitiesRoutes);
 apiRouter.use('/ingest', ingestRoutes); // public inbound webhook ingestion
 apiRouter.use('/integrations', integrationsRoutes);
+apiRouter.use('/messages', messagesRoutes); // Trading Network Console feed
 apiRouter.use('/runs', runsRoutes);
 apiRouter.use('/credentials', credentialsRoutes);
 apiRouter.use('/alerts', alertsRoutes);

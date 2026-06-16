@@ -17,7 +17,14 @@ import { getHub } from '../hub/init-hub';
 import { loadSubscriptionsFromIntegrations } from '../hub/load-subscriptions';
 import { DEFAULT_ORG } from '../hub/hub-service';
 import { createEnvelope } from '../hub/envelope';
-import type { JsonValue } from '../hub/interfaces';
+import { startRun, finishRun } from '../hub/run-recorder';
+import type { JsonValue, MessageEnvelope } from '../hub/interfaces';
+
+/** Stamp the runId into an envelope's headers so the workers can audit it. */
+function withRun(envelope: MessageEnvelope, runId: string | null): MessageEnvelope {
+  if (!runId) return envelope;
+  return { ...envelope, headers: { ...(envelope.headers ?? {}), runId } };
+}
 
 const router = Router();
 
@@ -55,7 +62,9 @@ router.post('/test-publish', async (req: Request, res: Response) => {
 
     // bus.publish returns the inbox id, or null when the message was a duplicate
     // (same orgId+messageId already checkpointed) — re-delivery suppressed.
-    const inboxId = await getHub().bus.publish(envelope);
+    const runId = await startRun();
+    const inboxId = await getHub().bus.publish(withRun(envelope, runId));
+    await finishRun(runId, inboxId !== null ? 1 : 0);
 
     res.status(202).json({
       success: true,
@@ -116,14 +125,16 @@ router.post('/run-source', async (req: Request, res: Response) => {
     let published = 0;
     let duplicate = 0;
     const signal = new AbortController().signal;
+    const runId = await startRun();
     for await (const envelope of connector.read(signal)) {
       records++;
-      const inboxId = await hub.bus.publish(envelope);
+      const inboxId = await hub.bus.publish(withRun(envelope, runId));
       if (inboxId === null) duplicate++;
       else published++;
     }
+    await finishRun(runId, published);
 
-    res.status(202).json({ success: true, data: { source, records, published, duplicate } });
+    res.status(202).json({ success: true, data: { source, records, published, duplicate, runId } });
   } catch (err) {
     const e = err as { message?: string };
     res.status(400).json({ success: false, error: e.message ?? 'run-source failed' });
