@@ -15,6 +15,7 @@
 import type { MessageEnvelope, ITransformStep, JsonValue } from './interfaces';
 import { createEnvelope } from './envelope';
 import { H } from './envelope-meta';
+import { applyRichMappings, type MappingEntry } from '../services/MappingEngine';
 
 export interface FieldMapping {
   /** Dotted path into the source record. */
@@ -27,32 +28,47 @@ export interface FieldMapping {
 
 export interface FieldMappingOptions {
   stepId: string;
-  mappings: FieldMapping[];
+  /** Either the simple {from,to,type} list, or the Wizard's rich MappingEntry[]. */
+  mappings: (FieldMapping | MappingEntry)[];
   /** Target column that holds the natural (dedup/upsert) key. */
   naturalKeyColumn: string;
   /** Optional explicit destination table to stamp on the envelope. */
   destTable?: string;
 }
 
+/** Rich (Wizard) mapping shape carries sources[]/destinations[]/transform. */
+function isRichMapping(m: FieldMapping | MappingEntry): m is MappingEntry {
+  return Array.isArray((m as MappingEntry).sources) && Array.isArray((m as MappingEntry).destinations);
+}
+
 export class FieldMappingStep implements ITransformStep {
   readonly stepId: string;
-  private readonly mappings: FieldMapping[];
+  private readonly mappings: (FieldMapping | MappingEntry)[];
   private readonly naturalKeyColumn: string;
   private readonly destTable?: string;
+  private readonly rich: boolean;
 
   constructor(opts: FieldMappingOptions) {
     this.stepId = opts.stepId;
     this.mappings = opts.mappings;
     this.naturalKeyColumn = opts.naturalKeyColumn;
     this.destTable = opts.destTable;
+    this.rich = opts.mappings.length > 0 && isRichMapping(opts.mappings[0]);
   }
 
   async execute(envelope: MessageEnvelope, _signal: AbortSignal): Promise<MessageEnvelope> {
     const record = (envelope.payload ?? {}) as Record<string, JsonValue>;
 
-    const row: Record<string, JsonValue> = {};
-    for (const m of this.mappings) {
-      row[m.to] = coerce(resolvePath(record, m.from), m.type);
+    let row: Record<string, JsonValue>;
+    if (this.rich) {
+      // Wizard mappings (DIRECT/PRESET/EXPRESSION, multi-source, multi-dest) — applied
+      // server-side by the shared MappingEngine so the run matches the Wizard preview.
+      row = applyRichMappings(record, this.mappings as MappingEntry[]) as Record<string, JsonValue>;
+    } else {
+      row = {};
+      for (const m of this.mappings as FieldMapping[]) {
+        row[m.to] = coerce(resolvePath(record, m.from), m.type);
+      }
     }
 
     const naturalKeyValue = row[this.naturalKeyColumn];

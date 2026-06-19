@@ -785,7 +785,9 @@ describe('Combined mapping pipeline: DIRECT + PRESET + EXPRESSION', () => {
 let testRunId = '';
 let testPushRunId = '';
 
-describe('E2E: Auto-map push via live API', () => {
+// Retired: /api/sharepoint/push was removed (direct bus-bypassing push). The mapping
+// logic above is still covered by the unit-level suites; live push now goes via the bus.
+describe.skip('E2E: Auto-map push via live API', () => {
   beforeAll(async () => {
     // Use an existing run ID from previous fetches if available
     const runsRes = await api('/api/sharepoint/runs');

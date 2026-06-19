@@ -3,7 +3,6 @@ import { connectorService } from '../services/ConnectorService';
 import { connectorAuthoringService } from '../services/ConnectorAuthoringService';
 import { getRuntime, capabilitiesFor } from '../services/runtime/registry';
 import { CATEGORY_REGISTRY } from '../connectors/category-registry';
-import { writeRecordsToDb } from '../integrations/database/genericDbWrite';
 import { db } from '../db/client';
 import { connectorTestRuns } from '../db/schema';
 
@@ -69,37 +68,11 @@ router.post('/runtime/fetch', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/runtime/push', async (req: Request, res: Response) => {
-  try {
-    const { connectorId, versionId, creds, entity, records } = req.body ?? {};
-    if (!connectorId || !creds || !entity || !Array.isArray(records)) { res.status(400).json({ success: false, error: 'connectorId, creds, entity, records[] required' }); return; }
-    const { head, runtime, ctx } = await resolveRuntime(connectorId, versionId);
-    if (!runtime.push) { res.status(400).json({ success: false, error: `push not supported for runtime "${head.runtimeKind}"` }); return; }
-    const result = await runtime.push(creds, entity, records, ctx);
-    res.json({ success: true, data: result });
-  } catch (err) {
-    fail(res, err, 400);
-  }
-});
-
-// Push arbitrary records (e.g. fetched from a REST source) into a database destination.
-router.post('/runtime/push-to-db', async (req: Request, res: Response) => {
-  try {
-    const { engine, conn, table, records, mappings, naturalKey } = req.body ?? {};
-    if (!engine || !conn || !table || !Array.isArray(records) || !Array.isArray(mappings)) {
-      res.status(400).json({ success: false, error: 'engine, conn, table, records[], mappings[] required' });
-      return;
-    }
-    console.log(`[push-to-db] engine=${engine} host=${conn?.host}:${conn?.port} db=${conn?.database} schema=${conn?.schema ?? '-'} table=${table} records=${records.length} mappings=${mappings.length} key=${naturalKey ?? '(default)'}`);
-    const result = await writeRecordsToDb({ engine, conn, table, records, mappings, naturalKey });
-    if (result.failed > 0) console.warn(`[push-to-db] ${result.inserted} inserted, ${result.updated} updated, ${result.failed} FAILED. First errors:`, result.errors);
-    else console.log(`[push-to-db] OK: ${result.inserted} inserted, ${result.updated} updated, tableCreated=${result.tableCreated}`);
-    res.json({ success: true, data: result });
-  } catch (err) {
-    console.error('[push-to-db] FAILED:', err instanceof Error ? err.message : err);
-    fail(res, err, 400);
-  }
-});
+// NOTE: the direct `POST /runtime/push` and `POST /runtime/push-to-db` endpoints were
+// retired — they wrote to sinks in-request, bypassing the bus, and had no live callers.
+// All operator pushes now flow through the IntegrationBus via /api/hub/publish-records
+// (records-delivery.ts) and /api/hub/run-integration. The underlying writers
+// (runtime.push / writeRecordsToDb) are reused by the bus destination connectors.
 
 // ── Generic runtime discovery (registry-dispatched by the connector's runtimeKind) ──
 // These let the Wizard call ONE set of endpoints instead of branching per kind.

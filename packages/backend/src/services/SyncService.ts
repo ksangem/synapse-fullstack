@@ -11,6 +11,7 @@ import { isTerminalStatus } from '../mappers/jiraToSharePoint';
 import { config } from '../config';
 import type { SharePointCredentials } from '../integrations/sharepoint/types';
 import type { SyncTriggerPayload, PushType } from '../types/sync.types';
+import type { JsonValue } from '../hub/interfaces';
 
 const pushLogRepo = new PushLogRepository();
 const syncStateRepo = new SyncStateRepository();
@@ -194,82 +195,174 @@ export async function runSync(
 
     console.log(`[Sync] ${issues.length} fetched, ${skippedCount} skipped (terminal on both ends), ${actionableIssues.length} actionable`);
 
-    // ─── STEP 4: Process actionable issues ────────────────
+    // ─── STEP 4: Deliver actionable issues ────────────────
     let newCount = 0;
     let updatedCount = 0;
     let failedCount = 0;
     const errors: Array<{ jiraKey: string; error: string }> = [];
 
-    for (let i = 0; i < actionableIssues.length; i += BATCH_SIZE) {
-      const batch = actionableIssues.slice(i, i + BATCH_SIZE);
+    // The dedup/natural key column. The default mapper emits 'IssueKey' (= issue.key),
+    // which SharePointPushService.findListItemByTitle queries first; user mappings may
+    // override it via fieldMappings.naturalKeyColumn.
+    const nkColumn =
+      ((fieldMappings as Record<string, unknown> | null)?.naturalKeyColumn as string) || 'IssueKey';
 
-      for (const issue of batch) {
+    // Bus-as-delivery (default): publish the mapped rows onto the IntegrationBus instead
+    // of writing SharePoint in-request. The SharePointDestinationConnector provisions
+    // columns, dedups by the natural key, and PATCHes/POSTs — with idempotency, BullMQ
+    // retry/backoff, dead-letter, and run_messages observability. Requires a resolvable
+    // listName (the bus SP destination resolves siteId/listId from siteUrl + listName).
+    // Falls back to the direct in-request path when the hub is off or the list can only
+    // be resolved by id. NOTE: delivery is async, so the push_log counts below reflect
+    // rows PUBLISHED (inbox-accepted), not yet confirmed written — delivery truth lives
+    // in run_messages + dead_letter_entries (visible on the Monitor page).
+    const useBus = config.HUB_ENABLED && !!listName;
+
+    if (useBus) {
+      const { publishRecords } = await import('../hub/records-delivery');
+
+      // Map + coerce each actionable issue once; bucket by cache presence so the
+      // new/updated breakdown push_log records is preserved.
+      const createdRows: Record<string, JsonValue>[] = [];
+      const updatedRows: Record<string, JsonValue>[] = [];
+      const cacheUpdates: Array<{ key: string; spItemId: string; status: string; isTerminal: boolean }> = [];
+
+      for (const issue of actionableIssues) {
         const issueKey = (issue.key as string) ?? '';
         if (!issueKey) continue;
 
-        // Use user-defined MappingConfig if available in fieldMappings, else default mapper
-        const userMappingConfig = (fieldMappings as Record<string, unknown>)?.mappings
+        const userMappingConfig = (fieldMappings as Record<string, unknown> | null)?.mappings
           ? (fieldMappings as unknown as MappingConfig)
           : null;
         const rawMapped = userMappingConfig?.mappings?.length
           ? applyMappings(issue, userMappingConfig)
           : mapper.mapToSharePointItem(issue, { source: triggeredBy, runId: integrationId }).fields;
-        const mapped = coerceToColumnTypes(rawMapped, colTypes);
+        const mapped = coerceToColumnTypes(rawMapped, colTypes) as Record<string, JsonValue>;
+
+        // Guarantee the dedup key is present so the destination can find an existing
+        // item by it (default mapper sets it; user mappings might not).
+        const nk = mapped[nkColumn];
+        if (nk === undefined || nk === null || nk === '') mapped[nkColumn] = issueKey;
+
         const statusName = (mapped.StatusName as string) ?? '';
-        const newIsTerminal = isTerminalStatus(statusName);
+        const cacheRow = cacheMap.get(issueKey);
+        if (cacheRow) updatedRows.push(mapped);
+        else createdRows.push(mapped);
+        cacheUpdates.push({
+          key: issueKey,
+          spItemId: cacheRow?.spItemId ?? '',
+          status: statusName,
+          isTerminal: isTerminalStatus(statusName),
+        });
+      }
 
-        try {
-          let cacheRow = cacheMap.get(issueKey);
+      const spConfig = { siteUrl, listName, keyColumn: nkColumn };
+      const spCreds = { tenantId: creds.tenantId, clientId: creds.clientId, clientSecret: creds.clientSecret };
 
-          if (cacheRow) {
-            // Item exists in cache → PATCH
-            const patchResult = await spPushService.patchListItem(
-              siteId, listId, cacheRow.spItemId, token, mapped
-            );
+      try {
+        if (createdRows.length) {
+          const r = await publishRecords({
+            kind: 'sharepoint', config: spConfig, creds: spCreds,
+            records: createdRows, naturalKeyColumn: nkColumn, event: 'created', integrationId,
+          });
+          newCount = r.published;
+        }
+        if (updatedRows.length) {
+          const r = await publishRecords({
+            kind: 'sharepoint', config: spConfig, creds: spCreds,
+            records: updatedRows, naturalKeyColumn: nkColumn, event: 'updated', integrationId,
+          });
+          updatedCount = r.published;
+        }
+      } catch (err) {
+        failedCount = createdRows.length + updatedRows.length;
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        errors.push({ jiraKey: '*', error: `bus publish failed: ${msg}` });
+      }
 
-            if (patchResult.ok) {
-              await cacheRepo.upsert(integrationId, issueKey, {
-                spItemId: cacheRow.spItemId,
-                jiraStatus: statusName,
-                spStatus: statusName,
-                isTerminal: newIsTerminal,
-              });
-              updatedCount++;
-            } else if (patchResult.status === 404) {
-              // SP item gone — fall through to POST
-              cacheRow = undefined;
-            } else {
-              failedCount++;
-              errors.push({ jiraKey: issueKey, error: patchResult.errorBody.substring(0, 200) });
-              continue;
-            }
-          }
+      // Refresh the terminal-skip cache (no spItemId round-trip — the destination owns
+      // dedup now; only isTerminal/status drive the STEP 3 skip on the next run).
+      for (const u of cacheUpdates) {
+        await cacheRepo.upsert(integrationId, u.key, {
+          spItemId: u.spItemId,
+          jiraStatus: u.status,
+          spStatus: u.status,
+          isTerminal: u.isTerminal,
+        });
+      }
+    } else {
+      // ── Direct fallback (hub off, or list resolvable by id only) ──
+      for (let i = 0; i < actionableIssues.length; i += BATCH_SIZE) {
+        const batch = actionableIssues.slice(i, i + BATCH_SIZE);
 
-          if (!cacheRow) {
-            // Net-new issue — POST to SharePoint
-            const url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items`;
-            const createResult = await spPushService.createItemPublic(url, mapped, token);
+        for (const issue of batch) {
+          const issueKey = (issue.key as string) ?? '';
+          if (!issueKey) continue;
 
-            if (createResult.ok) {
-              const spItemId = await spPushService.findListItemByTitle(siteId, listId, token, issueKey);
-              if (spItemId) {
+          // Use user-defined MappingConfig if available in fieldMappings, else default mapper
+          const userMappingConfig = (fieldMappings as Record<string, unknown>)?.mappings
+            ? (fieldMappings as unknown as MappingConfig)
+            : null;
+          const rawMapped = userMappingConfig?.mappings?.length
+            ? applyMappings(issue, userMappingConfig)
+            : mapper.mapToSharePointItem(issue, { source: triggeredBy, runId: integrationId }).fields;
+          const mapped = coerceToColumnTypes(rawMapped, colTypes);
+          const statusName = (mapped.StatusName as string) ?? '';
+          const newIsTerminal = isTerminalStatus(statusName);
+
+          try {
+            let cacheRow = cacheMap.get(issueKey);
+
+            if (cacheRow) {
+              // Item exists in cache → PATCH
+              const patchResult = await spPushService.patchListItem(
+                siteId, listId, cacheRow.spItemId, token, mapped
+              );
+
+              if (patchResult.ok) {
                 await cacheRepo.upsert(integrationId, issueKey, {
-                  spItemId,
+                  spItemId: cacheRow.spItemId,
                   jiraStatus: statusName,
                   spStatus: statusName,
                   isTerminal: newIsTerminal,
                 });
+                updatedCount++;
+              } else if (patchResult.status === 404) {
+                // SP item gone — fall through to POST
+                cacheRow = undefined;
+              } else {
+                failedCount++;
+                errors.push({ jiraKey: issueKey, error: patchResult.errorBody.substring(0, 200) });
+                continue;
               }
-              newCount++;
-            } else {
-              failedCount++;
-              errors.push({ jiraKey: issueKey, error: createResult.errorBody.substring(0, 200) });
             }
+
+            if (!cacheRow) {
+              // Net-new issue — POST to SharePoint
+              const url = `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/items`;
+              const createResult = await spPushService.createItemPublic(url, mapped, token);
+
+              if (createResult.ok) {
+                const spItemId = await spPushService.findListItemByTitle(siteId, listId, token, issueKey);
+                if (spItemId) {
+                  await cacheRepo.upsert(integrationId, issueKey, {
+                    spItemId,
+                    jiraStatus: statusName,
+                    spStatus: statusName,
+                    isTerminal: newIsTerminal,
+                  });
+                }
+                newCount++;
+              } else {
+                failedCount++;
+                errors.push({ jiraKey: issueKey, error: createResult.errorBody.substring(0, 200) });
+              }
+            }
+          } catch (err) {
+            failedCount++;
+            const msg = err instanceof Error ? err.message : 'Unknown error';
+            errors.push({ jiraKey: issueKey, error: msg });
           }
-        } catch (err) {
-          failedCount++;
-          const msg = err instanceof Error ? err.message : 'Unknown error';
-          errors.push({ jiraKey: issueKey, error: msg });
         }
       }
     }

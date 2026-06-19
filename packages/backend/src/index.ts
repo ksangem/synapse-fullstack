@@ -4,17 +4,25 @@ import path from 'path';
 import http from 'node:http';
 import { config } from './config';
 import apiRouter from './api/router';
+import { actorMiddleware } from './api/middleware/actor';
 import { attachCrawlStudioStream } from './api/crawl-studio.ws';
 
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+// Stash the raw request bytes so webhook ingestion can HMAC-verify the signature
+// header against the exact payload the sender signed (parsed JSON can't be re-derived
+// byte-for-byte). Harmless for every other route.
+// 50mb limit (default is 100kb) — operator pushes can be large (e.g. a month of
+// records × 100+ mapped fields). Below this, big publishes 413'd as "PayloadTooLargeError".
+app.use(express.json({ limit: '50mb', verify: (req, _res, buf) => { (req as unknown as { rawBody?: Buffer }).rawBody = buf; } }));
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok' });
 });
 
+// Resolve req.actor (userId/orgId/role) for every API request before routing.
+app.use('/api', actorMiddleware);
 app.use('/api', apiRouter);
 
 // Serve React frontend in production/QA

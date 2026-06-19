@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../../hooks/useTheme';
 import { api } from '../../services/api';
 import { SidebarContext } from '../../contexts/SidebarContext';
+import { useAuth } from '../../contexts/AuthContext';
 
 const categoryRoutes = {
   connectors: '/studio',
@@ -33,6 +34,7 @@ const pages = [
 
 export default function Topbar({ onNotificationToggle, onHelpToggle }) {
   const { theme, toggleTheme } = useTheme();
+  const { user, logout } = useAuth();
   const { toggleMobile } = useContext(SidebarContext);
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
@@ -189,9 +191,10 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
           <span className="badge-count">3</span>
         </button>
         <button className="icon-btn" onClick={onHelpToggle} title="Help">?</button>
-        <div className="user-menu">
-          <div className="user-avatar">AJ</div>
-          <span className="user-name">Ananthu Jayakumar</span>
+        <div className="user-menu" title={user?.email}>
+          <div className="user-avatar">{(user?.email || '?').slice(0, 2).toUpperCase()}</div>
+          <span className="user-name">{user?.email || 'Signed out'}{user?.role ? ` · ${user.role}` : ''}</span>
+          <button className="icon-btn" onClick={logout} title="Sign out" style={{ marginLeft: 8 }}>&#x23FB;</button>
         </div>
       </div>
     </div>

@@ -10,13 +10,28 @@
 // proxy forwards /api to the backend (works over LAN IP and public tunnels alike).
 const API = import.meta.env.VITE_API_URL ?? `http://${window.location.hostname}:4000`;
 
+// Access token set by AuthContext on login; sent as a Bearer the backend verifies
+// (BRD §7.8). When absent, dev backends fall back to the seeded admin (AUTH_REQUIRED off).
+export const ACCESS_TOKEN_KEY = 'synapse_access_token';
+function authToken() {
+  try { return localStorage.getItem(ACCESS_TOKEN_KEY); } catch { return null; }
+}
+
 async function fetchApi(path, options = {}) {
   try {
+    const token = authToken();
     const res = await fetch(`${API}${path}`, {
-      headers: { 'Content-Type': 'application/json', ...options.headers },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
       ...options,
     });
-    const data = await res.json();
+    // Tolerate non-JSON error bodies (e.g. a 413 HTML page) — keep the real status
+    // so callers can distinguish "server rejected it" from "server unreachable".
+    let data = null;
+    try { data = await res.json(); } catch { data = null; }
     return { ok: res.ok, status: res.status, data };
   } catch {
     return { ok: false, status: 0, data: null };
@@ -46,6 +61,33 @@ export const api = {
 
   // ── Credentials / alerts (real backend) ──
   getCredentials: async () => fetchApi('/api/credentials'),
+  // Audited reveal; mode='copy' for copy-to-clipboard (still audited, never displayed).
+  revealCredential: async (credId, mode) =>
+    fetchApi(`/api/credentials/${credId}/decrypt${mode === 'copy' ? '?mode=copy' : ''}`),
+  rotateCredential: async (credId, payload) =>
+    fetchApi(`/api/credentials/${credId}/rotate`, { method: 'PATCH', body: JSON.stringify({ payload }) }),
+  revokeCredential: async (credId) =>
+    fetchApi(`/api/credentials/${credId}/revoke`, { method: 'POST', body: JSON.stringify({}) }),
+  getCredentialCompliance: async () => fetchApi('/api/credentials/compliance'),
+
+  // ── Auth (BRD §7.8) ──
+  login: async (email, password) => fetchApi('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  getMe: async () => fetchApi('/api/auth/me'),
+
+  // ── Users & roles (admin) ──
+  getUsers: async () => fetchApi('/api/users'),
+  createUser: async (body) => fetchApi('/api/users', { method: 'POST', body: JSON.stringify(body) }),
+  changeUserRole: async (id, role) => fetchApi(`/api/users/${id}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+  setUserActive: async (id, active) => fetchApi(`/api/users/${id}/${active ? 'activate' : 'deactivate'}`, { method: 'POST', body: JSON.stringify({}) }),
+
+  // ── Audit trail (admin) ──
+  getAudit: async (query = '') => fetchApi(`/api/audit${query}`),
+
+  // ── Client apps (admin) ──
+  getClients: async () => fetchApi('/api/clients'),
+  registerClient: async (body) => fetchApi('/api/clients/register', { method: 'POST', body: JSON.stringify(body) }),
+  revokeClient: async (id) => fetchApi(`/api/clients/${id}/revoke`, { method: 'POST', body: JSON.stringify({}) }),
+
   getAlerts: async (query = '') => fetchApi(`/api/alerts${query}`),
 
   // ── Trading Network Console feed (bus per-message flow) ──
@@ -117,12 +159,8 @@ export const api = {
     });
   },
 
-  pushToSharePoint: async (params) => {
-    return fetchApi('/api/sharepoint/push', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    });
-  },
+  // pushToSharePoint (POST /api/sharepoint/push) was retired — SharePoint delivery now
+  // flows through the bus via publishRecords()/deliverViaBus in WizardPage.
 
   getSharePointProgress: async (pushRunId) => {
     return fetchApi(`/api/sharepoint/progress/${pushRunId}`);
@@ -201,12 +239,35 @@ export const api = {
     });
   },
 
-  // ── Real backend endpoints (Push) ──
-  pushProject: async (body) => {
-    return fetchApi('/api/push/project', {
+  // Pause/resume an integration (toggles status + the BullMQ cron). Clone duplicates
+  // it as a draft. Bulk pause/resume is admin-only (403 otherwise).
+  pauseIntegration: async (integrationId) =>
+    fetchApi(`/api/connected/${integrationId}/pause`, { method: 'POST', body: JSON.stringify({}) }),
+  resumeIntegration: async (integrationId) =>
+    fetchApi(`/api/connected/${integrationId}/resume`, { method: 'POST', body: JSON.stringify({}) }),
+  cloneIntegration: async (integrationId) =>
+    fetchApi(`/api/integrations/${integrationId}/clone`, { method: 'POST', body: JSON.stringify({}) }),
+  bulkConnected: async (action, ids) =>
+    fetchApi('/api/connected/bulk', { method: 'POST', body: JSON.stringify({ action, ids }) }),
+  // Trigger a generic bus adapter (non-Jira→SP). Returns { records, published, runId }.
+  runIntegration: async (integrationId) =>
+    fetchApi(`/api/hub/run-integration/${integrationId}`, { method: 'POST', body: JSON.stringify({}) }),
+  // Server-side mapped preview: reads N source rows, applies the integration's mappings,
+  // returns the mapped sample without publishing (no full dataset in the browser).
+  previewIntegration: async (integrationId, limit = 20) =>
+    fetchApi(`/api/hub/preview-integration/${integrationId}?limit=${limit}`, { method: 'POST', body: JSON.stringify({}) }),
+
+  // ── Bus delivery (the single write path) ──
+  // Publish already-mapped rows onto the Integration Bus for delivery to a generic
+  // destination (database / sharepoint). Returns 202 + { runId }; poll getRunStatus.
+  publishRecords: async (body) => {
+    return fetchApi('/api/hub/publish-records', {
       method: 'POST',
       body: JSON.stringify(body),
     });
+  },
+  getRunStatus: async (runId) => {
+    return fetchApi(`/api/hub/run-status/${runId}`);
   },
 
   // ── Saved connections ──
@@ -265,9 +326,6 @@ export const api = {
   getPgTableColumns: async (params) => {
     return fetchApi('/api/hub/pg-table-columns', { method: 'POST', body: JSON.stringify(params) });
   },
-  pushToPg: async (params) => {
-    return fetchApi('/api/hub/push-to-pg', { method: 'POST', body: JSON.stringify(params) });
-  },
   previewDdl: async (params) => {
     return fetchApi('/api/hub/preview-ddl', { method: 'POST', body: JSON.stringify(params) });
   },
@@ -288,9 +346,6 @@ export const api = {
   getMysqlTableColumns: async (params) => {
     return fetchApi('/api/hub/mysql-table-columns', { method: 'POST', body: JSON.stringify(params) });
   },
-  pushToMysql: async (params) => {
-    return fetchApi('/api/hub/push-to-mysql', { method: 'POST', body: JSON.stringify(params) });
-  },
   mysqlQuickView: async (params) => {
     return fetchApi('/api/hub/mysql-quick-view', { method: 'POST', body: JSON.stringify(params) });
   },
@@ -304,9 +359,6 @@ export const api = {
   },
   getMssqlTableColumns: async (params) => {
     return fetchApi('/api/hub/mssql-table-columns', { method: 'POST', body: JSON.stringify(params) });
-  },
-  pushToMssql: async (params) => {
-    return fetchApi('/api/hub/push-to-mssql', { method: 'POST', body: JSON.stringify(params) });
   },
   mssqlQuickView: async (params) => {
     return fetchApi('/api/hub/mssql-quick-view', { method: 'POST', body: JSON.stringify(params) });

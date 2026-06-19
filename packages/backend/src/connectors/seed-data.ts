@@ -13,6 +13,9 @@
  */
 
 export const DEFAULT_ORG = '00000000-0000-0000-0000-000000000001';
+// Default seeded admin user — the actor attributed to requests until real auth (§7.8)
+// lands. Used by the actor middleware fallback and as the audit_log.user_id FK target.
+export const DEFAULT_USER_ID = '00000000-0000-0000-0000-0000000000a1';
 
 export type CredentialFieldType = 'text' | 'password' | 'number' | 'select' | 'checkbox';
 
@@ -131,7 +134,7 @@ const sharepoint: SeedConnector = {
       fetchItems: '/api/hub/fetch-sp-items',
       destTest: '/api/sharepoint/test-connection',
       destFields: '/api/sharepoint/list-fields',
-      push: '/api/sharepoint/push',
+      push: '/api/hub/publish-records',
     },
   },
   entities: [

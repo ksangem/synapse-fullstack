@@ -144,135 +144,16 @@ router.post('/list-fields', async (req: Request, res: Response) => {
   }
 });
 
-// ─── POST /api/sharepoint/push ────────────────────────────
-// DB-first duplicate check: if same list was already pushed for these
-// tickets, return 409. Frontend shows confirmation modal.
-
-router.post('/push', async (req: Request, res: Response) => {
-  try {
-    const body = pushSchema.parse(req.body);
-    const creds = getAzureCreds(body.siteUrl, body.listName);
-
-    // Load Jira tickets from the run
-    const tickets = await db.select().from(jiraTickets)
-      .where(eq(jiraTickets.runId, body.runId));
-
-    if (tickets.length === 0) {
-      res.status(400).json({ success: false, error: 'No tickets found for this run ID' });
-      return;
-    }
-
-    // ─── DB-FIRST DUPLICATE CHECK ────────────────────────
-    // Check if we already pushed to this same list with status=success
-    if (!body.forceNew && !body.upsertMode) {
-      const [existingPush] = await db.select().from(sharepointPushRuns)
-        .where(and(
-          eq(sharepointPushRuns.listName, body.listName),
-          eq(sharepointPushRuns.status, 'success'),
-        ))
-        .orderBy(desc(sharepointPushRuns.createdAt))
-        .limit(1);
-
-      if (existingPush) {
-        res.status(409).json({
-          success: false,
-          code: 'ALREADY_PUSHED',
-          previousPush: {
-            pushRunId: existingPush.pushRunId,
-            pushedAt: existingPush.startedAt,
-            recordCount: existingPush.createdCount ?? existingPush.totalRecords,
-            listName: existingPush.listName,
-          },
-        });
-        return;
-      }
-    }
-
-    // Resolve IDs
-    const token = await authService.getAccessToken(creds);
-    const siteId = getEnvSiteId() || body.siteId || await authService.getSiteId(body.siteUrl, token);
-    const listId = body.listId || await authService.getListId(siteId, body.listName, token);
-
-    // Find integration for cache scoping
-    const rawIssues = tickets.map(t => t.normalizedTicket as Record<string, unknown>);
-    const firstKey = (rawIssues[0]?.key as string) ?? '';
-    const projectPrefix = firstKey.split('-')[0];
-    const allIntegrations = await db.select().from(integrations);
-    const matchedIntegration = allIntegrations.find(i => {
-      const fm = i.fieldMappings as Record<string, string> | null;
-      return fm?.projectKey === projectPrefix;
-    });
-    const integrationId = matchedIntegration?.integrationId ?? body.runId;
-
-    // Create push run record
-    const [pushRun] = await db.insert(sharepointPushRuns).values({
-      runId: body.runId,
-      orgId: matchedIntegration?.orgId ?? '00000000-0000-0000-0000-000000000001',
-      siteUrl: body.siteUrl,
-      listName: body.listName,
-      status: 'running',
-      totalRecords: tickets.length,
-    }).returning();
-
-    // Return immediately
-    res.json({
-      success: true,
-      data: { pushRunId: pushRun.pushRunId, total: tickets.length, status: 'running' },
-    });
-
-    // ─── BACKGROUND PUSH ─────────────────────────────────
-    // Make the destination list schema-compatible first: the mapper emits a fixed set
-    // of columns (IssueKey, StatusName, …) and SharePoint rejects the WHOLE item if any
-    // one field is unrecognized. Auto-create the missing columns so the push succeeds
-    // whether the list is brand-new, empty, or only partially set up.
-    if (rawIssues.length) {
-      try {
-        const sample = mapperService.mapToSharePointItem(rawIssues[0], { source: body.source, runId: body.runId });
-        const added = await ensurePushColumns(siteId, listId, token, sample.fields);
-        if (added.length) {
-          console.log(`[SP Push] Auto-created ${added.length} missing column(s): ${added.join(', ')}`);
-          // New SP columns take several seconds to become writable — let them propagate
-          // before the first write (the per-item retry covers any remaining lag).
-          await new Promise((r) => setTimeout(r, 8000));
-        }
-      } catch (e) {
-        console.warn('[SP Push] ensurePushColumns failed (continuing):', e instanceof Error ? e.message : e);
-      }
-    }
-
-    // The push runs as background work AFTER the HTTP response has been sent, so any
-    // throw here can NOT be reported to the client — and if we don't catch it, the
-    // run row stays pinned at status='running' forever (the poller then times out).
-    // Always drive the row to a terminal state.
-    try {
-      if (body.upsertMode) {
-        // UPSERT MODE: for each item, find by IssueKey in SP → PATCH if exists, POST if not
-        await upsertPush(rawIssues, siteId, listId, token, integrationId, pushRun.pushRunId, { source: body.source, runId: body.runId });
-      } else {
-        // FRESH PUSH: create all items (only reached if no prior push or forceNew=true)
-        await freshPush(rawIssues, siteId, listId, token, integrationId, pushRun.pushRunId, { source: body.source, runId: body.runId });
-      }
-    } catch (bgErr) {
-      const message = bgErr instanceof Error ? bgErr.message : 'Unknown error';
-      console.error(`[SP Push] Background push ${pushRun.pushRunId} threw:`, message);
-      try {
-        await db.update(sharepointPushRuns).set({
-          status: 'error',
-          errorLog: [{ issueKey: '*', error: message.slice(0, 500) }],
-          finishedAt: new Date(),
-        }).where(eq(sharepointPushRuns.pushRunId, pushRun.pushRunId));
-      } catch (updErr) {
-        console.error(`[SP Push] Failed to mark run ${pushRun.pushRunId} as error:`, updErr);
-      }
-    }
-
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    if (!res.headersSent) {
-      res.status(500).json({ success: false, error: message });
-    }
-  }
-});
+// ─── POST /api/sharepoint/push — RETIRED ──────────────────
+// This was the legacy direct Jira-tickets → SharePoint push (synchronous Graph
+// create/patch, bypassing the bus). It had no live frontend caller; the Wizard's
+// "Push to SharePoint" and the scheduled sync both deliver through the IntegrationBus
+// now (publishRecords → SharePointDestinationConnector, with idempotency/retry/DLQ).
+// The route is removed so no bus-bypassing egress remains reachable.
+// NOTE: its push-only helpers below (pushSchema, freshPush, upsertPush, runGraphBatches,
+// ensurePushColumns, tallyResults/batchErr/stripEmptyFields/isOk, SP_BATCH_*) are now
+// unreferenced dead code — safe to delete in a focused cleanup pass (left in place here
+// to avoid disturbing the column/utility helpers /ensure-list still shares).
 
 // Graph $batch caps at 20 sub-requests. SharePoint SERIALIZES writes to a single
 // list and returns `generalException` (HTTP 500) under high write concurrency — so

@@ -1,13 +1,30 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useToast } from '../../hooks/useToast';
+import { useConfirm } from '../../hooks/useConfirm';
 import { api } from '../../services/api';
 
 /* Credential Vault — real credentials from /api/credentials (metadata only).
-   Reveal decrypts on demand via /api/credentials/:id/decrypt (10s auto-hide,
-   audit-logged server-side). No mock/sample data. */
+   Reveal/copy decrypt on demand via /api/credentials/:id/decrypt (10s auto-hide,
+   audit-logged server-side). Admins can rotate/revoke; expiry shown as a countdown
+   badge; compliance report exports to CSV. No mock/sample data. */
+
+const credId = (c) => c.credId || c.cred_id || c.id;
+
+// Expiry → countdown badge (reuses the .countdown urgent/soon/ok styles).
+function expiryBadge(c) {
+  if ((c.status || 'active') === 'revoked') return { cls: 'urgent', label: 'Revoked' };
+  const exp = c.expiry;
+  if (!exp) return { cls: 'ok', label: 'No expiry' };
+  const days = Math.ceil((new Date(exp).getTime() - Date.now()) / 86_400_000);
+  if (days < 0) return { cls: 'urgent', label: 'Expired' };
+  if (days <= 3) return { cls: 'urgent', label: `${days}d left` };
+  if (days <= 7) return { cls: 'soon', label: `${days}d left` };
+  return { cls: 'ok', label: `${days}d left` };
+}
 
 export default function VaultPage() {
   const { showToast } = useToast();
+  const confirm = useConfirm();
   const [creds, setCreds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [revealId, setRevealId] = useState(null);
@@ -35,12 +52,70 @@ export default function VaultPage() {
 
   const handleReveal = async (cred) => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    const id = cred.credId || cred.cred_id || cred.id;
+    const id = credId(cred);
     setRevealId(id); setRevealText('…');
-    const res = await api.call(`/api/credentials/${id}/decrypt`, undefined, 'GET');
-    const payload = res.ok && res.data?.success ? (res.data.data ?? res.data) : null;
-    setRevealText(payload ? (typeof payload === 'string' ? payload : JSON.stringify(payload)) : 'Unable to decrypt');
+    const res = await api.revealCredential(id);
+    const payload = res.ok && res.data?.success ? res.data.data?.payload : null;
+    setRevealText(payload ? JSON.stringify(payload) : (res.data?.error || 'Unable to decrypt'));
     timerRef.current = setTimeout(() => { setRevealId(null); setRevealText(''); timerRef.current = null; }, 10000);
+  };
+
+  // Copy-to-clipboard WITHOUT displaying the value (still an audited reveal).
+  const handleCopy = async (cred) => {
+    const res = await api.revealCredential(credId(cred), 'copy');
+    const payload = res.ok && res.data?.success ? res.data.data?.payload : null;
+    if (!payload) { showToast(res.data?.error || 'Unable to copy credential'); return; }
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload));
+      showToast('Credential copied to clipboard');
+    } catch {
+      showToast('Clipboard blocked by browser');
+    }
+  };
+
+  const handleRotate = async (cred) => {
+    const next = await confirm({
+      title: `Rotate "${cred.systemName || cred.system_name}"`,
+      message: 'Paste the NEW secret as JSON. It must contain exactly the same fields as the current secret (e.g. the same username/password/token keys).',
+      input: { type: 'text', placeholder: '{"username":"…","password":"…"}' },
+      confirmLabel: 'Rotate',
+    });
+    if (!next) return;
+    let payload;
+    try { payload = JSON.parse(next); } catch { showToast('Not valid JSON — rotation cancelled'); return; }
+    const res = await api.rotateCredential(credId(cred), payload);
+    if (res.ok && res.data?.success) { showToast('Credential rotated'); loadCreds(); }
+    else showToast(res.data?.error || 'Rotation failed');
+  };
+
+  const handleRevoke = async (cred) => {
+    const ok = await confirm({
+      title: `Revoke "${cred.systemName || cred.system_name}"?`,
+      message: 'Revoked credentials can no longer be revealed or used by integrations. This cannot be undone here.',
+      danger: true,
+      confirmLabel: 'Revoke',
+    });
+    if (!ok) return;
+    const res = await api.revokeCredential(credId(cred));
+    if (res.ok && res.data?.success) { showToast('Credential revoked'); loadCreds(); }
+    else showToast(res.data?.error || 'Revoke failed');
+  };
+
+  // BRD §7.9 compliance report → CSV download.
+  const handleExportCompliance = async () => {
+    const res = await api.getCredentialCompliance();
+    const rows = res.ok && Array.isArray(res.data?.data) ? res.data.data : [];
+    if (rows.length === 0) { showToast('No credentials to export'); return; }
+    const cols = ['systemName', 'authType', 'status', 'expiry', 'expiryBucket', 'lastRotatedAt', 'revealCount', 'unused'];
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = [cols.join(','), ...rows.map((r) => cols.map((k) => esc(r[k])).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'credential-compliance.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${rows.length} credential(s)`);
   };
 
   const handleDbTest = async () => {
@@ -66,8 +141,6 @@ export default function VaultPage() {
     } catch (err) { setDbSaveStatus('error'); showToast(err.message || 'Network error while saving credential'); }
   };
 
-  const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : '—');
-
   return (
     <div className="page active">
       <div className="page-header">
@@ -75,6 +148,7 @@ export default function VaultPage() {
           <div className="page-title">Credential Vault</div>
           <div className="page-subtitle">Secure credential management — {loading ? '…' : `${creds.length} stored`}</div>
         </div>
+        <button className="btn" style={{ background: 'var(--bg-main)', border: '1px solid var(--border)' }} onClick={handleExportCompliance}>Export Compliance (CSV)</button>
       </div>
 
       <div className="page-body">
@@ -85,32 +159,43 @@ export default function VaultPage() {
               <th>System</th>
               <th>Auth Type</th>
               <th>Credential</th>
-              <th>Created</th>
+              <th>Status</th>
               <th>Expiry</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {creds.map((c) => {
-              const id = c.credId || c.cred_id || c.id;
+              const id = credId(c);
+              const status = c.status || 'active';
+              const revoked = status === 'revoked';
+              const badge = expiryBadge(c);
               return (
                 <tr key={id}>
                   <td><strong>{c.systemName || c.system_name || '—'}</strong></td>
                   <td><span className="badge badge-neutral">{c.authType || c.auth_type || '—'}</span></td>
                   <td>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontFamily: 'monospace', fontSize: '.76rem', maxWidth: 340, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: revealId === id ? 'var(--warning)' : undefined }}>
+                      <span style={{ fontFamily: 'monospace', fontSize: '.76rem', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: revealId === id ? 'var(--warning)' : undefined }}>
                         {revealId === id ? revealText : '••••••••••••'}
                       </span>
-                      <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-dim)', fontSize: '.85rem' }} onClick={() => handleReveal(c)} title="Reveal (10s, audit-logged)">&#128065;</button>
+                      <button style={{ background: 'none', border: 'none', cursor: revoked ? 'not-allowed' : 'pointer', color: 'var(--text-dim)', fontSize: '.85rem', opacity: revoked ? 0.4 : 1 }} disabled={revoked} onClick={() => handleReveal(c)} title="Reveal (10s, audit-logged)">&#128065;</button>
+                      <button style={{ background: 'none', border: 'none', cursor: revoked ? 'not-allowed' : 'pointer', color: 'var(--text-dim)', fontSize: '.85rem', opacity: revoked ? 0.4 : 1 }} disabled={revoked} onClick={() => handleCopy(c)} title="Copy without revealing (audit-logged)">&#128203;</button>
                     </span>
                   </td>
-                  <td>{fmtDate(c.createdAt || c.created_at)}</td>
-                  <td>{c.expiry ? fmtDate(c.expiry) : '—'}</td>
+                  <td><span className={`badge ${revoked ? 'badge-error' : 'badge-success'}`}>{status}</span></td>
+                  <td><span className={`countdown ${badge.cls}`}>{badge.label}</span></td>
+                  <td>
+                    <span style={{ display: 'inline-flex', gap: 8 }}>
+                      <button className="btn btn-sm" style={{ background: 'var(--bg-main)', border: '1px solid var(--border)' }} disabled={revoked} onClick={() => handleRotate(c)}>Rotate</button>
+                      <button className="btn btn-sm btn-danger" disabled={revoked} onClick={() => handleRevoke(c)}>Revoke</button>
+                    </span>
+                  </td>
                 </tr>
               );
             })}
             {!loading && creds.length === 0 && (
-              <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>No credentials stored yet. Add one below, or they're created when you save a connection in the Wizard.</td></tr>
+              <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>No credentials stored yet. Add one below, or they're created when you save a connection in the Wizard.</td></tr>
             )}
           </tbody>
         </table>

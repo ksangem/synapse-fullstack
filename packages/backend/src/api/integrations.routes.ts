@@ -3,9 +3,9 @@ import { z } from 'zod';
 import { db } from '../db/client';
 import { integrations, runs, credentials, pushLog, syncState, runMessages, jiraTickets, sharepointPushRuns } from '../db/schema';
 import { eq, desc, and } from 'drizzle-orm';
-import { integrationRunnerQueue } from '../queues';
 import { CredentialService } from '../services/CredentialService';
 import { mappingAIService } from '../services/MappingAIService';
+import { recordAudit } from '../services/AuditService';
 
 const credentialService = new CredentialService();
 
@@ -80,6 +80,12 @@ const saveConnectionSchema = z.object({
   pgTable: z.string().optional(),
   pgUsername: z.string().optional(),
   pgPassword: z.string().optional(),
+  // Server-side mapping recipe (Wizard convergence): the rich mapping array + dedup key
+  // + date window, so run-integration can read+map+bus without the browser shipping data.
+  mappings: z.array(z.record(z.string(), z.unknown())).optional(),
+  naturalKeyColumn: z.string().optional(),
+  dateFrom: z.string().optional(),
+  dateTo: z.string().optional(),
 });
 
 // destType label → DB writer engine id used by the credential payload
@@ -242,6 +248,11 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       // Connector version pins (kept in fieldMappings JSONB; FK columns set below)
       if (body.sourceConnectorVersionId) fm.sourceConnectorVersionId = body.sourceConnectorVersionId;
       if (body.destConnectorVersionId) fm.destConnectorVersionId = body.destConnectorVersionId;
+      // Server-side mapping recipe + read window (Wizard convergence).
+      if (body.mappings) fm.mappings = body.mappings;
+      if (body.naturalKeyColumn) fm.naturalKeyColumn = body.naturalKeyColumn;
+      if (body.dateFrom) fm.dateFrom = body.dateFrom;
+      if (body.dateTo) fm.dateTo = body.dateTo;
       return fm;
     };
 
@@ -358,10 +369,20 @@ router.delete('/:id', async (req: Request, res: Response) => {
     await db.delete(pushLog).where(eq(pushLog.integrationId, integrationId));
     await db.delete(runs).where(eq(runs.integrationId, integrationId));
 
-    // Delete associated credential if exists
+    // Delete associated credential(s) — but ONLY if no other integration references
+    // them (clones share credId/destCredId, so blind deletion would orphan the original).
     const fm = existing.fieldMappings as Record<string, string> | null;
-    if (fm?.credId) {
-      await db.delete(credentials).where(eq(credentials.credId, fm.credId));
+    const credIds = [fm?.credId, fm?.destCredId].filter(Boolean) as string[];
+    if (credIds.length) {
+      const all = await db.select({ id: integrations.integrationId, fm: integrations.fieldMappings }).from(integrations);
+      for (const cid of credIds) {
+        const referencedElsewhere = all.some((r) => {
+          if (r.id === integrationId) return false;
+          const f = r.fm as Record<string, string> | null;
+          return f?.credId === cid || f?.destCredId === cid;
+        });
+        if (!referencedElsewhere) await db.delete(credentials).where(eq(credentials.credId, cid));
+      }
     }
 
     // Finally delete the integration itself
@@ -384,17 +405,53 @@ router.post('/:id/run', async (req: Request, res: Response) => {
       status: 'pending',
     }).returning();
 
-    // Enqueue the job
-    await integrationRunnerQueue.add('run-integration', {
-      integrationId,
-      runId: run.runId,
-      config: req.body,
-    });
-
+    // The live async path is the distributed bus (POST /api/hub/run-integration/:id
+    // and /api/hub/publish-records); the legacy integration-runner queue was removed.
+    // This endpoint just records the pending run and returns it.
     res.json({ success: true, data: { runId: run.runId, status: 'pending' } });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(500).json({ success: false, error: message });
+  }
+});
+
+// POST /api/integrations/:id/clone — duplicate an integration as a draft
+router.post('/:id/clone', async (req: Request, res: Response) => {
+  try {
+    const [existing] = await db.select().from(integrations)
+      .where(eq(integrations.integrationId, req.params.id as string));
+    if (!existing) {
+      res.status(404).json({ success: false, error: 'Integration not found' });
+      return;
+    }
+
+    // Reuse the same fieldMappings (incl. credId / destCredId references — vault creds
+    // are shared, not duplicated). Start as a draft with no schedule so the operator
+    // reviews before activating.
+    const [clone] = await db.insert(integrations).values({
+      orgId: existing.orgId,
+      name: `${existing.name} (copy)`,
+      sourceConnectorId: existing.sourceConnectorId,
+      destConnectorId: existing.destConnectorId,
+      fieldMappings: existing.fieldMappings,
+      scheduleCron: null,
+      retryPolicy: existing.retryPolicy,
+      status: 'draft',
+    }).returning();
+
+    await recordAudit({
+      orgId: req.actor.orgId,
+      userId: req.actor.userId,
+      action: 'clone',
+      entityType: 'integration',
+      entityId: clone.integrationId,
+      diff: { clonedFrom: existing.integrationId, name: clone.name },
+    });
+
+    res.json({ success: true, data: clone });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(400).json({ success: false, error: message });
   }
 });
 

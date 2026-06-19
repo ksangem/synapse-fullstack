@@ -327,16 +327,18 @@ describe('E2E: POST /api/credentials — create', () => {
     createdCredentialId = res.data.data.credId;
   });
 
-  it('rejects credential with missing orgId', async () => {
+  it('uses the actor org when no body orgId is given', async () => {
+    // orgId now comes from the actor seam (req.actor), not the request body.
     const res = await api('/api/credentials', {
       method: 'POST',
       body: JSON.stringify({
-        systemName: 'No Org',
+        systemName: 'No Body Org',
         authType: 'api_token',
         payload: { key: 'val' },
       }),
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(res.data.success).toBe(true);
   });
 
   it('rejects credential with empty systemName', async () => {
@@ -352,17 +354,19 @@ describe('E2E: POST /api/credentials — create', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects credential with non-existent orgId (FK violation)', async () => {
+  it('ignores a bogus body orgId (org comes from the actor, not the client)', async () => {
     const res = await api('/api/credentials', {
       method: 'POST',
       body: JSON.stringify({
         orgId: 'a0000000-0000-4000-8000-000000000099',
-        systemName: 'Bad',
+        systemName: 'Bad Org Ignored',
         authType: 'api_token',
         payload: { key: 'val' },
       }),
     });
-    expect(res.status).toBe(400);
+    // The untrusted body orgId is ignored; creation succeeds under the actor's org.
+    expect(res.status).toBe(200);
+    expect(res.data.success).toBe(true);
   });
 });
 
@@ -840,15 +844,6 @@ describe('E2E: Hub — SharePoint source validation', () => {
     });
     expect(res.status).toBe(400);
     expect(res.data.error).toContain('Missing');
-  });
-
-  it('POST /api/hub/push-to-pg rejects missing fields', async () => {
-    const res = await api('/api/hub/push-to-pg', {
-      method: 'POST',
-      body: JSON.stringify({}),
-    });
-    expect(res.status).toBe(400);
-    expect(res.data.error).toContain('Missing required fields');
   });
 });
 

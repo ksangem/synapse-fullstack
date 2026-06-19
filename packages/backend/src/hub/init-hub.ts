@@ -54,6 +54,14 @@ export async function initHub(): Promise<HubRuntime> {
   const bus = new IntegrationBus(inbox);
   const router = new RouterService(hubService.registry, inbox, outbox);
 
+  // Warm the expression sandbox (WASM) so server-side EXPRESSION mappings are ready.
+  try {
+    const { initSandbox } = await import('../services/SafeExpression');
+    await initSandbox();
+  } catch (err) {
+    console.error('[Hub] expression sandbox init failed:', (err as Error).message);
+  }
+
   // Register the connector plug-ins, then derive flows from the adapters.
   registerBuiltinConnectors();
   try {
@@ -87,6 +95,15 @@ export async function initHub(): Promise<HubRuntime> {
     await initScheduler();
   } catch (err) {
     console.error('[Hub] initScheduler failed:', (err as Error).message);
+  }
+
+  // Credential expiry scanner (BRD §7.9) — daily repeatable scan raising alerts.
+  try {
+    const { startCredentialExpiryWorker, registerCredentialExpiryScan } = await import('../workers/credentialExpiryWorker');
+    workers.push(startCredentialExpiryWorker());
+    await registerCredentialExpiryScan();
+  } catch (err) {
+    console.error('[Hub] credential expiry scan wiring failed:', (err as Error).message);
   }
 
   runtime = { bus, router, pipeline, workers };

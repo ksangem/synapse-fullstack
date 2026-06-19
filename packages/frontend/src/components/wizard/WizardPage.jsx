@@ -976,72 +976,151 @@ export default function WizardPage() {
   };
 
   // ─── Step 6: Push to destination ───────────────────────
-  const handlePush = async () => {
-    // REST source → its own dispatch (the SP/DB push paths fetch from SharePoint).
-    if (isRuntimeSource(selectedSource)) {
-      if (isRest(selectedDest)) return handleRestPush();
-      if (isDbDest(selectedDest)) return handleRestToDbPush();
-      if (isSpSource(selectedDest)) return handleSpDestPush(); // REST → SharePoint list
-      setPushError(`Pushing a REST source into ${selectedDest} isn't supported yet — use a database or SharePoint destination.`);
-      setPushStatus('error');
-      return;
-    }
-    // Kind/engine-based dispatch (NOT display-label) — so a cloned DB connector
-    // like "pg-prod" routes correctly instead of falling through to SharePoint.
-    if (isDbDest(selectedDest)) {
-      // Every record source — SharePoint, Jira, … — pushes its fetched+transformed
-      // rows through the generic records→DB writer so mapping presets/aggregations are
-      // applied. (The per-engine SP→DB handlers now just delegate to that writer.)
-      if (isSpSource(selectedSource)) {
-        const engine = dbCfg(selectedDest)?.engine;
-        if (engine === 'mysql') handlePushToMysql();
-        else if (engine === 'sqlserver') handlePushToMssql();
-        else handlePushToPg();
-      } else {
-        handleRestToDbPush();
+  // Server-side push (Wizard convergence): persist the recipe (mappings + key + date
+  // window) and trigger run-integration so the BACKEND reads the source, maps each
+  // record (shared MappingEngine), and busses it — only config crosses HTTP, so dataset
+  // size is irrelevant (no more "payload too large"). Reuses pollRunStatus for the UI.
+  const pushServerSide = async () => {
+    setPushStatus('pushing'); setPushError(''); setPushResult(null); setPushProgress(null);
+    try {
+      const id = await handleSaveConnection(); // persists the recipe; returns integrationId
+      if (!id) {
+        setPushError('Could not save the connection before pushing — check the fields and that both sides are tested.');
+        setPushStatus('error');
+        return;
       }
-    } else if (isSpSource(selectedDest)) {
-      // SharePoint destination. Jira source keeps the dedicated 3-layer upsert push;
-      // any other source (SharePoint, CSV, …) writes the mapped records to the list.
-      if (selectedSource === 'Jira') handlePushToSharePoint();
-      else handleSpDestPush();
-    } else {
-      handlePushToSharePoint();
+      const res = await api.runIntegration(id);
+      if (!res.ok || !res.data?.success) {
+        setPushError(res.status === 0
+          ? 'Cannot reach the server — the backend may be restarting. Wait a moment and try again.'
+          : (res.data?.error || 'Failed to start the run'));
+        setPushStatus('error');
+        return;
+      }
+      const { runId, published, duplicate } = res.data.data;
+      if (published === 0) {
+        setPushResult({ pushRunId: runId, total: 0, status: 'success', created: 0, updated: 0, skipped: duplicate, failed: 0 });
+        setPushStatus('done');
+        return;
+      }
+      setPushResult({ pushRunId: runId, total: published, status: 'running', skipped: duplicate });
+      setPushStatus('polling');
+      pollRunStatus(runId, { skipped: duplicate });
+    } catch {
+      setPushError('Network error during push');
+      setPushStatus('error');
     }
+  };
+
+  const handlePush = async () => {
+    // Convergence (Phase 2): EVERY transform — DIRECT, PRESET, and custom-JS EXPRESSION
+    // (run in the backend quickjs sandbox) — maps server-side. The Wizard always persists
+    // the recipe and triggers run-integration; the dataset never crosses HTTP, so payload
+    // size is irrelevant. The legacy client push handlers below
+    // (handleSpDestPush / handleRestToDbPush / handleRestPush / handlePushToSharePoint /
+    // mapRecordsToDest / deliverViaBus) are now unused — retained for reference, removable.
+    await pushServerSide();
+  };
+
+  // ─── The single write path: publish already-mapped rows onto the Integration Bus ───
+  // Every push handler funnels through here. The Wizard still fetches + transforms
+  // CLIENT-side (presets/expressions/aggregations, previewed in Step 5); we hand the
+  // finished destination rows to the bus, which owns delivery (idempotency, retry,
+  // DLQ, run audit) to a generic database/sharepoint destination. Returns 202 + a
+  // runId we poll for delivery counts.
+  const deliverViaBus = async ({ destination, records, naturalKeyColumn, destTable, extra = {} }) => {
+    setPushStatus('pushing'); setPushError(''); setPushResult(null); setPushProgress(null);
+    try {
+      if (!records.length || !records.some((r) => r && Object.keys(r).length)) {
+        setPushError('Nothing to push — 0 mapped rows (or no mapping produced a value). Re-fetch in Step 5 and check your mappings.');
+        setPushStatus('error');
+        return;
+      }
+      const res = await api.publishRecords({
+        destination, records,
+        naturalKeyColumn: naturalKeyColumn || undefined,
+        destTable, event: 'created',
+      });
+      if (!res.ok || !res.data?.success) {
+        // Distinguish unreachable (status 0), too-large (413), and a real bus rejection.
+        setPushError(
+          res.status === 0
+            ? 'Cannot reach the server — the backend may be restarting. Wait a moment and try again.'
+            : res.status === 413
+              ? 'This dataset is too large for one request. Narrow the date range (or push in smaller batches) and try again.'
+              : (res.data?.error || 'Failed to publish to the bus'),
+        );
+        setPushStatus('error');
+        return;
+      }
+      const { runId, published, duplicate } = res.data.data;
+      if (published === 0) {
+        // Whole batch was an unchanged duplicate (idempotent re-run) — nothing to deliver.
+        setPushResult({ pushRunId: runId, total: 0, status: 'success', created: 0, updated: 0, skipped: duplicate, failed: 0, ...extra });
+        setPushStatus('done');
+        return;
+      }
+      setPushResult({ pushRunId: runId, total: published, status: 'running', skipped: duplicate, ...extra });
+      setPushStatus('polling');
+      pollRunStatus(runId, { skipped: duplicate, ...extra });
+    } catch { setPushError('Network error during push'); setPushStatus('error'); }
+  };
+
+  // Poll /api/hub/run-status until every published record reaches a terminal delivery
+  // state. The bus reports delivered/failed (not insert-vs-update), so "delivered"
+  // maps to the Inserted counter and failures point at the DLQ.
+  const pollRunStatus = (runId, extra = {}) => {
+    let attempts = 0;
+    const maxAttempts = 120; // ~5 min at 2.5s
+    const poll = async () => {
+      attempts++;
+      const res = await api.getRunStatus(runId);
+      const s = res.ok && res.data?.success ? res.data.data : null;
+      if (s) {
+        setPushProgress({ createdCount: s.delivered, updatedCount: 0, failedCount: s.failed });
+        if (s.finished || attempts >= maxAttempts) {
+          setPushResult((prev) => ({ ...prev, status: s.failed > 0 && s.delivered === 0 ? 'error' : 'success',
+            created: s.delivered, updated: 0, failed: s.failed, ...extra }));
+          if (s.failed > 0) setPushError(`${s.delivered} delivered, ${s.failed} failed — check the DLQ on the Monitor page.`);
+          setPushStatus('done');
+          return;
+        }
+      }
+      if (attempts < maxAttempts) setTimeout(poll, 2500);
+    };
+    setTimeout(poll, 1500);
   };
 
   // Generic "write mapped records into a SharePoint list" push (SP→SP, CSV→SP, REST→SP).
   // ensure-list creates the list if it doesn't exist and adds any mapped columns that
-  // are missing — so "create new list / use existing" + "create columns" both work.
+  // are missing; the rows are then delivered through the bus to the SharePoint dest.
   const handleSpDestPush = async () => {
     if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
-    setPushStatus('pushing'); setPushError(''); setPushResult(null);
-    try {
-      const destMeta = connectorMeta[selectedDest];
-      const records = mapRecordsToDest();
-      // Don't create an empty list + report a false success: require at least one row with a mapped value.
-      if (!records.some((r) => r && Object.keys(r).length)) {
-        setPushError('Nothing to push — the source returned 0 rows (or no mapping produced a value). Re-fetch in Step 5 and check your mappings.');
-        setPushStatus('error');
-        return;
-      }
-      const cols = mappings.flatMap((m) => (m.destinations || []).map((d, j) => ({ name: d, type: (m.destTypes || [])[j] || 'text' }))).filter((c) => c.name);
-      const ens = await api.call('/api/sharepoint/ensure-list', {
-        siteUrl: destCreds.siteUrl, siteId: destConnectionData?.siteId, listName: destCreds.listName,
-        columns: cols, tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret,
-      });
-      if (!ens.ok || !ens.data?.success) { setPushError(ens.data?.error || 'Failed to create/prepare the destination list'); setPushStatus('error'); return; }
-      const listId = ens.data.data.listId;
-      // matchKey = the column starred (★) in the mapping step; '' → insert-only.
-      const result = await runtimeClient.push(destMeta.connectorId, destMeta.latestVersionId, listId, { ...destCreds, matchKey: effectiveKey || '__append__' }, records);
-      if (result.ok && result.data?.success) {
-        const d = result.data.data;
-        setPushResult({ pushRunId: 'sp-' + Date.now(), total: records.length, status: 'success', created: d.created, updated: d.updated || 0, failed: d.failed, errors: d.errors, listCreated: ens.data.data.created, addedColumns: ens.data.data.addedColumns, listUrl: ens.data.data.webUrl });
-        // Don't claim success if rows actually failed to write.
-        if (d.failed > 0) setPushError(`${d.created} written, ${d.failed} failed — ${d.errors?.[0] || 'see SharePoint'}`);
-        setPushStatus('done');
-      } else { setPushError(result.data?.error || 'Push failed'); setPushStatus('error'); }
-    } catch { setPushError('Network error during push'); setPushStatus('error'); }
+    const records = mapRecordsToDest();
+    if (!records.some((r) => r && Object.keys(r).length)) {
+      setPushError('Nothing to push — the source returned 0 rows (or no mapping produced a value). Re-fetch in Step 5 and check your mappings.');
+      setPushStatus('error');
+      return;
+    }
+    setPushStatus('pushing'); setPushError('');
+    const cols = mappings.flatMap((m) => (m.destinations || []).map((d, j) => ({ name: d, type: (m.destTypes || [])[j] || 'text' }))).filter((c) => c.name);
+    const ens = await api.call('/api/sharepoint/ensure-list', {
+      siteUrl: destCreds.siteUrl, siteId: destConnectionData?.siteId, listName: destCreds.listName,
+      columns: cols, tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret,
+    });
+    if (!ens.ok || !ens.data?.success) { setPushError(ens.data?.error || 'Failed to create/prepare the destination list'); setPushStatus('error'); return; }
+    // SharePoint items dedup by a key column; fall back to 'Title' when no ★ key is set.
+    const spKey = effectiveKey || 'Title';
+    await deliverViaBus({
+      destination: {
+        kind: 'sharepoint',
+        config: { siteUrl: destCreds.siteUrl, listName: destCreds.listName, keyColumn: spKey },
+        creds: { tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret },
+      },
+      records,
+      naturalKeyColumn: spKey,
+      extra: { listCreated: ens.data.data.created, addedColumns: ens.data.data.addedColumns, listUrl: ens.data.data.webUrl },
+    });
   };
 
   // Map the fetched source records to destination shape, APPLYING each mapping's
@@ -1065,49 +1144,47 @@ export default function WizardPage() {
 
   const handleRestPush = async () => {
     if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
-    setPushStatus('pushing'); setPushError(''); setPushResult(null);
-    try {
-      const destMeta = connectorMeta[selectedDest];
-      const entity = (destMeta?.entities || [])[0]?.key;
-      const records = mapRecordsToDest();
-      const result = await runtimeClient.push(destMeta.connectorId, destMeta.latestVersionId, entity, destCreds, records);
-      if (result.ok && result.data?.success) {
-        const d = result.data.data;
-        setPushResult({ pushRunId: 'rest-' + Date.now(), total: records.length, status: 'success', created: d.created, updated: 0, failed: d.failed, errors: d.errors });
-        setPushStatus('done');
-      } else { setPushError(result.data?.error || 'Push failed'); setPushStatus('error'); }
-    } catch { setPushError('Network error during push'); setPushStatus('error'); }
+    const destMeta = connectorMeta[selectedDest];
+    const entity = (destMeta?.entities || [])[0]?.key;
+    const records = mapRecordsToDest();
+    await deliverViaBus({
+      destination: {
+        kind: 'rest',
+        config: { destEntity: entity, entity },
+        creds: destCreds,
+      },
+      records,
+      naturalKeyColumn: matchKey === '__append__' ? '' : (effectiveKey || undefined),
+    });
   };
 
   const handleRestToDbPush = async () => {
     if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
-    setPushStatus('pushing'); setPushError(''); setPushResult(null);
-    try {
-      const cfg = dbCfg(selectedDest);
-      // Conn values may live on the saved/tested connection (SharePoint→DB) or
-      // directly on the destination creds (REST→DB).
-      const dbc = destConnectionData || destCreds;
-      // Apply transforms client-side, then push the computed rows with identity mappings.
-      const records = mapRecordsToDest();
-      const dbMappings = mappings.flatMap((m) => (m.destinations || []).map((d, j) => ({ from: d, to: d, type: m.destTypes?.[j] || m.srcTypes?.[0] || 'string' }))).filter((m) => m.from);
-      const result = await api.call('/api/connectors/runtime/push-to-db', {
-        engine: cfg.engine,
-        conn: {
-          host: dbc.host, port: Number(dbc.port) || cfg.defaultPort, database: dbc.database,
-          username: dbc.username, password: dbc.password,
-          schema: cfg.hasSchema ? (dbc.schema || cfg.defaultSchema) : undefined,
+    const cfg = dbCfg(selectedDest);
+    // Conn values may live on the saved/tested connection (SharePoint→DB) or
+    // directly on the destination creds (REST→DB).
+    const dbc = destConnectionData || destCreds;
+    // Apply transforms client-side, then deliver the computed rows through the bus.
+    const records = mapRecordsToDest();
+    const table = destCreds.table || 'rest_data';
+    const naturalKey = matchKey === '__append__' ? '' : (effectiveKey || undefined);
+    await deliverViaBus({
+      destination: {
+        kind: 'database',
+        config: {
+          destType: cfg.engine, engine: cfg.engine,
+          pgHost: dbc.host, pgPort: Number(dbc.port) || cfg.defaultPort,
+          pgDatabase: dbc.database,
+          pgSchema: cfg.hasSchema ? (dbc.schema || cfg.defaultSchema) : undefined,
+          pgTable: table,
+          naturalKeyColumn: naturalKey,
         },
-        table: destCreds.table || 'rest_data',
-        records,
-        mappings: dbMappings,
-        naturalKey: matchKey === '__append__' ? '' : (matchKey || undefined),
-      });
-      if (result.ok && result.data?.success) {
-        const d = result.data.data;
-        setPushResult({ pushRunId: 'restdb-' + Date.now(), total: fetchResult.tickets.length, status: 'success', created: d.inserted, updated: d.updated, failed: d.failed, tableCreated: d.tableCreated, errors: d.errors, autoPrimaryKey: d.autoPrimaryKey });
-        setPushStatus('done');
-      } else { setPushError(result.data?.error || 'Push failed'); setPushStatus('error'); }
-    } catch { setPushError('Network error during push'); setPushStatus('error'); }
+        creds: { username: dbc.username, password: dbc.password },
+      },
+      records,
+      naturalKeyColumn: naturalKey,
+      destTable: table,
+    });
   };
 
   const handleQuickView = async () => {
@@ -1151,90 +1228,42 @@ export default function WizardPage() {
 
   const handlePushToMssql = () => handleRestToDbPush();
 
+  // Jira → SharePoint. The fetched Jira issues are mapped CLIENT-side (Step 4/5,
+  // honouring the operator's custom field mappings), the list is ensured, then the
+  // mapped SP rows are delivered through the bus — same single path as every other
+  // push. Dedup/upsert is by the ★ key column (default 'Title').
   const handlePushToSharePoint = async () => {
-    if (!fetchResult?.runId) { setPushError('No Jira data fetched. Go back and fetch first.'); return; }
-    setPushStatus('pushing');
-    setPushError('');
-    setPushResult(null);
-    try {
-      const { siteUrl, listName } = destCreds;
-      let listId = destConnectionData?.listId;
-      let listUrl = null;
-      // Resolve the destination list for EVERY Jira→SP push (new or existing): ensure-list
-      // finds-or-creates the list (shell only — the backend's ensurePushColumns then creates
-      // the fixed default-mapper columns) and returns its webUrl so the result can link to it.
-      // SharePoint auto-generates each item's built-in `id`, so no id column is created.
-      const ens = await api.call('/api/sharepoint/ensure-list', {
-        siteUrl, siteId: destConnectionData?.siteId, listName, columns: [],
-        tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret,
-      });
-      if (ens.ok && ens.data?.success) {
-        listId = ens.data.data.listId;
-        listUrl = ens.data.data.webUrl;
-      } else if (spDestCreateNew) {
-        // Creating a brand-new list MUST succeed before we can push into it.
-        setPushError(ens.data?.error || 'Failed to create the destination list');
-        setPushStatus('error');
-        return;
-      }
-      // else: existing list, ensure-list failed (e.g. env creds) — fall back to the
-      // resolved listId from the connection test and push without the link.
-      const result = await api.pushToSharePoint({
-        siteUrl, listName,
-        runId: fetchResult.runId,
-        source: 'api_token',
-        upsertMode: true,
-        forceNew: false,
-        siteId: destConnectionData?.siteId,
-        listId,
-      });
-      if (result.ok && result.data?.success) {
-        const d = result.data.data;
-        setPushResult({ pushRunId: d.pushRunId, total: d.total, status: 'running', listUrl });
-        setPushStatus('polling');
-        pollPushProgress(d.pushRunId);
-      } else if (result.status === 409) {
-        const prev = result.data?.previousPush;
-        setPushError(`Already pushed. Re-running with upsert...`);
-        const retry = await api.pushToSharePoint({
-          siteUrl, listName, runId: fetchResult.runId, source: 'api_token',
-          upsertMode: true, forceNew: true,
-          siteId: destConnectionData?.siteId, listId,
-        });
-        if (retry.ok && retry.data?.success) {
-          const d = retry.data.data;
-          setPushError('');
-          setPushResult({ pushRunId: d.pushRunId, total: d.total, status: 'running', listUrl });
-          setPushStatus('polling');
-          pollPushProgress(d.pushRunId);
-        } else { setPushError(retry.data?.error || 'Push failed'); setPushStatus('error'); }
-      } else { setPushError(result.data?.error || 'Push failed'); setPushStatus('error'); }
-    } catch (err) { setPushError('Network error during push'); setPushStatus('error'); }
-  };
-
-  const pollPushProgress = (pushRunId) => {
-    let attempts = 0;
-    const maxAttempts = 60;
-    const poll = async () => {
-      attempts++;
-      const res = await fetch(`http://localhost:4000/api/sharepoint/runs/${pushRunId}`, {
-        headers: { 'Content-Type': 'application/json' },
-      }).then(r => r.json()).catch(() => null);
-      if (!res?.success || !res?.data) { if (attempts < maxAttempts) setTimeout(poll, 3000); return; }
-      const run = res.data;
-      setPushProgress(run);
-      if (run.status === 'success' || run.status === 'error') {
-        setPushResult(prev => ({ ...prev, status: run.status,
-          created: run.createdCount ?? run.created_count ?? 0,
-          updated: run.updatedCount ?? run.updated_count ?? 0,
-          failed: run.failedCount ?? run.failed_count ?? 0,
-        }));
-        setPushStatus('done');
-        return;
-      }
-      if (attempts < maxAttempts) setTimeout(poll, 3000);
-    };
-    setTimeout(poll, 3000);
+    if (!fetchResult?.tickets?.length) { setPushError('No Jira data fetched. Go back and fetch first.'); return; }
+    const records = mapRecordsToDest();
+    if (!records.some((r) => r && Object.keys(r).length)) {
+      setPushError('No mapped rows — map the Jira fields to SharePoint columns in Step 4, then re-check the Step 5 preview.');
+      setPushStatus('error');
+      return;
+    }
+    setPushStatus('pushing'); setPushError('');
+    const { siteUrl, listName } = destCreds;
+    const cols = mappings.flatMap((m) => (m.destinations || []).map((d, j) => ({ name: d, type: (m.destTypes || [])[j] || 'text' }))).filter((c) => c.name);
+    // Ensure the list (and mapped columns) exist before delivering rows into it.
+    const ens = await api.call('/api/sharepoint/ensure-list', {
+      siteUrl, siteId: destConnectionData?.siteId, listName, columns: cols,
+      tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret,
+    });
+    if ((!ens.ok || !ens.data?.success) && spDestCreateNew) {
+      setPushError(ens.data?.error || 'Failed to create the destination list');
+      setPushStatus('error');
+      return;
+    }
+    const spKey = effectiveKey || 'Title';
+    await deliverViaBus({
+      destination: {
+        kind: 'sharepoint',
+        config: { siteUrl, listName, keyColumn: spKey },
+        creds: { tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret },
+      },
+      records,
+      naturalKeyColumn: spKey,
+      extra: { listUrl: ens.ok && ens.data?.success ? ens.data.data.webUrl : null },
+    });
   };
 
   /** Map SP field type string to PG column type for wizard mappings */
@@ -1423,6 +1452,13 @@ export default function WizardPage() {
         pgTable: destCreds.table || undefined,
         pgUsername: destCreds.username || undefined,
         pgPassword: destCreds.password || undefined,
+        // Server-side mapping recipe (Wizard convergence): persist the mappings + dedup
+        // key + date window so run-integration reads, maps, and busses without the
+        // browser ever shipping the dataset.
+        mappings,
+        naturalKeyColumn: matchKey === '__append__' ? '' : (effectiveKey || undefined),
+        dateFrom: dateStart || undefined,
+        dateTo: dateEnd || undefined,
       };
       const res = await api.saveConnection(body);
       if (res.ok && res.data?.success) {

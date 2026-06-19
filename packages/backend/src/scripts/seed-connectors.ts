@@ -8,8 +8,17 @@
  */
 import { eq, and } from 'drizzle-orm';
 import { db, pool } from '../db/client';
-import { organizations, connectors, connectorVersions, entityDefinitions } from '../db/schema';
-import { BUILT_IN_CONNECTORS, DEFAULT_ORG } from '../connectors/seed-data';
+import { organizations, users, connectors, connectorVersions, entityDefinitions } from '../db/schema';
+import { BUILT_IN_CONNECTORS, DEFAULT_ORG, DEFAULT_USER_ID } from '../connectors/seed-data';
+import { hashSecret } from '../services/AuthService';
+import { config } from '../config';
+
+type SeedRole = 'designer' | 'operator' | 'viewer';
+const DEMO_USERS: { email: string; role: SeedRole }[] = [
+  { email: 'designer@synapse.local', role: 'designer' },
+  { email: 'operator@synapse.local', role: 'operator' },
+  { email: 'viewer@synapse.local', role: 'viewer' },
+];
 
 async function ensureDefaultOrg(): Promise<void> {
   const [existing] = await db.select().from(organizations).where(eq(organizations.orgId, DEFAULT_ORG));
@@ -23,8 +32,36 @@ async function ensureDefaultOrg(): Promise<void> {
   console.log(`[seed] created default organization ${DEFAULT_ORG}`);
 }
 
+async function ensureUsers(): Promise<void> {
+  const adminHash = await hashSecret(config.ADMIN_PASSWORD);
+  const [admin] = await db.select().from(users).where(eq(users.userId, DEFAULT_USER_ID));
+  if (!admin) {
+    await db.insert(users).values({
+      userId: DEFAULT_USER_ID, orgId: DEFAULT_ORG, email: 'admin@synapse.local',
+      role: 'admin', authProvider: 'local', passwordHash: adminHash, isActive: true,
+    });
+    console.log(`[seed] created default admin user ${DEFAULT_USER_ID}`);
+  } else if (!admin.passwordHash) {
+    await db.update(users).set({ passwordHash: adminHash }).where(eq(users.userId, DEFAULT_USER_ID));
+    console.log('[seed] set default admin password');
+  }
+
+  const demoHash = await hashSecret(config.DEMO_USER_PASSWORD);
+  for (const d of DEMO_USERS) {
+    const [ex] = await db.select().from(users).where(eq(users.email, d.email));
+    if (!ex) {
+      await db.insert(users).values({
+        orgId: DEFAULT_ORG, email: d.email, role: d.role,
+        authProvider: 'local', passwordHash: demoHash, isActive: true,
+      });
+      console.log(`[seed] created demo user ${d.email} (${d.role})`);
+    }
+  }
+}
+
 async function seed(): Promise<void> {
   await ensureDefaultOrg();
+  await ensureUsers();
 
   for (const c of BUILT_IN_CONNECTORS) {
     // ── connector head (upsert by org + key) ──

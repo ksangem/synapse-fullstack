@@ -31,6 +31,9 @@ export interface JiraSourceOptions {
   orgId: string;
   projectKey: string;
   limit?: number;
+  /** Inclusive created-date window (YYYY-MM-DD) — filters the read server-side. */
+  dateFrom?: string;
+  dateTo?: string;
   /** Topic source segment (unique per adapter). Defaults to "jira". */
   sourceKey?: string;
 }
@@ -75,13 +78,15 @@ export class JiraSourceConnector implements ISourceConnector {
    * RedGoldApiClient migrated to the `/search/jql` enhanced-search API.
    */
   private async fetchIssues(): Promise<Array<Record<string, JsonValue>>> {
-    const limit = this.opts.limit ?? 5;
+    const limit = this.opts.limit ?? 1000;
+    const { dateFrom, dateTo } = this.opts;
     const { RED_GOLD_JIRA_URL, RED_GOLD_JIRA_EMAIL, RED_GOLD_JIRA_API_TOKEN } = config;
 
     if (RED_GOLD_JIRA_URL && RED_GOLD_JIRA_EMAIL && RED_GOLD_JIRA_API_TOKEN) {
       try {
         const client = new RedGoldApiClient(RED_GOLD_JIRA_URL, RED_GOLD_JIRA_EMAIL, RED_GOLD_JIRA_API_TOKEN);
-        const jql = `project = ${this.opts.projectKey} ORDER BY updated DESC`;
+        const range = `${dateFrom ? ` AND created >= "${dateFrom}"` : ''}${dateTo ? ` AND created <= "${dateTo}"` : ''}`;
+        const jql = `project = ${this.opts.projectKey}${range} ORDER BY updated DESC`;
         const res = await client.searchIssues(jql, JIRA_FIELDS, 0, limit);
         if (res.issues?.length) return res.issues as unknown as Array<Record<string, JsonValue>>;
       } catch (err) {
@@ -89,12 +94,21 @@ export class JiraSourceConnector implements ISourceConnector {
       }
     }
 
-    // Fallback: already-normalized tickets in the DB.
+    // Fallback: already-normalized tickets in the DB, filtered to the project + date window.
     const rows = await db.select().from(jiraTickets);
     const prefix = `${this.opts.projectKey}-`;
+    const inRange = (t: Record<string, JsonValue>): boolean => {
+      if (!dateFrom && !dateTo) return true;
+      const created = String(((t.fields as Record<string, JsonValue>)?.created) ?? '').slice(0, 10);
+      if (!created) return true;
+      if (dateFrom && created < dateFrom) return false;
+      if (dateTo && created > dateTo) return false;
+      return true;
+    };
     return rows
       .map((r) => r.normalizedTicket as Record<string, JsonValue> | null)
       .filter((t): t is Record<string, JsonValue> => !!t && typeof t.key === 'string' && (t.key as string).startsWith(prefix))
+      .filter(inRange)
       .slice(0, limit);
   }
 }

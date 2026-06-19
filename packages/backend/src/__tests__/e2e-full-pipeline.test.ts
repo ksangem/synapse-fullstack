@@ -211,7 +211,9 @@ describe('E2E Full Pipeline: Step 3 — SharePoint Connection', () => {
 // 4. Push to SharePoint (upsert mode)
 // ═══════════════════════════════════════════════════════
 
-describe('E2E Full Pipeline: Step 4 — Push to SharePoint', () => {
+// Retired: /api/sharepoint/push was removed (direct bus-bypassing push). SharePoint
+// delivery is now covered through the bus (publishRecords → run-status). Skipped.
+describe.skip('E2E Full Pipeline: Step 4 — Push to SharePoint', () => {
   it('pushes fetched issues to SharePoint with upsert', async () => {
     if (!runId) {
       console.warn('⚠ No run ID / SharePoint unavailable — skipping push');
@@ -255,7 +257,8 @@ describe('E2E Full Pipeline: Step 4 — Push to SharePoint', () => {
 // 5. Poll for completion + verify results
 // ═══════════════════════════════════════════════════════
 
-describe('E2E Full Pipeline: Step 5 — Verify Results', () => {
+// Retired alongside Step 4 (depends on the removed /api/sharepoint/push run).
+describe.skip('E2E Full Pipeline: Step 5 — Verify Results', () => {
   it('polls push progress until completion', async () => {
     if (!pushRunId) {
       console.warn('⚠ No push run ID — skipping verification');

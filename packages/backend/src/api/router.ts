@@ -4,7 +4,6 @@ import runsRoutes from './runs.routes';
 import credentialsRoutes from './credentials.routes';
 import jiraRoutes from './jira.routes';
 import sharepointRoutes from './sharepoint.routes';
-import pushRoutes from './push.routes';
 import syncRoutes from './sync.routes';
 import connectedRoutes from './connectedInstances.routes';
 import hubRoutes from './hub.routes';
@@ -16,9 +15,17 @@ import ingestRoutes from './ingest.routes';
 import messagesRoutes from './messages.routes';
 import alertsRoutes from './alerts.routes';
 import crawlStudioRoutes from './crawl-studio.routes';
+import authRoutes from './auth.routes';
+import usersRoutes from './users.routes';
+import auditRoutes from './audit.routes';
+import clientsRoutes from './clients.routes';
 
 const apiRouter = Router();
 
+apiRouter.use('/auth', authRoutes); // public: login / refresh; /me needs a token
+apiRouter.use('/users', usersRoutes);
+apiRouter.use('/audit', auditRoutes);
+apiRouter.use('/clients', clientsRoutes);
 apiRouter.use('/connectors', connectorsRoutes);
 apiRouter.use('/crawl-studio', crawlStudioRoutes);
 apiRouter.use('/entities', entitiesRoutes);
@@ -30,7 +37,6 @@ apiRouter.use('/credentials', credentialsRoutes);
 apiRouter.use('/alerts', alertsRoutes);
 apiRouter.use('/jira', jiraRoutes);
 apiRouter.use('/sharepoint', sharepointRoutes);
-apiRouter.use('/push', pushRoutes);
 apiRouter.use('/sync', syncRoutes);
 apiRouter.use('/connected', connectedRoutes);
 apiRouter.use('/hub/dlq', dlqRoutes); // mount before /hub so the specific path wins

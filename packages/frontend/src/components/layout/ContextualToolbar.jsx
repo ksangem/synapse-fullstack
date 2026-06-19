@@ -14,7 +14,6 @@ const pathToKey = {
   '/vault': 'vault',
   '/admin': 'admin',
   '/connected': 'connected',
-  '/push': 'push',
 };
 
 export default function ContextualToolbar() {

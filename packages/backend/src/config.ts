@@ -43,7 +43,37 @@ const envSchema = z.object({
   // AI mapping (Claude). Optional — falls back to deterministic auto-map if unset.
   ANTHROPIC_API_KEY: z.string().optional(),
   ANTHROPIC_MODEL: z.string().default('claude-haiku-4-5-20251001'),
+
+  // Auth (BRD §7.8). JWT signing + login enforcement.
+  JWT_SECRET: z.string().default('dev-insecure-jwt-secret-change-me'),
+  JWT_ACCESS_TTL: z.string().default('8h'),
+  JWT_REFRESH_TTL: z.string().default('30d'),
+  // Enforcement is opt-in per env: unset → required only in production. 'true'/'false' override.
+  AUTH_REQUIRED: z.string().optional(),
+  // Seed/login password for the default admin (dev only).
+  ADMIN_PASSWORD: z.string().default('admin12345'),
+  // Shared dev password for the seeded demo users (designer/operator/viewer).
+  DEMO_USER_PASSWORD: z.string().default('demo12345'),
 });
 
-export const config = envSchema.parse(process.env);
-export type Config = z.infer<typeof envSchema>;
+const parsed = envSchema.parse(process.env);
+
+// AUTH_REQUIRED resolves to a boolean: explicit override, else true only in production.
+const authRequired = parsed.AUTH_REQUIRED !== undefined
+  ? parsed.AUTH_REQUIRED !== 'false'
+  : parsed.NODE_ENV === 'production';
+
+export const config = { ...parsed, AUTH_REQUIRED: authRequired };
+export type Config = Omit<z.infer<typeof envSchema>, 'AUTH_REQUIRED'> & { AUTH_REQUIRED: boolean };
+
+// Fail fast rather than run under publicly-known secrets in production: both the
+// vault key and the JWT secret default to insecure dev values that must never ship.
+const ZERO_ENCRYPTION_KEY = '0'.repeat(64);
+if (config.NODE_ENV === 'production') {
+  if (config.ENCRYPTION_KEY === ZERO_ENCRYPTION_KEY) {
+    throw new Error('ENCRYPTION_KEY is unset (all-zeros default) in production. Refusing to start.');
+  }
+  if (config.JWT_SECRET === 'dev-insecure-jwt-secret-change-me') {
+    throw new Error('JWT_SECRET is unset (dev default) in production. Refusing to start.');
+  }
+}

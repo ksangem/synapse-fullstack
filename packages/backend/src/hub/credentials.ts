@@ -18,6 +18,10 @@ export async function resolveCredentials(
   try {
     const [row] = await db.select().from(credentials).where(eq(credentials.credId, credId)).limit(1);
     if (!row) return {};
+    if (row.status === 'revoked') {
+      console.warn(`[Hub] credential ${credId} is revoked — refusing to use`);
+      return {};
+    }
     const obj = JSON.parse(credService.decrypt(row.encryptedPayload)) as Record<string, unknown>;
     const out: Record<string, string> = {};
     for (const [k, v] of Object.entries(obj)) out[k] = v == null ? '' : String(v);

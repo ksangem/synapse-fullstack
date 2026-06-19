@@ -1,8 +1,10 @@
 import { useContext } from 'react';
 import { NavLink } from 'react-router-dom';
 import { SidebarContext } from '../../contexts/SidebarContext';
+import { useAuth } from '../../contexts/AuthContext';
 import nalashaaLogo from '../../assets/nalashaa-logo1.png';
 
+// `roles` omitted = visible to everyone (RBAC-aware nav, BRD \u00A77.8).
 const navSections = [
   {
     label: 'Operations',
@@ -16,9 +18,9 @@ const navSections = [
   {
     label: 'Design',
     items: [
-      { icon: '\u270E', label: 'Connector Studio', to: '/studio' },
-      { icon: '\u26A9', label: 'Connection Wizard', to: '/wizard' },
-      { icon: '\u21CC', label: 'Mapping Canvas', to: '/canvas' },
+      { icon: '\u270E', label: 'Connector Studio', to: '/studio', roles: ['admin', 'designer'] },
+      { icon: '\u26A9', label: 'Connection Wizard', to: '/wizard', roles: ['admin', 'designer', 'operator'] },
+      { icon: '\u21CC', label: 'Mapping Canvas', to: '/canvas', roles: ['admin', 'designer'] },
       { icon: '\u268F', label: 'Entity Catalog', to: '/catalog' },
     ],
   },
@@ -26,14 +28,19 @@ const navSections = [
     label: 'Platform',
     items: [
       { icon: '\uD83D\uDD17', label: 'My Connections', to: '/connected' },
-      { icon: '\uD83D\uDD12', label: 'Credential Vault', to: '/vault' },
-      { icon: '\uD83D\uDC65', label: 'Administration', to: '/admin' },
+      { icon: '\uD83D\uDD12', label: 'Credential Vault', to: '/vault', roles: ['admin', 'designer', 'operator'] },
+      { icon: '\uD83D\uDC65', label: 'Administration', to: '/admin', roles: ['admin'] },
     ],
   },
 ];
 
 export default function Sidebar() {
   const { collapsed, toggleSidebar, mobileOpen, closeMobile } = useContext(SidebarContext);
+  const { role } = useAuth();
+  const canSee = (item) => !item.roles || item.roles.includes(role);
+  const sections = navSections
+    .map((s) => ({ ...s, items: s.items.filter(canSee) }))
+    .filter((s) => s.items.length > 0);
 
   return (
     <>
@@ -55,7 +62,7 @@ export default function Sidebar() {
         </button>
 
         <nav className="sidebar-nav">
-          {navSections.map((section) => (
+          {sections.map((section) => (
             <div key={section.label}>
               <div className="nav-section">
                 <span>{section.label}</span>

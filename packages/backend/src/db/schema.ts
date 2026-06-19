@@ -32,6 +32,7 @@ export const alertSeverityEnum = appSchema.enum('alert_severity', ['critical', '
 export const pushTypeEnum = appSchema.enum('push_type', ['INITIAL', 'OVERRIDE', 'SYNC_DELTA', 'SYNC_FRESH']);
 export const pushStatusEnum = appSchema.enum('push_status', ['SUCCESS', 'PARTIAL', 'FAILED']);
 export const syncStatusEnum = appSchema.enum('sync_status', ['IDLE', 'RUNNING', 'FAILED', 'COMPLETED']);
+export const credentialStatusEnum = appSchema.enum('credential_status', ['active', 'revoked']);
 
 // ═══════════════════════════════════════════════════════
 // APP SCHEMA — Tables
@@ -52,6 +53,24 @@ export const users = appSchema.table('users', {
   email: varchar('email', { length: 255 }).notNull(),
   role: userRoleEnum('role').notNull().default('viewer'),
   authProvider: varchar('auth_provider', { length: 50 }).default('local'),
+  // BRD §7.8 auth: local-account password (bcrypt) + active flag.
+  passwordHash: text('password_hash'),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// BRD §7.8 — registered consumer applications (client_id + hashed secret).
+export const clientApps = appSchema.table('client_apps', {
+  appId: uuid('app_id').primaryKey().defaultRandom(),
+  orgId: uuid('org_id').notNull().references(() => organizations.orgId),
+  name: varchar('name', { length: 255 }).notNull(),
+  clientId: varchar('client_id', { length: 100 }).notNull().unique(),
+  clientSecretHash: text('client_secret_hash').notNull(),
+  tier: varchar('tier', { length: 20 }).notNull().default('light'),
+  status: varchar('status', { length: 20 }).notNull().default('active'),
+  createdBy: uuid('created_by').references(() => users.userId),
+  lastUsedAt: timestamp('last_used_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
@@ -63,6 +82,10 @@ export const credentials = appSchema.table('credentials', {
   authType: varchar('auth_type', { length: 50 }).notNull(),
   encryptedPayload: text('encrypted_payload').notNull(),
   expiry: timestamp('expiry'),
+  // BRD §7.9 governance fields.
+  status: credentialStatusEnum('status').notNull().default('active'),
+  lastRotatedAt: timestamp('last_rotated_at'),
+  createdBy: uuid('created_by').references(() => users.userId),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
