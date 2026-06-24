@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../../services/api';
 import DeadLetterPanel from './DeadLetterPanel';
+import { useToolbarAction } from '../../hooks/useToolbarAction';
 
 // Bus envelope status → badge style.
 const statusBadge = (status) => {
@@ -78,6 +79,13 @@ export default function MonitorPage() {
     a.click();
     URL.revokeObjectURL(url);
   };
+
+  // Contextual-toolbar actions for this page.
+  useToolbarAction({
+    mon_export: exportLogs,
+    mon_clearFilters: () => { setDirectionFilter('All'); setShowSuccess(true); setShowFailed(true); },
+    mon_toggleRealtime: () => setRealtime((r) => !r),
+  });
 
   return (
     <div className="page active">

@@ -4,6 +4,7 @@ import { api } from '../../services/api';
 import { runtimeClient } from '../../services/runtimeClient';
 import { useToast } from '../../hooks/useToast';
 import { useConfirm } from '../../hooks/useConfirm';
+import { useToolbarAction } from '../../hooks/useToolbarAction';
 import CrawlRecorder from './CrawlRecorder';
 
 /* Connector Studio — design-time authoring over the real connector registry.
@@ -150,6 +151,12 @@ export default function StudioPage() {
       navigate(location.pathname, { replace: true, state: null });
     }
   }, [location.state, openDetail, navigate, location.pathname]);
+
+  // Toolbar "New Connector" → open the blank authoring flow (same as the page's
+  // "+ Author Connector" button).
+  useToolbarAction({
+    studio_new: () => { setAuthoring({}); setSelectedId(null); setDetail(null); },
+  });
 
   const publishVersion = async (connectorId, versionId) => {
     const res = await api.call(`/api/connectors/${connectorId}/versions/${versionId}/publish`, { tested: true });

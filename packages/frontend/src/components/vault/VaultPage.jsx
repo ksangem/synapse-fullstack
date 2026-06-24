@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useToast } from '../../hooks/useToast';
 import { useConfirm } from '../../hooks/useConfirm';
 import { api } from '../../services/api';
+import { useToolbarAction } from '../../hooks/useToolbarAction';
 
 /* Credential Vault — real credentials from /api/credentials (metadata only).
    Reveal/copy decrypt on demand via /api/credentials/:id/decrypt (10s auto-hide,
@@ -117,6 +118,11 @@ export default function VaultPage() {
     URL.revokeObjectURL(url);
     showToast(`Exported ${rows.length} credential(s)`);
   };
+
+  useToolbarAction({
+    vault_add: () => setShowDbForm(true),
+    vault_export: handleExportCompliance,
+  });
 
   const handleDbTest = async () => {
     setDbTestStatus('testing'); setDbTestMsg('');

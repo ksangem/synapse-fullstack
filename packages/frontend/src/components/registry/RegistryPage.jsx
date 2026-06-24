@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDetailPane } from '../../hooks/useDetailPane';
 import { useToast } from '../../hooks/useToast';
+import { useToolbarAction } from '../../hooks/useToolbarAction';
 import { api } from '../../services/api';
 import { mapToCard, statusLabel } from '../../services/integrationMap';
 
@@ -31,6 +32,18 @@ export default function RegistryPage() {
     })();
     return () => { alive = false; };
   }, [showToast]);
+
+  useToolbarAction({
+    reg_export: () => {
+      if (cards.length === 0) { showToast('Nothing to export'); return; }
+      const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const row = (c) => [c.name, c.status, c.source?.name ?? c.source ?? '', c.target?.name ?? c.dest?.name ?? c.target ?? ''];
+      const csv = [['name', 'status', 'source', 'destination'].join(','), ...cards.map((c) => row(c).map(esc).join(','))].join('\n');
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      const a = document.createElement('a'); a.href = url; a.download = 'integrations.csv'; a.click(); URL.revokeObjectURL(url);
+      showToast(`Exported ${cards.length} integration(s)`);
+    },
+  });
 
   const filterOptions = ['All', 'Jira', 'SharePoint', 'PostgreSQL', 'SQL Server', 'Active', 'Error'];
 

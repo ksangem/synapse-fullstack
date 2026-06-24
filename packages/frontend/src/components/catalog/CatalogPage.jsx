@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { ConnectorIcon } from '../studio/StudioPage';
+import { useToolbarAction } from '../../hooks/useToolbarAction';
 
 /* Master Entity Catalog — real data from /api/entities. Entities are grouped by
    connector (our real "department"); usage bars reflect how often each field is
@@ -48,6 +49,19 @@ export default function CatalogPage() {
   }, [groups]);
 
   const toggle = (id) => setExpanded((p) => ({ ...p, [id]: !p[id] }));
+
+  useToolbarAction({
+    catalog_export: () => {
+      const rows = [];
+      groups.forEach((g) => g.entities.forEach((e) => (e.fields || []).forEach((f) =>
+        rows.push([g.connectorName || g.connectorId, e.name, f.name, f.type, f.usageCount ?? 0]))));
+      if (rows.length === 0) return;
+      const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const csv = [['connector', 'entity', 'field', 'type', 'usageCount'].join(','), ...rows.map((r) => r.map(esc).join(','))].join('\n');
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      const a = document.createElement('a'); a.href = url; a.download = 'entity-catalog.csv'; a.click(); URL.revokeObjectURL(url);
+    },
+  });
 
   return (
     <div className="page active">

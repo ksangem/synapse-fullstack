@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { useToast } from '../../hooks/useToast';
+import { useToolbarAction } from '../../hooks/useToolbarAction';
 import {
   PRESET_TRANSFORMS, PAIR_COLORS, typesCompatible, runPresetTransform,
   evaluateExpression, generateExpression, sampleFor,
@@ -84,6 +85,12 @@ export default function CanvasPage() {
   const updateMapping = (i, patch) => setMappings((prev) => prev.map((m, idx) => idx === i ? { ...m, ...patch } : m));
   const removeMapping = (i) => { setMappings((prev) => prev.filter((_, idx) => idx !== i)); setExpanded(-1); };
   const clearAll = () => { setMappings([]); setAiSource(null); };
+
+  useToolbarAction({
+    canvas_autoMap: runAutoMap,
+    canvas_clearAll: clearAll,
+    canvas_save: save,
+  });
 
   const confColor = (c) => c >= 0.85 ? 'var(--success)' : c >= 0.6 ? 'var(--warning)' : 'var(--error)';
 

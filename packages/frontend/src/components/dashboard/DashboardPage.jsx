@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDetailPane } from '../../hooks/useDetailPane';
 import { useToast } from '../../hooks/useToast';
+import { useToolbarAction } from '../../hooks/useToolbarAction';
 import { api } from '../../services/api';
 import { mapToCard, computeKpis, statusLabel } from '../../services/integrationMap';
 
@@ -124,6 +125,28 @@ export default function DashboardPage() {
     })();
     return () => { alive = false; };
   }, [showToast]);
+
+  // Toolbar actions — self-contained (fetch live ids, then act) so they don't depend
+  // on the dashboard's display state.
+  const bulkAll = async (action) => {
+    const res = await api.getConnected();
+    const ids = (res.ok && Array.isArray(res.data?.data)) ? res.data.data.map((i) => i.integrationId) : [];
+    if (ids.length === 0) { showToast('No connections'); return; }
+    const r = await api.bulkConnected(action, ids);
+    if (r.ok && r.data?.success) showToast(`${action === 'pause' ? 'Paused' : 'Resumed'} ${r.data.data?.updated ?? ids.length} connection(s)`);
+    else showToast(r.data?.error || (r.status === 403 ? 'Bulk actions require admin' : 'Action failed'));
+  };
+  useToolbarAction({
+    dash_pauseAll: () => bulkAll('pause'),
+    dash_resumeAll: () => bulkAll('resume'),
+    dash_export: () => {
+      if (cards.length === 0) { showToast('Nothing to export'); return; }
+      const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const csv = [['name', 'status'].join(','), ...cards.map((c) => [esc(c.name), esc(c.status)].join(','))].join('\n');
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      const a = document.createElement('a'); a.href = url; a.download = 'dashboard-report.csv'; a.click(); URL.revokeObjectURL(url);
+    },
+  });
 
   const filters = ['All', 'Active', 'Paused', 'Error'];
 

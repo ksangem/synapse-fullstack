@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useToast } from '../../hooks/useToast';
 import { useConfirm } from '../../hooks/useConfirm';
 import { api } from '../../services/api';
+import { useToolbarAction } from '../../hooks/useToolbarAction';
 
 /* Administration (BRD §7.8) — Users & roles, Audit trail, Client applications.
    Wired to /api/users, /api/audit, /api/clients (admin-only on the backend). */
@@ -87,6 +88,18 @@ export default function AdminPage() {
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
     const a = document.createElement('a'); a.href = url; a.download = 'audit-log.csv'; a.click(); URL.revokeObjectURL(url);
   };
+
+  useToolbarAction({
+    admin_addUser: () => setShowAdd(true),
+    admin_export: () => {
+      if (!users.length) { showToast('No users to export'); return; }
+      const cols = ['email', 'role', 'isActive', 'authProvider', 'createdAt'];
+      const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const csv = [cols.join(','), ...users.map((u) => cols.map((c) => esc(u[c])).join(','))].join('\n');
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      const a = document.createElement('a'); a.href = url; a.download = 'users.csv'; a.click(); URL.revokeObjectURL(url);
+    },
+  });
 
   const filteredUsers = users.filter((u) => !uSearch || u.email.toLowerCase().includes(uSearch.toLowerCase()) || u.role.includes(uSearch.toLowerCase()));
 

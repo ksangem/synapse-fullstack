@@ -10,6 +10,7 @@ import LoginPage from './components/auth/LoginPage';
 
 import CriticalBanner from './components/layout/CriticalBanner';
 import Topbar from './components/layout/Topbar';
+import ContextualToolbar from './components/layout/ContextualToolbar';
 import HelpPanel from './components/layout/HelpPanel';
 import NotificationDropdown from './components/layout/NotificationDropdown';
 import Sidebar from './components/layout/Sidebar';
@@ -46,6 +47,7 @@ function AppShell() {
     <>
       <CriticalBanner />
       <Topbar onNotificationToggle={toggleNotif} onHelpToggle={toggleHelp} />
+      <ContextualToolbar />
       <HelpPanel isOpen={helpOpen} onClose={toggleHelp} />
       <NotificationDropdown isOpen={notifOpen} onClose={closeNotif} />
       <div className="app-body">
