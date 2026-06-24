@@ -125,11 +125,21 @@ function extractScalar(raw: unknown): unknown {
  * computeMappedValue (DIRECT, the 16 presets incl. row-local aggregations, EXPRESSION).
  */
 function computeValue(m: MappingEntry, record: Record<string, unknown>): unknown {
-  const srcVal = (m.sources || []).map((s) => extractScalar(getNestedValue(record, s)));
+  // rawVal keeps the source value's real shape (objects/arrays) for EXPRESSION formulas;
+  // srcVal is the flattened scalar used by DIRECT and the presets.
+  const rawVal = (m.sources || []).map((s) => getNestedValue(record, s));
+  const srcVal = rawVal.map((v) => extractScalar(v));
 
   if (!m.transform || m.transform === 'DIRECT') return srcVal[0] ?? '';
 
-  const nums = srcVal.map((v) => Number(v)).filter((n) => !Number.isNaN(n));
+  // Numeric aggregations skip MISSING/empty source fields entirely. An absent field
+  // is '' here and Number('') === 0, which would wrongly inflate sums and drag avg/min
+  // toward 0; filtering empties first means avg/min/max/sum reflect only present values.
+  // A genuine 0 (number or "0") is kept — only null/undefined/'' are dropped.
+  const nums = srcVal
+    .filter((v) => v !== null && v !== undefined && v !== '')
+    .map((v) => Number(v))
+    .filter((n) => !Number.isNaN(n));
   switch (m.preset) {
     case 'dateFormat': return String(srcVal[0] ?? '').substring(0, 10);
     case 'uppercase': return String(srcVal[0] ?? '').toUpperCase();
@@ -153,8 +163,12 @@ function computeValue(m: MappingEntry, record: Record<string, unknown>): unknown
   if (m.transform === 'EXPRESSION' && m.expression) {
     // Custom JS runs in the quickjs WASM sandbox (no Node globals, memory + time
     // limited) — the bus path is safe to run user expressions server-side.
+    // Pass the RAW source values so a formula written against the real shape works:
+    // e.g. source['status'].name or source['labels'].map(...). Previously this handed
+    // over the pre-flattened scalar, so such formulas errored ("x is not a function")
+    // or returned nothing — leaving the destination column empty.
     const source: Record<string, unknown> = {};
-    (m.sources || []).forEach((s, i) => { source[s] = srcVal[i]; });
+    (m.sources || []).forEach((s, i) => { source[s] = rawVal[i]; });
     try {
       return evalExpression(m.expression, source);
     } catch (err) {
