@@ -6,6 +6,7 @@ import { eq, desc, and } from 'drizzle-orm';
 import { CredentialService } from '../services/CredentialService';
 import { mappingAIService } from '../services/MappingAIService';
 import { recordAudit } from '../services/AuditService';
+import { refreshHubSubscriptions } from '../hub/init-hub';
 
 const credentialService = new CredentialService();
 
@@ -27,6 +28,8 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const body = createIntegrationSchema.parse(req.body);
     const [result] = await db.insert(integrations).values(body).returning();
+    // Make the new integration routable on the bus immediately (no restart needed).
+    await refreshHubSubscriptions();
     res.json({ success: true, data: result });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -48,6 +51,10 @@ router.get('/', async (_req: Request, res: Response) => {
 // POST /api/integrations/save-connection — upsert connection by Jira endpoint URL
 // MUST be before /:id routes so Express doesn't match "save-connection" as an :id param.
 const saveConnectionSchema = z.object({
+  // When the caller already has a connection open (the Wizard's activeIntegrationId),
+  // send it so every re-save UPDATES that exact row — otherwise changing the
+  // destination list/table mid-wizard is seen as a new connection and duplicates pile up.
+  integrationId: z.string().optional(),
   name: z.string().min(1),
   // Optional: only REST/Jira-style sources have a base URL; GraphQL/CSV/SFTP/etc. don't.
   endpointUrl: z.string().optional(),
@@ -118,13 +125,19 @@ router.post('/save-connection', async (req: Request, res: Response) => {
     const allActive = await db.select().from(integrations)
       .where(eq(integrations.status, 'active'));
 
-    const existing = allActive.find(i => {
-      const fm = i.fieldMappings as Record<string, string> | null;
-      if (endpointUrl) return fm?.endpointUrl === endpointUrl && destSig(fm) === wantDestSig;
-      return i.name === body.name
-        && (i.sourceConnectorId ?? null) === (body.sourceConnectorId ?? null)
-        && (i.destConnectorId ?? null) === (body.destConnectorId ?? null);
-    });
+    // If the caller passed an explicit integrationId (an already-open connection),
+    // update THAT row directly — this is the authoritative match and prevents the
+    // wizard from spawning a new row each time the list/table/state changes. Fall
+    // back to the source+destination heuristic only when no id is supplied.
+    const existing = body.integrationId
+      ? allActive.find(i => i.integrationId === body.integrationId)
+      : allActive.find(i => {
+          const fm = i.fieldMappings as Record<string, string> | null;
+          if (endpointUrl) return fm?.endpointUrl === endpointUrl && destSig(fm) === wantDestSig;
+          return i.name === body.name
+            && (i.sourceConnectorId ?? null) === (body.sourceConnectorId ?? null)
+            && (i.destConnectorId ?? null) === (body.destConnectorId ?? null);
+        });
 
     // Encrypt source credentials based on source type
     let credId: string | null = null;
@@ -266,6 +279,8 @@ router.post('/save-connection', async (req: Request, res: Response) => {
         updatedAt: new Date(),
       }).where(eq(integrations.integrationId, existing.integrationId)).returning();
 
+      // Re-derive bus subscriptions so the edited connection routes on its next run.
+      await refreshHubSubscriptions();
       res.json({ success: true, data: result, updated: true });
     } else {
       const [result] = await db.insert(integrations).values({
@@ -277,6 +292,9 @@ router.post('/save-connection', async (req: Request, res: Response) => {
         fieldMappings: buildFm(),
       }).returning();
 
+      // Brand-new connection: register its subscription now so the FIRST run delivers
+      // (previously it matched no subscription until a restart → "164 queued" hang).
+      await refreshHubSubscriptions();
       res.json({ success: true, data: result, updated: false });
     }
   } catch (err) {
@@ -333,6 +351,8 @@ router.put('/:id', async (req: Request, res: Response) => {
 
     const [result] = await db.update(integrations).set(updates)
       .where(eq(integrations.integrationId, integrationId)).returning();
+    // Status/mapping/dest changes alter routing (e.g. pausing removes its subscription).
+    await refreshHubSubscriptions();
     res.json({ success: true, data: result });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
@@ -387,6 +407,8 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
     // Finally delete the integration itself
     await db.delete(integrations).where(eq(integrations.integrationId, integrationId));
+    // Drop its subscription from the bus so the router no longer fans out to it.
+    await refreshHubSubscriptions();
     res.json({ success: true, data: { deleted: integrationId } });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

@@ -149,6 +149,10 @@ export async function buildIntegrationSource(integration: Integration): Promise<
 
 /** Register every ACTIVE adapter's flow. Best-effort: a bad row is skipped. */
 export async function loadIntegrationFlows(pipeline: TransformPipeline): Promise<FlowResult> {
+  // Clear-then-rebuild so this is a true re-derive: a paused/deleted integration's
+  // subscription disappears (additive registration alone would leave it stale), and
+  // active ones are re-registered idempotently (register() is keyed by subscription id).
+  hubService.registry.clear();
   const rows = await db.select().from(integrations).where(eq(integrations.status, 'active'));
   const result: FlowResult = { loaded: 0, skipped: 0, flows: [] };
   for (const intg of rows) {

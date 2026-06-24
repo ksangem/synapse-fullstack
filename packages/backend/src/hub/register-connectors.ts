@@ -130,6 +130,10 @@ export function registerBuiltinConnectors(): void {
   }, (s) => `${seg(s.sourceKey ?? 'sharepoint')}.${seg(str(s.config.listSlug || s.config.listName || 'list'))}`);
 
   // ── Destinations ─────────────────────────────────────────
+  // Each destination also declares targetKey(spec): a stable fingerprint of WHERE the data
+  // physically lands (read from config only, never creds). The run trigger folds this into
+  // message identity so re-pointing an integration at a new table/list delivers afresh
+  // instead of being suppressed as an inbox duplicate of the prior target's run.
   registerDestinationFactory('database', (s: ConnectorBuildSpec) =>
     new DatabaseDestinationConnector({
       connectorId: s.connectorId,
@@ -139,6 +143,19 @@ export function registerBuiltinConnectors(): void {
       defaultTable: str(s.config.pgTable || s.config.destTable) || undefined,
       defaultNaturalKey: str(s.config.naturalKeyColumn) || undefined,
     }),
+    (s: ConnectorBuildSpec) => {
+      const c = dbConnOf(s.config, {});
+      const table = str(s.config.pgTable || s.config.destTable);
+      return `${dbEngineOf(s.config)}::${c.host}:${c.port}/${c.database}.${c.schema}.${table}`;
+    },
+    (s: ConnectorBuildSpec) => {
+      const problems: string[] = [];
+      const c = dbConnOf(s.config, s.creds);
+      if (!str(c.host)) problems.push('Database host is not configured.');
+      if (!str(c.database)) problems.push('Database name is not configured.');
+      if (!str(s.config.pgTable || s.config.destTable)) problems.push('Destination table is not set.');
+      return problems;
+    },
   );
 
   registerDestinationFactory('sharepoint', (s: ConnectorBuildSpec) =>
@@ -148,6 +165,13 @@ export function registerBuiltinConnectors(): void {
       creds: spCredsOf(s.config, s.creds),
       keyColumn: str(s.config.keyColumn) || undefined,
     }),
+    (s: ConnectorBuildSpec) => `${str(s.config.siteUrl)}::${str(s.config.listName || s.config.destListName)}`,
+    (s: ConnectorBuildSpec) => {
+      const problems: string[] = [];
+      if (!str(s.config.siteUrl)) problems.push('SharePoint site URL is not set.');
+      if (!str(s.config.listName || s.config.destListName)) problems.push('SharePoint list name is not set.');
+      return problems;
+    },
   );
 
   for (const kind of REST_KINDS) {
@@ -158,6 +182,14 @@ export function registerBuiltinConnectors(): void {
         creds: s.creds,
         entity: s.entity ?? str(s.config.destEntity || s.config.entity),
       }),
+      (s: ConnectorBuildSpec) =>
+        `${str(s.config.endpointUrl || s.config.baseUrl)}::${s.entity ?? str(s.config.destEntity || s.config.entity)}`,
+      (s: ConnectorBuildSpec) => {
+        const problems: string[] = [];
+        if (!str(s.config.endpointUrl || s.config.baseUrl)) problems.push('REST endpoint/base URL is not set.');
+        if (!(s.entity ?? str(s.config.destEntity || s.config.entity))) problems.push('REST destination entity/operation is not set.');
+        return problems;
+      },
     );
   }
 }

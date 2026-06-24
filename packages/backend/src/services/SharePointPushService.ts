@@ -1,4 +1,4 @@
-import { SharePointAuthService } from './SharePointAuthService';
+import { SharePointAuthService, graphFetch } from './SharePointAuthService';
 import { SharePointMapperService } from './SharePointMapperService';
 import { applyMappings, type MappingConfig } from './MappingEngine';
 import type {
@@ -216,11 +216,13 @@ export class SharePointPushService {
     });
     try {
       // Just-created columns can take several seconds to become writable — a write
-      // before they propagate returns 400 badArgument. Retry 400/429 with backoff.
-      // Kept short (2 retries); a genuinely missing column is caught by the caller's
-      // early-stop so we don't burn minutes retrying a permanent error.
+      // before they propagate returns 400 badArgument. Newly-created lists also throw
+      // 500 generalException / 503 under write contention. All are transient: retry with
+      // backoff. A genuinely missing column is caught by the caller's early-stop, so we
+      // don't burn minutes retrying a permanent error.
+      const transient = (s: number) => s === 400 || s === 429 || s === 500 || s === 503;
       let response = await post();
-      for (let attempt = 0; !response.ok && (response.status === 400 || response.status === 429) && attempt < 2; attempt++) {
+      for (let attempt = 0; !response.ok && transient(response.status) && attempt < 3; attempt++) {
         await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
         response = await post();
       }
@@ -258,7 +260,7 @@ export class SharePointPushService {
   ): Promise<string | null> {
     try {
       const filter = encodeURIComponent(`fields/${fieldName} eq '${value}'`);
-      const response = await fetch(
+      const response = await graphFetch(
         `${GRAPH_BASE}/sites/${siteId}/lists/${listId}/items?$filter=${filter}&$select=id`,
         {
           headers: {
@@ -295,10 +297,11 @@ export class SharePointPushService {
       }
     );
     try {
-      // Retry 400/429 with backoff — newly-created columns may not be writable yet.
-      // Short (2 retries); permanent errors are caught by the caller's early-stop.
+      // Retry transient 400 (column propagation) / 429 (throttle) / 500 (generalException)
+      // / 503 with backoff. Permanent errors are caught by the caller's early-stop.
+      const transient = (s: number) => s === 400 || s === 429 || s === 500 || s === 503;
       let response = await patch();
-      for (let attempt = 0; !response.ok && (response.status === 400 || response.status === 429) && attempt < 2; attempt++) {
+      for (let attempt = 0; !response.ok && transient(response.status) && attempt < 3; attempt++) {
         await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
         response = await patch();
       }
@@ -380,7 +383,7 @@ export class SharePointPushService {
     let next: string | undefined = `${GRAPH_BASE}/sites/${siteId}/lists/${listId}/items?$expand=fields&$top=999`;
     let guard = 0;
     while (next && guard++ < 200) {
-      const r = await fetch(next, {
+      const r = await graphFetch(next, {
         headers: { Authorization: `Bearer ${token}`, Prefer: 'HonorNonIndexedQueriesWarningMayFailRandomly' },
       });
       if (!r.ok) break;
@@ -403,5 +406,94 @@ export class SharePointPushService {
     const siteId = siteIdOverride || await this.authService.getSiteId(creds.siteUrl, token);
     const listId = listIdOverride || await this.authService.getListId(siteId, creds.listName, token);
     return { token, siteId, listId };
+  }
+
+  /**
+   * Like resolveIds, but CREATES the destination list if it doesn't exist yet (used by
+   * the bus dispatch path, where the operator-named list may not be provisioned).
+   */
+  async resolveIdsEnsuringList(creds: SharePointCredentials, siteIdOverride?: string, listIdOverride?: string) {
+    const token = await this.authService.getAccessToken(creds);
+    const siteId = siteIdOverride || await this.authService.getSiteId(creds.siteUrl, token);
+    const listId = listIdOverride || await this.authService.ensureList(siteId, creds.listName, token);
+    return { token, siteId, listId };
+  }
+
+  /** List the internal column names that currently exist on a list. */
+  async listColumnNames(siteId: string, listId: string, token: string): Promise<Set<string>> {
+    const r = await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists/${listId}/columns?$select=name`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) return new Set();
+    const d = await r.json() as { value?: Array<{ name: string }> };
+    return new Set((d.value || []).map((c) => c.name));
+  }
+
+  /**
+   * Ensure the destination list exists WITH the given columns — the bus-path equivalent
+   * of the Wizard's /ensure-list. A missing list is created atomically WITH its columns
+   * (the reliable provisioning order — avoids the per-row create-then-write race), and an
+   * existing list gets any missing columns added. Columns are created with the EXACT name
+   * the mapper emits (SharePoint internal names are case-sensitive on write), all as text
+   * (safe for any value; avoids type-mismatch generalExceptions). Returns the listId and
+   * the set of column names that now exist (so the caller can write only known fields).
+   */
+  async ensureListWithColumns(
+    creds: SharePointCredentials, siteId: string, token: string, columnNames: string[],
+  ): Promise<{ listId: string; columns: Set<string> }> {
+    const listName = creds.listName;
+    const wanted = [...new Set(columnNames)];
+
+    const listsRes = await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists?$select=id,displayName`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const lists = listsRes.ok
+      ? ((await listsRes.json() as { value?: Array<{ id: string; displayName: string }> }).value || [])
+      : [];
+    const existing = lists.find((l) => l.displayName === listName);
+
+    if (!existing) {
+      const body = {
+        displayName: listName,
+        list: { template: 'genericList' },
+        columns: wanted.map((name) => ({ name, text: {} })),
+      };
+      const cr = await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!cr.ok) {
+        throw new Error(`Create list '${listName}' failed (${cr.status}): ${(await cr.text()).slice(0, 200)}`);
+      }
+      const created = await cr.json() as { id: string };
+      // Read back the ACTUAL internal column names SharePoint assigned (it can differ from
+      // the requested display name) so writes target real, writable fields.
+      const real = await this.listColumnNames(siteId, created.id, token);
+      console.error(`[SPProvision] created '${listName}' — requested [${wanted.join(',')}] → actual [${[...real].join(',')}]`);
+      return { listId: created.id, columns: real.size ? real : new Set([...wanted, 'Title']) };
+    }
+
+    // Existing list — add any columns it doesn't have yet (exact-name, case-sensitive).
+    const have = await this.listColumnNames(siteId, existing.id, token);
+    for (const name of wanted) {
+      if (have.has(name)) continue;
+      const ar = await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists/${existing.id}/columns`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, text: {} }),
+      });
+      if (ar.ok) have.add(name);
+    }
+    have.add('Title');
+    return { listId: existing.id, columns: have };
+  }
+
+  /** Token + siteId + ensure list-with-columns, in one call (bus dispatch resolution). */
+  async resolveAndEnsureList(creds: SharePointCredentials, columnNames: string[]) {
+    const token = await this.authService.getAccessToken(creds);
+    const siteId = await this.authService.getSiteId(creds.siteUrl, token);
+    const { listId, columns } = await this.ensureListWithColumns(creds, siteId, token, columnNames);
+    return { token, siteId, listId, columns };
   }
 }

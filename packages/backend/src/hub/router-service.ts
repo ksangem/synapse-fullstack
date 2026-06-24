@@ -22,6 +22,7 @@ import type { SubscriptionRegistry } from './subscription-registry';
 import type { InboxRepository } from './inbox-repository';
 import type { OutboxRepository } from './outbox-repository';
 import { hubDispatchQueue } from '../queues';
+import { recordOut } from './run-recorder';
 
 /** Payload of a `hub-dispatch` job — everything the dispatch worker needs. */
 export interface DispatchJobData {
@@ -77,6 +78,16 @@ export class RouterService {
       });
 
       dispatched++;
+    }
+
+    // If this envelope produced NO dispatch job — no subscription matched, or every
+    // match was an already-dispatched duplicate (outbox-suppressed) — settle it as
+    // 'skipped' on the run ledger. Without this a run whose records have no live
+    // destination sits at 'pending' forever (the "queued" hang); 'skipped' is a
+    // terminal outcome that lets getRunStatus report the run finished.
+    if (dispatched === 0) {
+      const runId = envelope.headers?.runId;
+      if (runId) await recordOut(runId, 'skipped', envelope.checksum);
     }
 
     // Inbox = "routed" checkpoint: once fan-out is enqueued the envelope's intake

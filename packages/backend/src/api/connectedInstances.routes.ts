@@ -57,7 +57,20 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const orgId = req.actor.orgId;
     const allIntegrations = await db.select().from(integrations).where(eq(integrations.orgId, orgId));
-    if (allIntegrations.length === 0) {
+
+    // "My Connections" lists real source → destination connections only. Hide internal
+    // artifacts that are NOT operator-created connections:
+    //   • the synthetic bus run-holder (HUB_RUN_HOLDER), and
+    //   • source-only rows with no destination — e.g. the holding integration the Jira
+    //     "Fetch" step creates just to attach pulled tickets/runs to. These previously
+    //     showed up as phantom extra connections after building one connection.
+    const HUB_RUN_HOLDER = '00000000-0000-0000-0000-0000000000b5';
+    const connections = allIntegrations.filter((i) => {
+      if (i.integrationId === HUB_RUN_HOLDER) return false;
+      const fm = (i.fieldMappings as Record<string, unknown>) ?? {};
+      return !!i.destConnectorId || !!fm.destType || !!fm.destListName || !!fm.listName || !!fm.pgTable;
+    });
+    if (connections.length === 0) {
       res.json({ success: true, data: [] });
       return;
     }
@@ -66,7 +79,7 @@ router.get('/', async (req: Request, res: Response) => {
     const connectorRows = await db.select().from(connectors).where(eq(connectors.orgId, orgId));
     const byId = new Map<string, ConnectorRow>(connectorRows.map((c) => [c.connectorId, c]));
 
-    const intgIds = allIntegrations.map((i) => i.integrationId);
+    const intgIds = connections.map((i) => i.integrationId);
     const runRows = await db.select().from(runs).where(inArray(runs.integrationId, intgIds)).orderBy(desc(runs.startedAt));
     const newestRun = new Map<string, typeof runs.$inferSelect>();
     for (const r of runRows) if (!newestRun.has(r.integrationId)) newestRun.set(r.integrationId, r);
@@ -94,7 +107,7 @@ router.get('/', async (req: Request, res: Response) => {
     for (const r of pushRows) if (r.at) bump(r.integrationId, dayKey(r.at), r.n ?? 0);
 
     const result = await Promise.all(
-      allIntegrations.map(async (integ) => {
+      connections.map(async (integ) => {
         const state = await syncStateRepo.getByIntegration(integ.integrationId);
         const recentPushes = await pushLogRepo.listByIntegration(integ.integrationId, 5);
         const fm = (integ.fieldMappings as Record<string, unknown>) ?? {};

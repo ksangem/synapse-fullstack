@@ -34,6 +34,7 @@ import type { DeadLetterRepository } from '../hub/dead-letter-repository';
 import type { DispatchJobData } from '../hub/router-service';
 import { HUB_DISPATCH_QUEUE } from '../hub/queue-names';
 import { recordOut } from '../hub/run-recorder';
+import { isRunCancelled } from '../hub/run-cancellation';
 
 export interface HubDispatchDeps {
   /** Resolve a destination connector by id (e.g. hubService.getDestination). */
@@ -57,8 +58,25 @@ export function startHubDispatchWorker(
       const { orgId, messageId } = envelope;
       const signal = new AbortController().signal;
 
+      // Cooperative stop — if the run was cancelled, don't deliver this queued
+      // envelope. Settle BOTH the outbox row (so the Monitor doesn't show it stuck
+      // at 'pending' forever) and the run ledger (so the run's pending count reaches
+      // zero and run-status can report finished).
+      const runId = envelope.headers?.runId;
+      if (isRunCancelled(runId)) {
+        await outbox.markDone(orgId, messageId, destinationConnectorId);
+        if (runId) await recordOut(runId, 'skipped', envelope.checksum);
+        return;
+      }
+
       // Exactly-once per destination — a retry/crash-recovery duplicate is skipped.
-      if (await idempotency.exists(orgId, messageId, destinationConnectorId)) return;
+      // Settle the outbox row (already delivered on a prior pass) and the run ledger.
+      if (await idempotency.exists(orgId, messageId, destinationConnectorId)) {
+        await outbox.markDone(orgId, messageId, destinationConnectorId);
+        const skipRunId = envelope.headers?.runId;
+        if (skipRunId) await recordOut(skipRunId, 'skipped', envelope.checksum);
+        return;
+      }
 
       const destination = resolveDestination(destinationConnectorId);
       if (!destination) {
@@ -74,7 +92,6 @@ export function startHubDispatchWorker(
       await outbox.markDone(orgId, messageId, destinationConnectorId);
       await idempotency.record(orgId, messageId, destinationConnectorId);
 
-      const runId = envelope.headers?.runId;
       if (runId) await recordOut(runId, 'delivered', envelope.checksum);
     },
     { connection, concurrency: 5 },

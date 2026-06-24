@@ -5,6 +5,10 @@ import { runtimeClient } from '../../services/runtimeClient';
 
 /* ─── Static Data ──────────────────────────────────────��── */
 const stepLabels = ['Select Systems', 'Credentials', 'Entities', 'Mapping', 'Fetch & Review', 'Push & Sync'];
+// Per-tab persistence of the whole wizard session: survives navigating away and back,
+// and a page refresh, so "go back" returns you to the exact step/state (incl. an
+// in-flight push). Cleared by the "Start over" button.
+const WIZARD_STATE_KEY = 'synapseWizardState';
 const DEFAULT_ICON = '\u{1F50C}'; // fallback card icon for registry connectors without one
 
 // A connector icon can be emoji(s) OR an image/logo URL (e.g. a Keka logo); render accordingly.
@@ -593,6 +597,9 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
 /* ─── Main Wizard ───────────────────────────────────────── */
 export default function WizardPage() {
   const [wizardStep, setWizardStep] = useState(1);
+  // True once the saved session (if any) has been applied — gates the persist effect so
+  // the initial empty render never overwrites a snapshot before it's restored.
+  const [hydrated, setHydrated] = useState(false);
   const [selectedSource, setSelectedSource] = useState(null);
   const [selectedDest, setSelectedDest] = useState(null);
   const navigate = useNavigate();
@@ -700,6 +707,10 @@ export default function WizardPage() {
   const [pushResult, setPushResult] = useState(null); // { pushRunId, total, created, updated, failed }
   const [pushError, setPushError] = useState('');
   const [pushProgress, setPushProgress] = useState(null);
+  // Set when the user clicks "Stop push" so the status poll bails out immediately
+  // instead of racing the natural cancelled→finished settle.
+  const pushStoppedRef = useRef(false);
+  const [stopping, setStopping] = useState(false);
 
   // Step 6 — DDL Preview (Database destination)
   const [ddlPreview, setDdlPreview] = useState(null); // { missingColumns, ddlStatements, requiresApproval, tableExists }
@@ -981,6 +992,7 @@ export default function WizardPage() {
   // record (shared MappingEngine), and busses it — only config crosses HTTP, so dataset
   // size is irrelevant (no more "payload too large"). Reuses pollRunStatus for the UI.
   const pushServerSide = async () => {
+    pushStoppedRef.current = false; setStopping(false);
     setPushStatus('pushing'); setPushError(''); setPushResult(null); setPushProgress(null);
     try {
       const id = await handleSaveConnection(); // persists the recipe; returns integrationId
@@ -1029,6 +1041,7 @@ export default function WizardPage() {
   // DLQ, run audit) to a generic database/sharepoint destination. Returns 202 + a
   // runId we poll for delivery counts.
   const deliverViaBus = async ({ destination, records, naturalKeyColumn, destTable, extra = {} }) => {
+    pushStoppedRef.current = false; setStopping(false);
     setPushStatus('pushing'); setPushError(''); setPushResult(null); setPushProgress(null);
     try {
       if (!records.length || !records.some((r) => r && Object.keys(r).length)) {
@@ -1073,15 +1086,24 @@ export default function WizardPage() {
     let attempts = 0;
     const maxAttempts = 120; // ~5 min at 2.5s
     const poll = async () => {
+      if (pushStoppedRef.current) return; // stopped by the user — handleStopPush owns the UI now
       attempts++;
       const res = await api.getRunStatus(runId);
       const s = res.ok && res.data?.success ? res.data.data : null;
       if (s) {
         setPushProgress({ createdCount: s.delivered, updatedCount: 0, failedCount: s.failed });
         if (s.finished || attempts >= maxAttempts) {
-          setPushResult((prev) => ({ ...prev, status: s.failed > 0 && s.delivered === 0 ? 'error' : 'success',
-            created: s.delivered, updated: 0, failed: s.failed, ...extra }));
-          if (s.failed > 0) setPushError(`${s.delivered} delivered, ${s.failed} failed — check the DLQ on the Monitor page.`);
+          // Honor a force-terminated run's real status (cancelled = operator Stop / watchdog
+          // timeout shows as 'error'); otherwise derive success/error from the counts.
+          const finalStatus = s.status === 'cancelled' ? 'cancelled'
+            : (s.failed > 0 && s.delivered === 0) || s.status === 'error' ? 'error'
+            : 'success';
+          setPushResult((prev) => ({ ...prev, status: finalStatus,
+            created: s.delivered, updated: 0, failed: s.failed, errors: s.errors || prev?.errors || [], ...extra }));
+          if (s.failed > 0) {
+            const why = (s.errors && s.errors.length) ? ` First error: ${s.errors[0]}` : ' Check the DLQ on the Monitor page.';
+            setPushError(`${s.delivered} delivered, ${s.failed} failed.${why}`);
+          }
           setPushStatus('done');
           return;
         }
@@ -1089,6 +1111,25 @@ export default function WizardPage() {
       if (attempts < maxAttempts) setTimeout(poll, 2500);
     };
     setTimeout(poll, 1500);
+  };
+
+  // ─── Stop an in-flight push (cooperative cancel) ───────────
+  // Tells the backend to stop queuing/delivering this run. Records already sent
+  // to the destination are kept (idempotent upsert), so there are no duplicates.
+  const handleStopPush = async () => {
+    const runId = pushResult?.pushRunId;
+    if (!runId || stopping) return;
+    setStopping(true);
+    pushStoppedRef.current = true; // halt the status poll
+    try {
+      await api.cancelRun(runId);
+    } catch { /* best-effort — the run is flagged client-side regardless */ }
+    const p = pushProgress || {};
+    const delivered = (p.createdCount ?? 0) + (p.updatedCount ?? 0);
+    setPushResult((prev) => ({ ...prev, status: 'cancelled', created: delivered, failed: p.failedCount ?? 0 }));
+    setPushError('Push stopped. Records already sent were kept (upsert — no duplicates); the rest were not sent.');
+    setPushStatus('done');
+    setStopping(false);
   };
 
   // Generic "write mapped records into a SharePoint list" push (SP→SP, CSV→SP, REST→SP).
@@ -1420,6 +1461,9 @@ export default function WizardPage() {
     setSaveMsg('');
     try {
       const body = {
+        // Re-saves update the SAME connection instead of creating duplicates as the
+        // list/table/mappings change through the wizard.
+        integrationId: activeIntegrationId || undefined,
         name: connectionName || `${selectedSource} → ${selectedDest}`,
         sourceType: selectedSource,
         destType: selectedDest,
@@ -1493,6 +1537,7 @@ export default function WizardPage() {
   const autoSavedPushRef = useRef(null);
   useEffect(() => {
     if (pushStatus !== 'done' || !pushResult) return;
+    if (pushResult.status === 'cancelled') return;           // a stopped push isn't a saved success
     const wrote = (pushResult.created || 0) + (pushResult.updated || 0);
     const failed = pushResult.failed || 0;
     if (wrote === 0 && failed > 0) return;                 // total failure -> don't save
@@ -1503,12 +1548,19 @@ export default function WizardPage() {
     handleSaveConnection();
   }, [pushStatus, pushResult]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Resume the wizard where you left off after a round-trip to the Mapping Canvas.
+  // Resume the wizard exactly where you left off — whether you bounced to the Mapping
+  // Canvas (one-shot 'synapseWizardResume') or simply navigated away / refreshed and came
+  // back (persistent WIZARD_STATE_KEY). Restores selections, mappings, fetched data AND an
+  // in-flight push (re-attaching to its run-status poll). Runs once on mount.
   useEffect(() => {
-    let raw = null;
-    try { raw = sessionStorage.getItem('synapseWizardResume'); } catch { /* ignore */ }
-    if (!raw) return;
-    try { sessionStorage.removeItem('synapseWizardResume'); } catch { /* ignore */ }
+    let raw = null, oneShot = false;
+    try {
+      raw = sessionStorage.getItem('synapseWizardResume');
+      if (raw) oneShot = true;
+      else raw = sessionStorage.getItem(WIZARD_STATE_KEY);
+    } catch { /* ignore */ }
+    if (!raw) { setHydrated(true); return; }
+    if (oneShot) { try { sessionStorage.removeItem('synapseWizardResume'); } catch { /* ignore */ } }
     try {
       const s = JSON.parse(raw);
       if (s.selectedSource) setSelectedSource(s.selectedSource);
@@ -1525,10 +1577,74 @@ export default function WizardPage() {
       setDestFields(s.destFields || []);
       setMappings(s.mappings || []);
       if (s.fetchResult) setFetchResult(s.fetchResult);
+      if (s.fetchStatus) setFetchStatus(s.fetchStatus);
+      if (s.matchKey) setMatchKey(s.matchKey);
+      if (s.connectionName) setConnectionName(s.connectionName);
+      if (s.dateStart) setDateStart(s.dateStart);
+      if (s.dateEnd) setDateEnd(s.dateEnd);
+      if (s.selectedPgTable) setSelectedPgTable(s.selectedPgTable);
+      if (typeof s.createNewTable === 'boolean') setCreateNewTable(s.createNewTable);
+      if (s.newTableName) setNewTableName(s.newTableName);
       if (s.activeIntegrationId) setActiveIntegrationId(s.activeIntegrationId);
+      // Push progress — so a return mid-push shows where it's at.
+      if (s.pushResult) setPushResult(s.pushResult);
+      if (s.pushError) setPushError(s.pushError);
+      if (s.pushProgress) setPushProgress(s.pushProgress);
+      if (s.pushStatus) setPushStatus(s.pushStatus);
       if (s.wizardStep) setWizardStep(s.wizardStep);
+      // If a push was still in flight when we left, re-attach to its progress poll so it
+      // resumes updating instead of sitting frozen.
+      if (s.pushStatus === 'polling' && s.pushResult?.pushRunId) {
+        pollRunStatus(s.pushResult.pushRunId);
+      }
     } catch { /* ignore a corrupt snapshot */ }
+    setHydrated(true);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Continuously persist the wizard session so navigating away / refreshing can resume it.
+  // Gated on `hydrated` so the initial empty render never clobbers a saved snapshot before
+  // the restore effect above has applied it (both run in one batched update on mount).
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      sessionStorage.setItem(WIZARD_STATE_KEY, JSON.stringify({
+        wizardStep, selectedSource, selectedDest, selectedEntity, selectedProject,
+        srcCreds, destCreds, srcConnectionData, destConnectionData,
+        srcTestStatus, destTestStatus, srcFields, destFields, mappings,
+        fetchResult, fetchStatus, matchKey, connectionName, dateStart, dateEnd,
+        selectedPgTable, createNewTable, newTableName, activeIntegrationId,
+        pushStatus, pushResult, pushError, pushProgress,
+      }));
+    } catch { /* sessionStorage full / serialization issue — non-fatal */ }
+  }, [
+    hydrated,
+    wizardStep, selectedSource, selectedDest, selectedEntity, selectedProject,
+    srcCreds, destCreds, srcConnectionData, destConnectionData,
+    srcTestStatus, destTestStatus, srcFields, destFields, mappings,
+    fetchResult, fetchStatus, matchKey, connectionName, dateStart, dateEnd,
+    selectedPgTable, createNewTable, newTableName, activeIntegrationId,
+    pushStatus, pushResult, pushError, pushProgress,
+  ]);
+
+  // Clear the saved session and reset the wizard to a clean Step 1.
+  const startOver = () => {
+    try {
+      sessionStorage.removeItem(WIZARD_STATE_KEY);
+      sessionStorage.removeItem('synapseWizardResume');
+    } catch { /* ignore */ }
+    setSelectedSource(null); setSelectedDest(null);
+    setSrcCreds({}); setDestCreds({});
+    setSrcConnectionData(null); setDestConnectionData(null);
+    setSrcTestStatus('idle'); setDestTestStatus('idle');
+    setSrcTestMsg(''); setDestTestMsg('');
+    setSelectedEntity(null); setSelectedProject('');
+    setSrcFields([]); setDestFields([]); setMappings([]);
+    setFetchResult(null); setFetchStatus('idle'); setFetchError('');
+    setMatchKey(''); setConnectionName(''); setActiveIntegrationId(null);
+    setSelectedPgTable(''); setCreateNewTable(false); setNewTableName('');
+    setPushStatus('idle'); setPushResult(null); setPushError(''); setPushProgress(null);
+    setWizardStep(1);
+  };
 
   // ─── Hand off the current mapping to the Mapping Canvas ──
   const openInCanvas = async () => {
@@ -1574,7 +1690,9 @@ export default function WizardPage() {
         if (connRes.ok && connRes.data?.data) {
           setSavedConnections(connRes.data.data.filter(c => c.status === 'active'));
         }
-        setTimeout(() => setDeleteStatus('idle'), 2000);
+        // Don't strand the user on the now-deleted connection — take them to the
+        // (refreshed) connections list where it's gone, after a brief confirmation.
+        setTimeout(() => { setDeleteStatus('idle'); navigate('/connected'); }, 1000);
       } else {
         setDeleteStatus('idle');
         setSaveMsg(res.data?.error || 'Failed to delete');
@@ -2125,7 +2243,12 @@ export default function WizardPage() {
         background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
         padding: '10px 16px', marginTop: 20, flexShrink: 0,
       }}>
-        <button className="btn btn-outline" onClick={goBack} disabled={wizardStep === 1}>&larr; Back</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn btn-outline" onClick={goBack} disabled={wizardStep === 1}>&larr; Back</button>
+          <button className="btn btn-outline" onClick={startOver}
+            title="Clear this wizard session and start a new connection"
+            style={{ color: 'var(--text-dim)' }}>Start over</button>
+        </div>
         <div style={{ fontSize: '.82rem', color: 'var(--text-dim)' }}>
           Step {wizardStep} of 6: <strong>{stepLabels[wizardStep - 1]}</strong>
         </div>
@@ -3152,21 +3275,34 @@ export default function WizardPage() {
                     <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginTop: 8 }}>
                       Push Run: <span style={{ fontFamily: 'monospace' }}>{pushResult?.pushRunId || '...'}</span>
                     </div>
+                    {pushResult?.pushRunId && (
+                      <div style={{ marginTop: 16 }}>
+                        <button className="btn btn-outline" onClick={handleStopPush} disabled={stopping}
+                          style={{ borderColor: 'var(--error)', color: 'var(--error)' }}>
+                          {stopping ? 'Stopping…' : '⏹ Stop push'}
+                        </button>
+                        <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', marginTop: 6 }}>
+                          Stops sending the rest. Records already sent are kept (no duplicates).
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {pushStatus === 'done' && pushResult && (
                   <div>
-                    <div style={{
-                      padding: '12px 16px',
-                      background: pushResult.status === 'success' ? 'var(--success-dim)' : 'var(--error-dim)',
-                      border: `1px solid ${pushResult.status === 'success' ? 'var(--success)' : 'var(--error)'}`,
-                      borderRadius: 8, marginBottom: 16,
-                    }}>
-                      <div style={{ fontWeight: 700, color: pushResult.status === 'success' ? 'var(--success)' : 'var(--error)', fontSize: '.9rem' }}>
-                        {pushResult.status === 'success' ? '\u2705 Push Complete' : '\u274C Push Had Errors'}
-                      </div>
-                    </div>
+                    {(() => {
+                      const cancelled = pushResult.status === 'cancelled';
+                      const ok = pushResult.status === 'success';
+                      const accent = ok ? 'var(--success)' : cancelled ? 'var(--info)' : 'var(--error)';
+                      const bg = ok ? 'var(--success-dim)' : cancelled ? 'var(--info-dim)' : 'var(--error-dim)';
+                      const label = ok ? '\u2705 Push Complete' : cancelled ? '\u23F9 Push Stopped' : '\u274C Push Had Errors';
+                      return (
+                        <div style={{ padding: '12px 16px', background: bg, border: `1px solid ${accent}`, borderRadius: 8, marginBottom: 16 }}>
+                          <div style={{ fontWeight: 700, color: accent, fontSize: '.9rem' }}>{label}</div>
+                        </div>
+                      );
+                    })()}
                     <div style={{ display: 'grid', gridTemplateColumns: pushResult.skipped != null ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 12 }}>
                       <div style={{ padding: 12, background: 'var(--bg-main)', borderRadius: 6, textAlign: 'center' }}>
                         <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>Inserted</div>

@@ -7,6 +7,10 @@
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:frontend": "cd packages/frontend && npm run dev",
     "dev:backend": "cd packages/backend && npm run dev",
+    "dev:logged": "concurrently -n BE,FE -c cyan,magenta \"npm run dev:backend > logs/backend.log 2>&1\" \"npm run dev:frontend > logs/frontend.log 2>&1\"",
+    "logs": "powershell -ExecutionPolicy Bypass -File scripts/watch-logs.ps1",
+    "logs:backend": "powershell -Command \"Get-Content -Path logs/backend.log -Wait -Tail 40\"",
+    "logs:frontend": "powershell -Command \"Get-Content -Path logs/frontend.log -Wait -Tail 40\"",
     "build:frontend": "cd packages/frontend && npm run build",
     "install:all": "cd packages/frontend && npm install && cd ../backend && npm install",
     "test:e2e": "node scripts/e2e/run.mjs"

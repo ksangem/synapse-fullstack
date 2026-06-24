@@ -16,6 +16,25 @@ function cacheKey(creds: SharePointCredentials): string {
   return `${creds.tenantId}:${creds.clientId}`;
 }
 
+/**
+ * Microsoft Graph fetch that survives throttling. On HTTP 429/503 it waits the
+ * server-provided `Retry-After` (seconds, capped at 30s) — falling back to exponential
+ * backoff — and retries. Graph throttling is routine and transient; without this a
+ * single 429 on site/list resolution aborts the whole delivery, which is exactly what
+ * dead-lettered an entire SharePoint push ("Failed to resolve site (429)").
+ */
+export async function graphFetch(url: string, init: RequestInit = {}, maxRetries = 4): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(url, init);
+    if ((res.status !== 429 && res.status !== 503) || attempt >= maxRetries) return res;
+    const retryAfter = Number(res.headers.get('retry-after'));
+    const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+      ? Math.min(retryAfter * 1000, 30_000)
+      : Math.min(1000 * 2 ** attempt, 30_000);
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+}
+
 export class SharePointAuthService {
   /**
    * Get an OAuth2 access token via client_credentials flow.
@@ -75,7 +94,7 @@ export class SharePointAuthService {
       const token = await this.getAccessToken(creds);
       const { hostname, sitePath } = parseSiteUrl(siteUrl);
 
-      const response = await fetch(
+      const response = await graphFetch(
         `https://graph.microsoft.com/v1.0/sites/${hostname}:/${sitePath}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -104,7 +123,7 @@ export class SharePointAuthService {
     // First resolve the list ID
     const listId = await this.getListId(siteId, listName, token);
 
-    const response = await fetch(
+    const response = await graphFetch(
       `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/columns`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
@@ -143,7 +162,7 @@ export class SharePointAuthService {
    * Resolve list ID from display name.
    */
   async getListId(siteId: string, listName: string, token: string): Promise<string> {
-    const response = await fetch(
+    const response = await graphFetch(
       `https://graph.microsoft.com/v1.0/sites/${siteId}/lists?$filter=displayName eq '${listName}'`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
@@ -162,12 +181,38 @@ export class SharePointAuthService {
   }
 
   /**
+   * Resolve a list id by display name, creating an empty generic list if it doesn't
+   * exist yet. The bus dispatch path delivers to a list the operator named in the wizard;
+   * if it was never provisioned, delivery would dead-letter with "List not found". The
+   * wizard's own push auto-creates the list (sharepoint ensure-list), so the bus path
+   * does the same. Real errors (auth/throttle) are rethrown — only a genuine 404 creates.
+   */
+  async ensureList(siteId: string, listName: string, token: string): Promise<string> {
+    try {
+      return await this.getListId(siteId, listName, token);
+    } catch (err) {
+      if (!(err instanceof Error) || !/not found/i.test(err.message)) throw err;
+      const res = await graphFetch(`https://graph.microsoft.com/v1.0/sites/${siteId}/lists`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName: listName, list: { template: 'genericList' } }),
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`Failed to create list '${listName}' (${res.status}): ${t.substring(0, 300)}`);
+      }
+      const created = await res.json() as { id: string };
+      return created.id;
+    }
+  }
+
+  /**
    * Get site ID from a site URL.
    */
   async getSiteId(siteUrl: string, token: string): Promise<string> {
     const { hostname, sitePath } = parseSiteUrl(siteUrl);
 
-    const response = await fetch(
+    const response = await graphFetch(
       `https://graph.microsoft.com/v1.0/sites/${hostname}:/${sitePath}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );

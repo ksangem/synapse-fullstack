@@ -41,11 +41,29 @@ export type DestinationFactory = (spec: ConnectorBuildSpec) => IDestinationConne
  * so the core never knows a connector's topic convention.
  */
 export type SourceTopicPrefix = (spec: ConnectorBuildSpec) => string;
+/**
+ * Pure function (no I/O) returning a stable fingerprint of a destination's actual
+ * TARGET — the site+list, host+db+table, etc. that data physically lands in — derived
+ * from config, NOT the connector template id. The run trigger folds this into each
+ * message's identity so the SAME source row re-pointed at a DIFFERENT target is delivered
+ * afresh instead of being suppressed as an inbox/idempotency duplicate. Plug-in supplied
+ * so the core never knows a connector's config keys.
+ */
+export type DestinationTargetKey = (spec: ConnectorBuildSpec) => string;
+/**
+ * Pure function (no I/O) returning human-readable config problems for a destination
+ * spec — e.g. ["SharePoint list name is not set"]. An empty array means the config is
+ * shippable. Used by preflight validation so a misconfigured push fails fast with a
+ * clear message instead of publishing records that dead-letter one by one. Plug-in
+ * supplied so the core never knows a connector's required config keys.
+ */
+export type DestinationValidate = (spec: ConnectorBuildSpec) => string[];
 
 interface SourceEntry { factory: SourceFactory; topicPrefix?: SourceTopicPrefix }
+interface DestinationEntry { factory: DestinationFactory; targetKey?: DestinationTargetKey; validate?: DestinationValidate }
 
 const sourceFactories = new Map<string, SourceEntry>();
-const destinationFactories = new Map<string, DestinationFactory>();
+const destinationFactories = new Map<string, DestinationEntry>();
 
 export function registerSourceFactory(kind: string, factory: SourceFactory, topicPrefix?: SourceTopicPrefix): void {
   sourceFactories.set(kind, { factory, topicPrefix });
@@ -58,8 +76,32 @@ export function sourceTopicPrefix(spec: ConnectorBuildSpec): string {
   return spec.sourceKey ?? spec.kind;
 }
 
-export function registerDestinationFactory(kind: string, factory: DestinationFactory): void {
-  destinationFactories.set(kind, factory);
+export function registerDestinationFactory(
+  kind: string,
+  factory: DestinationFactory,
+  targetKey?: DestinationTargetKey,
+  validate?: DestinationValidate,
+): void {
+  destinationFactories.set(kind, { factory, targetKey, validate });
+}
+
+/**
+ * Config problems for a destination spec, as declared by its plug-in (empty = OK).
+ * Returns [] for a kind that registered no validator (can't assert, so don't block).
+ */
+export function validateDestinationConfig(spec: ConnectorBuildSpec): string[] {
+  const entry = destinationFactories.get(spec.kind);
+  return entry?.validate ? entry.validate(spec) : [];
+}
+
+/**
+ * A stable fingerprint of a destination spec's actual target (site+list, host+db+table…),
+ * or '' when the plug-in declares none. Used to scope message identity to the destination
+ * so re-pointing an integration at a new target delivers afresh.
+ */
+export function destinationTargetKey(spec: ConnectorBuildSpec): string {
+  const entry = destinationFactories.get(spec.kind);
+  return entry?.targetKey ? entry.targetKey(spec) : '';
 }
 
 export function buildSource(spec: ConnectorBuildSpec): ISourceConnector | Promise<ISourceConnector> {
@@ -69,9 +111,9 @@ export function buildSource(spec: ConnectorBuildSpec): ISourceConnector | Promis
 }
 
 export function buildDestination(spec: ConnectorBuildSpec): IDestinationConnector | Promise<IDestinationConnector> {
-  const factory = destinationFactories.get(spec.kind);
-  if (!factory) throw new Error(`No destination connector registered for kind "${spec.kind}"`);
-  return factory(spec);
+  const entry = destinationFactories.get(spec.kind);
+  if (!entry) throw new Error(`No destination connector registered for kind "${spec.kind}"`);
+  return entry.factory(spec);
 }
 
 export function hasSourceFactory(kind: string): boolean {

@@ -60,6 +60,23 @@ export interface CreateEnvelopeInput {
   idempotencyKey?: string;
 }
 
+/**
+ * Re-derive an envelope's messageId so it also encodes a destination discriminator.
+ *
+ * The base messageId already encodes (orgId, topic, source-record key+content). Folding the
+ * destination TARGET (site+list, host+db+table…) on top makes "same source row → different
+ * target" a DISTINCT message — so re-pointing an integration at a new list/table delivers
+ * the rows afresh instead of the inbox suppressing them as duplicates of the prior target's
+ * run. Deterministic: same row + same target → same id, so a genuine re-run to the SAME
+ * target still dedups (unchanged rows skipped, changed rows re-flow). A no-op when scope is
+ * '' — fan-out sources (webhooks) keep one identity across their many destinations.
+ */
+export function scopeMessageIdToDestination(envelope: MessageEnvelope, scope: string): MessageEnvelope {
+  if (!scope) return envelope;
+  const messageId = deterministicId(`${envelope.orgId}:${envelope.topic}:${envelope.messageId}:dest:${scope}`);
+  return { ...envelope, messageId };
+}
+
 export function createEnvelope(input: CreateEnvelopeInput): MessageEnvelope {
   const payloadJson = serializePayload(input.payload);
   const topic = normalizeTopic(input.topic);

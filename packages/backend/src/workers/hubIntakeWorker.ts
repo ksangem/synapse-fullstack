@@ -14,7 +14,7 @@ import { Worker, type ConnectionOptions } from 'bullmq';
 import type { RouterService } from '../hub/router-service';
 import type { MessageEnvelope } from '../hub/interfaces';
 import { HUB_INTAKE_QUEUE } from '../hub/queue-names';
-import { recordIn } from '../hub/run-recorder';
+import { recordIn, recordOut } from '../hub/run-recorder';
 
 export function startHubIntakeWorker(
   router: RouterService,
@@ -27,6 +27,10 @@ export function startHubIntakeWorker(
       const runId = envelope.headers?.runId;
       if (runId) await recordIn(runId, envelope.checksum);
       const dispatched = await router.route(envelope);
+      // Routed to nobody (no matching subscription, or every match was a suppressed
+      // duplicate): the record is terminal with no delivery. Settle it so the run's
+      // pending count can reach zero instead of hanging at "queued" forever.
+      if (runId && dispatched === 0) await recordOut(runId, 'skipped', envelope.checksum);
       return { dispatched };
     },
     { connection, concurrency: 5 },

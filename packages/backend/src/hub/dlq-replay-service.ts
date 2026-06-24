@@ -84,7 +84,11 @@ export class DlqReplayService {
         await this.redeliver(entry.envelope, entry.destConnectorId);
         await this.dlq.markResolved(entry.id);
         summary.resolved++;
-      } catch {
+      } catch (err) {
+        // Surface why a replay attempt failed — a silent catch here is exactly what made
+        // "retried: 394, resolved: 0" impossible to diagnose.
+        console.error(`[DLQ replay] ${entry.id} → ${entry.destConnectorId} failed:`,
+          err instanceof Error ? err.message : err);
         await this.dlq.markRetried(entry.id);
         summary.retried++;
       }
@@ -109,7 +113,9 @@ export class DlqReplayService {
       await this.redeliver(entry.envelope, entry.destConnectorId);
       await this.dlq.markResolved(entry.id);
       return 'resolved';
-    } catch {
+    } catch (err) {
+      console.error(`[DLQ replay] ${entry.id} → ${entry.destConnectorId} failed:`,
+        err instanceof Error ? err.message : err);
       await this.dlq.markRetried(entry.id);
       return 'retried';
     }

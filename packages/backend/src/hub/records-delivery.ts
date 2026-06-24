@@ -20,7 +20,7 @@
  */
 
 import { createHash } from 'crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { runs, runMessages } from '../db/schema';
 import { getHub } from './init-hub';
@@ -161,8 +161,12 @@ export interface RunStatus {
   recordsIn: number;
   delivered: number;
   failed: number;
+  /** Settled without a fresh delivery: no matching subscription, or duplicate/idempotency-suppressed. */
+  skipped: number;
   pending: number;
   finished: boolean;
+  /** Sample of recent failure reasons (from the dead-letter queue) when failed > 0. */
+  errors?: string[];
 }
 
 /** Aggregate a run's delivery progress from runs + run_messages(direction='out'). */
@@ -177,16 +181,42 @@ export async function getRunStatus(runId: string): Promise<RunStatus | null> {
 
   let delivered = 0;
   let failed = 0;
+  let skipped = 0;
   for (const r of outRows) {
     if (r.status === 'failed') failed++;
+    else if (r.status === 'skipped') skipped++;
     else delivered++;
   }
 
   const recordsIn = run.recordsIn ?? 0;
-  const pending = Math.max(0, recordsIn - delivered - failed);
-  // The run is settled once the source closed (status no longer 'running') AND every
-  // published record has reached a terminal delivery state.
-  const finished = run.status !== 'running' && run.status !== 'pending' && pending === 0;
+  // 'skipped' is a terminal outcome (matched no subscription / duplicate-suppressed),
+  // so it counts toward "settled" just like delivered/failed — otherwise a run whose
+  // records had no destination would sit at pending forever (the "164 queued" hang).
+  const pending = Math.max(0, recordsIn - delivered - failed - skipped);
+  // Finished when EITHER:
+  //   • normal completion — source closed (status not 'running'/'pending') and every
+  //     published record reached a terminal state (delivered/failed/skipped); OR
+  //   • the run was force-terminated — 'cancelled' (operator Stop) or 'error'
+  //     (incl. the watchdog finalizing a stalled run). We stop waiting on stragglers
+  //     that will never arrive, so the UI can never spin forever.
+  const forceTerminated = run.status === 'error' || run.status === 'cancelled';
+  const finished = forceTerminated || (run.status !== 'running' && run.status !== 'pending' && pending === 0);
 
-  return { runId, status: run.status, recordsIn, delivered, failed, pending, finished };
+  // Surface why rows failed (from the dead-letter queue, keyed by the runId stamped on
+  // each envelope's headers) so the UI can show the real reason — e.g. a SharePoint 500
+  // — instead of an opaque "N failed". Only when there are failures, kept to a few.
+  let errors: string[] | undefined;
+  if (failed > 0) {
+    try {
+      const res = await db.execute(sql`
+        SELECT error FROM app.dead_letter_entries
+         WHERE envelope_json -> 'headers' ->> 'runId' = ${runId}
+         ORDER BY created_at DESC LIMIT 5`);
+      const rows = (res as { rows?: Array<Record<string, unknown>> }).rows ?? [];
+      const list = rows.map((r) => String(r.error ?? '')).filter(Boolean);
+      if (list.length) errors = list;
+    } catch { /* best-effort — never block status on the error sample */ }
+  }
+
+  return { runId, status: run.status, recordsIn, delivered, failed, skipped, pending, finished, errors };
 }

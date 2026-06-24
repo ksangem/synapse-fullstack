@@ -5,11 +5,15 @@ import http from 'node:http';
 import { config } from './config';
 import apiRouter from './api/router';
 import { actorMiddleware } from './api/middleware/actor';
+import { requestLogger, errorLogger } from './api/middleware/requestLogger';
 import { attachCrawlStudioStream } from './api/crawl-studio.ws';
 
 const app = express();
 
 app.use(cors());
+// One log line per request (method, path, status, duration). Mounted first so it
+// times the whole pipeline and catches every route, including the SPA fallback.
+app.use(requestLogger);
 // Stash the raw request bytes so webhook ingestion can HMAC-verify the signature
 // header against the exact payload the sender signed (parsed JSON can't be re-derived
 // byte-for-byte). Harmless for every other route.
@@ -31,6 +35,9 @@ app.use(express.static(frontendDist));
 app.use((_req: Request, res: Response) => {
   res.sendFile(path.join(frontendDist, 'index.html'));
 });
+
+// Terminal error handler — log any unhandled error with a stack instead of failing silently.
+app.use(errorLogger);
 
 const server = http.createServer(app);
 // WebSocket: streams the server browser's screencast frames out and input events in.

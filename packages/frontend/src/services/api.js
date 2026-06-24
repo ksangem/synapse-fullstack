@@ -269,6 +269,10 @@ export const api = {
   getRunStatus: async (runId) => {
     return fetchApi(`/api/hub/run-status/${runId}`);
   },
+  // Cooperatively stop an in-flight run. Already-delivered records are kept
+  // (idempotent upsert), so stopping never creates duplicates.
+  cancelRun: async (runId) =>
+    fetchApi(`/api/hub/cancel-run/${runId}`, { method: 'POST', body: JSON.stringify({}) }),
 
   // ── Saved connections ──
   getSavedConnections: async () => {

@@ -53,16 +53,53 @@ export async function startRun(integrationId: string = HUB_DEMO_INTEGRATION_ID):
   }
 }
 
-/** Close a run with final counts/status. */
+/** Close a run with final counts/status. Only settles a run that is still in
+ *  flight — never clobbers a run an operator already 'cancelled'. */
 export async function finishRun(runId: string | null, recordsIn: number, status: 'success' | 'error' = 'success'): Promise<void> {
   if (!runId) return;
   try {
     await db
       .update(runs)
       .set({ status, finishedAt: new Date(), recordsIn, updatedAt: new Date() })
-      .where(sql`${runs.runId} = ${runId}`);
+      .where(sql`${runs.runId} = ${runId} and ${runs.status} in ('running', 'pending')`);
   } catch (err) {
     console.error('[Hub] finishRun failed:', (err as Error).message);
+  }
+}
+
+/**
+ * Mark a run 'cancelled' (cooperative stop). Idempotent, and guarded so it won't
+ * overwrite a run that already settled success/error. `recordsIn`, when given,
+ * records how many records were queued before the stop so run-status reflects it.
+ */
+export async function cancelRun(runId: string | null, recordsIn?: number): Promise<void> {
+  if (!runId) return;
+  try {
+    await db
+      .update(runs)
+      .set({
+        status: 'cancelled',
+        finishedAt: new Date(),
+        updatedAt: new Date(),
+        ...(recordsIn !== undefined ? { recordsIn } : {}),
+      })
+      // Cancel a run that is still in flight. 'running'/'pending' always. Also a
+      // 'success' run whose DELIVERY hasn't finished — status flips to 'success' the
+      // moment PUBLISHING completes, well before the dispatch worker has delivered, so
+      // a stop mid-delivery must still be recordable as 'cancelled'. Never clobber a
+      // run that already settled ('error', already 'cancelled', or a fully-delivered
+      // 'success' where every published record has an out-message).
+      .where(sql`${runs.runId} = ${runId}
+        and ${runs.status} not in ('error', 'cancelled')
+        and (
+          ${runs.status} <> 'success'
+          or ${runs.recordsIn} > (
+            select count(*) from app.run_messages m
+             where m.run_id = ${runId} and m.direction = 'out'
+          )
+        )`);
+  } catch (err) {
+    console.error('[Hub] cancelRun failed:', (err as Error).message);
   }
 }
 
@@ -71,8 +108,13 @@ export async function recordIn(runId: string, payloadHash: string): Promise<void
   await record(runId, 'in', 'received', payloadHash);
 }
 
-/** Record an outbound delivery (dispatch). */
-export async function recordOut(runId: string, status: 'delivered' | 'failed', payloadHash: string): Promise<void> {
+/**
+ * Record an outbound delivery (dispatch). 'skipped' settles a record that reached a
+ * terminal state WITHOUT a fresh delivery — it matched no subscription, was a
+ * duplicate suppressed at the outbox, or was already delivered (idempotency hit).
+ * Counting it keeps a run from hanging at "pending" forever (see getRunStatus).
+ */
+export async function recordOut(runId: string, status: 'delivered' | 'failed' | 'skipped', payloadHash: string): Promise<void> {
   await record(runId, 'out', status, payloadHash);
 }
 

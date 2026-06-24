@@ -53,6 +53,8 @@ export async function initHub(): Promise<HubRuntime> {
   // Publish side + sorting half (both connector-agnostic).
   const bus = new IntegrationBus(inbox);
   const router = new RouterService(hubService.registry, inbox, outbox);
+  // Let DLQ replay re-run the same transform the live dispatch path applies.
+  hubService.setPipeline(pipeline);
 
   // Warm the expression sandbox (WASM) so server-side EXPRESSION mappings are ready.
   try {
@@ -106,6 +108,14 @@ export async function initHub(): Promise<HubRuntime> {
     console.error('[Hub] credential expiry scan wiring failed:', (err as Error).message);
   }
 
+  // Watchdog (#4): guarantees every run terminates — no push can spin forever.
+  try {
+    const { startRunWatchdog } = await import('./run-watchdog');
+    startRunWatchdog();
+  } catch (err) {
+    console.error('[Hub] run watchdog start failed:', (err as Error).message);
+  }
+
   runtime = { bus, router, pipeline, workers };
 
   console.log(
@@ -122,4 +132,24 @@ export function getHub(): HubRuntime {
     throw new Error('Hub is not initialized — set HUB_ENABLED=true and restart.');
   }
   return runtime;
+}
+
+/**
+ * Re-derive the bus's subscriptions/flows from the current `app.integrations` rows.
+ *
+ * The subscription registry is otherwise built only once at startup, so an integration
+ * created or edited at runtime would be invisible to the router until a restart — its
+ * first run would publish records that match no subscription and never deliver (the
+ * "164 queued forever" bug). Call this right after an integration write.
+ *
+ * Safe to call unconditionally: a no-op (resolves) when the hub is off or not yet up.
+ */
+export async function refreshHubSubscriptions(): Promise<void> {
+  if (!runtime) return;
+  try {
+    const flows = await loadIntegrationFlows(runtime.pipeline);
+    console.log(`[Hub] subscriptions refreshed (${flows.loaded} flow(s), ${flows.skipped} skipped)`);
+  } catch (err) {
+    console.error('[Hub] refreshHubSubscriptions failed:', (err as Error).message);
+  }
 }
