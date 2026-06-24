@@ -3,6 +3,7 @@ import { useDetailPane } from '../../hooks/useDetailPane';
 import { useToast } from '../../hooks/useToast';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
+import { SkeletonLines } from '../layout/Skeleton';
 
 function AlertDetailContent({ alert, showToast, navigate }) {
   const [showStack, setShowStack] = useState(false);
@@ -131,7 +132,7 @@ export default function AlertsPage() {
       <div className="page-body">
       <div id="alertsList">
         {loading && (
-          <div className="card" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>Loading alerts…</div>
+          <div className="card" style={{ padding: 16 }}><SkeletonLines lines={4} /></div>
         )}
         {!loading && filteredAlerts.length === 0 && (
           <div className="card" style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../../services/api';
 import { useToast } from '../../hooks/useToast';
+import { SkeletonLines } from '../layout/Skeleton';
 
 // Dead Letter Queue panel (T-04 manual replay). Lists real dead-lettered
 // messages and lets an operator replay them — single row or all at once.
@@ -65,7 +66,7 @@ export default function DeadLetterPanel() {
       </div>
 
       {loading ? (
-        <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)' }}>Loading dead-letter queue…</div>
+        <div style={{ padding: 16 }}><SkeletonLines lines={3} /></div>
       ) : rows.length === 0 ? (
         <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)' }}>
           No dead-lettered messages. &#127881; Failed hub deliveries will appear here for replay.

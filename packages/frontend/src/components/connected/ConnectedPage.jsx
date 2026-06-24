@@ -5,6 +5,7 @@ import { useConfirm } from '../../hooks/useConfirm';
 import { usePolling } from '../../hooks/usePolling';
 import { api } from '../../services/api';
 import { systemIcon } from '../../services/integrationMap';
+import { SkeletonCards } from '../layout/Skeleton';
 import {
   btnStyle, btnPrimaryStyle, btnDangerStyle, thStyle, tdStyle,
   overlayStyle, modalStyle, labelStyle, inputStyle, selectStyle,
@@ -421,7 +422,17 @@ export default function ConnectedPage() {
 
   /* ---------------------------------------------------------------- */
   if (loading) {
-    return <div className="page active" style={{ textAlign: 'center', padding: 60, color: 'var(--text-dim)' }}>Loading connections…</div>;
+    return (
+      <div className="page active">
+        <div className="page-header">
+          <div>
+            <div className="page-title">My Connections</div>
+            <div className="page-subtitle">Loading…</div>
+          </div>
+        </div>
+        <div className="page-body"><SkeletonCards count={6} /></div>
+      </div>
+    );
   }
 
   const chipStyle = (active) => ({ ...btnStyle, fontSize: '.76rem', padding: '4px 12px', background: active ? 'var(--primary)' : 'var(--bg-main)', color: active ? '#fff' : undefined, borderColor: active ? 'var(--primary)' : 'var(--border)' });

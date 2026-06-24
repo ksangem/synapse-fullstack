@@ -3,6 +3,7 @@ import { useToast } from '../../hooks/useToast';
 import { useConfirm } from '../../hooks/useConfirm';
 import { api } from '../../services/api';
 import { useToolbarAction } from '../../hooks/useToolbarAction';
+import { SkeletonTableRows } from '../layout/Skeleton';
 
 /* Credential Vault — real credentials from /api/credentials (metadata only).
    Reveal/copy decrypt on demand via /api/credentials/:id/decrypt (10s auto-hide,
@@ -200,6 +201,7 @@ export default function VaultPage() {
                 </tr>
               );
             })}
+            {loading && <SkeletonTableRows rows={4} cols={6} />}
             {!loading && creds.length === 0 && (
               <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>No credentials stored yet. Add one below, or they're created when you save a connection in the Wizard.</td></tr>
             )}

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../../services/api';
 import DeadLetterPanel from './DeadLetterPanel';
 import { useToolbarAction } from '../../hooks/useToolbarAction';
+import { SkeletonTableRows } from '../layout/Skeleton';
 
 // Bus envelope status → badge style.
 const statusBadge = (status) => {
@@ -179,9 +180,7 @@ export default function MonitorPage() {
                   No messages yet. Trigger a flow (the bus must be running, HUB_ENABLED=true).
                 </td></tr>
               )}
-              {loading && (
-                <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 28 }}>Loading…</td></tr>
-              )}
+              {loading && <SkeletonTableRows rows={6} cols={7} />}
             </tbody>
           </table>
         </div>

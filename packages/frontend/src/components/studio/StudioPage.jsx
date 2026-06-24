@@ -5,6 +5,7 @@ import { runtimeClient } from '../../services/runtimeClient';
 import { useToast } from '../../hooks/useToast';
 import { useConfirm } from '../../hooks/useConfirm';
 import { useToolbarAction } from '../../hooks/useToolbarAction';
+import { Skeleton } from '../layout/Skeleton';
 import CrawlRecorder from './CrawlRecorder';
 
 /* Connector Studio — design-time authoring over the real connector registry.
@@ -229,6 +230,12 @@ export default function StudioPage() {
         <div className="panel" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: 12 }}>
           <div style={{ fontWeight: 600, fontSize: '.85rem', marginBottom: 10 }}>Connectors {loading ? '…' : `(${connectors.length})`}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
+            {loading && connectors.length === 0 && [0, 1, 2, 3].map((i) => (
+              <div key={`sk${i}`} className="card" style={{ padding: 12 }}>
+                <Skeleton h={14} w="70%" style={{ marginBottom: 8 }} />
+                <Skeleton h={9} w="45%" />
+              </div>
+            ))}
             {connectors.map((c) => (
               <div key={c.connectorId} className="card" style={{ cursor: 'pointer', padding: 12, borderColor: selectedId === c.connectorId ? 'var(--primary)' : undefined }} onClick={() => openDetail(c.connectorId)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

@@ -5,6 +5,7 @@ import { useToast } from '../../hooks/useToast';
 import { useToolbarAction } from '../../hooks/useToolbarAction';
 import { api } from '../../services/api';
 import { mapToCard, statusLabel } from '../../services/integrationMap';
+import { SkeletonCards } from '../layout/Skeleton';
 
 export default function RegistryPage() {
   const navigate = useNavigate();
@@ -219,7 +220,7 @@ export default function RegistryPage() {
       </div>
 
       {loading ? (
-        <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)' }}>Loading integrations…</div>
+        <SkeletonCards count={6} />
       ) : filteredIntegrations.length === 0 ? (
         <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)' }}>
           No integrations match your filters. <a className="clickable" onClick={() => navigate('/wizard')}>Create one →</a>

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { ConnectorIcon } from '../studio/StudioPage';
 import { useToolbarAction } from '../../hooks/useToolbarAction';
+import { SkeletonLines } from '../layout/Skeleton';
 
 /* Master Entity Catalog — real data from /api/entities. Entities are grouped by
    connector (our real "department"); usage bars reflect how often each field is
@@ -76,7 +77,7 @@ export default function CatalogPage() {
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20, flex: 1, minHeight: 0, paddingBottom: 16 }}>
         {/* ── Tree (connector → entities) — scrolls internally when tall ── */}
         <div className="card" style={{ padding: 12, minHeight: 0, overflowY: 'auto' }}>
-          {loading && <div style={{ color: 'var(--text-dim)', fontSize: '.82rem' }}>Loading…</div>}
+          {loading && <SkeletonLines lines={6} />}
           {!loading && groups.length === 0 && <div style={{ color: 'var(--text-dim)', fontSize: '.82rem' }}>No connectors yet.</div>}
           {groups.map((g) => (
             <div key={g.connectorId} style={{ marginBottom: 4 }}>

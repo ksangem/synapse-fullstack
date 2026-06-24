@@ -5,6 +5,7 @@ import { useToast } from '../../hooks/useToast';
 import { useToolbarAction } from '../../hooks/useToolbarAction';
 import { api } from '../../services/api';
 import { mapToCard, computeKpis, statusLabel } from '../../services/integrationMap';
+import { Skeleton, SkeletonCards } from '../layout/Skeleton';
 
 function AdapterDetailContent({ tile }) {
   const pushes = tile.recentPushes || [];
@@ -205,45 +206,57 @@ export default function DashboardPage() {
 
       <div className="page-body">
       {/* KPI Row */}
+      {loading ? (
+        <div className="grid-4 mb-20">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="card kpi-card">
+              <Skeleton h={30} w={90} style={{ margin: '4px 0' }} />
+              <Skeleton h={12} w={120} style={{ marginTop: 10 }} />
+              <Skeleton h={10} w={150} style={{ marginTop: 10 }} />
+            </div>
+          ))}
+        </div>
+      ) : (
       <div className="grid-4 mb-20">
         <div className="card kpi-card">
           <div className="kpi-icon">&#9881;</div>
-          <div className="kpi-value" onClick={() => navigate('/registry')}>{kpis ? kpis.total : 15}</div>
+          <div className="kpi-value" onClick={() => navigate('/registry')}>{kpis ? kpis.total : '—'}</div>
           <div className="kpi-label">Total Adapters</div>
           <div className="kpi-sub">
-            <span onClick={() => navigate('/registry')}><span className="status-dot green"></span> {kpis ? kpis.active : 12} active</span>
-            <span onClick={() => navigate('/registry')}><span className="status-dot amber"></span> {kpis ? kpis.paused : 2} paused</span>
-            <span onClick={() => navigate('/registry')}><span className="status-dot red"></span> {kpis ? kpis.errored : 1} error</span>
+            <span onClick={() => navigate('/registry')}><span className="status-dot green"></span> {kpis ? kpis.active : 0} active</span>
+            <span onClick={() => navigate('/registry')}><span className="status-dot amber"></span> {kpis ? kpis.paused : 0} paused</span>
+            <span onClick={() => navigate('/registry')}><span className="status-dot red"></span> {kpis ? kpis.errored : 0} error</span>
           </div>
         </div>
         <div className="card kpi-card">
           <div className="kpi-icon">&#9993;</div>
-          <div className="kpi-value" onClick={() => navigate('/monitor')}>{kpis ? kpis.recordsSynced.toLocaleString() : '5,561'}</div>
+          <div className="kpi-value" onClick={() => navigate('/monitor')}>{kpis ? kpis.recordsSynced.toLocaleString() : '—'}</div>
           <div className="kpi-label">Records Synced</div>
           <div className="kpi-sub">
-            <span style={{ color: 'var(--success)' }}>&#9650; {kpis ? kpis.pushOk : 2847} ok</span>
+            <span style={{ color: 'var(--success)' }}>&#9650; {kpis ? kpis.pushOk : 0} ok</span>
             <span style={{ color: 'var(--info)' }}>&#9660; {kpis ? kpis.pushPartial : 0} partial</span>
-            <span style={{ color: 'var(--error)' }}>&#9888; {kpis ? kpis.pushFailed : 23} failed</span>
+            <span style={{ color: 'var(--error)' }}>&#9888; {kpis ? kpis.pushFailed : 0} failed</span>
           </div>
         </div>
         <div className="card kpi-card">
           <div className="kpi-icon">&#9201;</div>
-          <div className="kpi-value">{kpis ? (kpis.successRate === null ? '—' : `${kpis.successRate}%`) : '99.7%'}</div>
+          <div className="kpi-value">{kpis ? (kpis.successRate === null ? '—' : `${kpis.successRate}%`) : '—'}</div>
           <div className="kpi-label">Push Success Rate</div>
           <div className="kpi-sub">
-            <span style={{ color: 'var(--success)' }}>{kpis ? `${kpis.pushOk + kpis.pushPartial}/${kpis.pushOk + kpis.pushPartial + kpis.pushFailed} pushes ok` : '▲ 0.2% vs last month'}</span>
+            <span style={{ color: 'var(--success)' }}>{kpis ? `${kpis.pushOk + kpis.pushPartial}/${kpis.pushOk + kpis.pushPartial + kpis.pushFailed} pushes ok` : ''}</span>
           </div>
         </div>
         <div className="card kpi-card">
           <div className="kpi-icon">&#9888;</div>
-          <div className="kpi-value" style={{ color: 'var(--warning)' }} onClick={() => navigate('/alerts')}>{kpis ? kpis.alerts : 3}</div>
+          <div className="kpi-value" style={{ color: 'var(--warning)' }} onClick={() => navigate('/alerts')}>{kpis ? kpis.alerts : 0}</div>
           <div className="kpi-label">Needs Attention</div>
           <div className="kpi-sub">
-            <span onClick={() => navigate('/alerts')} style={{ color: 'var(--error)' }}>{kpis ? kpis.errored : 1} error</span>
-            <span onClick={() => navigate('/alerts')} style={{ color: 'var(--warning)' }}>{kpis ? kpis.paused : 2} paused</span>
+            <span onClick={() => navigate('/alerts')} style={{ color: 'var(--error)' }}>{kpis ? kpis.errored : 0} error</span>
+            <span onClick={() => navigate('/alerts')} style={{ color: 'var(--warning)' }}>{kpis ? kpis.paused : 0} paused</span>
           </div>
         </div>
       </div>
+      )}
 
       {/* Adapter Health Grid */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -264,7 +277,7 @@ export default function DashboardPage() {
       </div>
 
       {loading ? (
-        <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)' }}>Loading adapters…</div>
+        <SkeletonCards count={8} />
       ) : filteredTiles.length === 0 ? (
         <div className="card mb-20" style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)' }}>
           {cards.length === 0 ? 'No integrations yet — create one from the Connection Wizard.' : 'No adapters match this filter.'}
