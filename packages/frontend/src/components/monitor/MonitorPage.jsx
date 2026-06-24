@@ -65,6 +65,20 @@ export default function MonitorPage() {
     try { return new Date(iso).toLocaleString(); } catch { return iso; }
   };
 
+  // Export the currently-filtered message log to CSV (real replacement for the old
+  // toolbar "Export Logs" stub).
+  const exportLogs = () => {
+    if (filtered.length === 0) return;
+    const cols = ['timestamp', 'direction', 'topic', 'source', 'dest', 'status', 'messageId'];
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = [cols.join(','), ...filtered.map((r) => cols.map((k) => esc(r[k])).join(','))].join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = `bus-messages-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="page active">
       <div className="page-header">
@@ -78,6 +92,7 @@ export default function MonitorPage() {
             {' '}Real-time
             <input type="checkbox" checked={realtime} onChange={(e) => setRealtime(e.target.checked)} style={{ accentColor: 'var(--primary)' }} />
           </label>
+          <button className="btn btn-sm btn-outline" onClick={exportLogs} disabled={filtered.length === 0}>Export Logs</button>
           <button className="btn btn-sm btn-outline" onClick={load}>Refresh</button>
         </div>
       </div>

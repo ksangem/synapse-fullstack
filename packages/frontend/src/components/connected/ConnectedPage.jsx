@@ -343,6 +343,22 @@ export default function ConnectedPage() {
     if (res.ok && res.data?.success) { showToast(`${action === 'pause' ? 'Paused' : 'Resumed'} ${res.data.data?.updated ?? ids.length}`); setSelected(new Set()); fetchIntegrations(); }
     else showToast(res.data?.error || (res.status === 403 ? 'Bulk actions require admin' : 'Bulk action failed'));
   };
+  // Pause/Resume EVERY connection at once (real replacement for the old dashboard
+  // "Pause All / Resume All" stubs) — one confirmed bulk call over all ids.
+  const allAction = async (action) => {
+    const ids = integrations.map((i) => i.integrationId);
+    if (ids.length === 0) { showToast('No connections'); return; }
+    const ok = await confirm({
+      title: `${action === 'pause' ? 'Pause' : 'Resume'} all connections?`,
+      message: `This ${action === 'pause' ? 'pauses' : 'resumes'} all ${ids.length} connection(s) and their schedules.`,
+      confirmLabel: action === 'pause' ? 'Pause all' : 'Resume all',
+    });
+    if (!ok) return;
+    const res = await api.bulkConnected(action, ids);
+    if (res.ok && res.data?.success) { showToast(`${action === 'pause' ? 'Paused' : 'Resumed'} ${res.data.data?.updated ?? ids.length}`); fetchIntegrations(); }
+    else showToast(res.data?.error || (res.status === 403 ? 'Bulk actions require admin' : 'Action failed'));
+  };
+
   const exportCsv = () => {
     if (integrations.length === 0) { showToast('Nothing to export'); return; }
     const cols = ['name', 'source', 'dest', 'kind', 'status', 'schedule', 'lastRun', 'lastStatus', 'volume7dTotal'];
@@ -418,6 +434,8 @@ export default function ConnectedPage() {
           <div className="page-subtitle">Running integration instances &mdash; status, schedule, and actions</div>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          <button style={btnStyle} onClick={() => allAction('pause')} disabled={integrations.length === 0}>Pause All</button>
+          <button style={btnStyle} onClick={() => allAction('resume')} disabled={integrations.length === 0}>Resume All</button>
           <button style={btnStyle} onClick={exportCsv}>Export CSV</button>
           <button style={btnPrimaryStyle} onClick={() => navigate('/wizard')}>+ New Connection</button>
         </div>
