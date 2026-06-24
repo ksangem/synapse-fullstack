@@ -38,6 +38,19 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
   const { toggleMobile } = useContext(SidebarContext);
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Fullscreen toggle (restored from the removed toolbar). State stays in sync with
+  // the browser even when the user exits via Esc / F11.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else document.documentElement.requestFullscreen?.();
+  };
   const [showResults, setShowResults] = useState(false);
   const [searchData, setSearchData] = useState({});
   const searchRef = useRef(null);
@@ -191,6 +204,9 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
           <span className="badge-count">3</span>
         </button>
         <button className="icon-btn" onClick={onHelpToggle} title="Help">?</button>
+        <button className="icon-btn" onClick={toggleFullscreen} title={isFullscreen ? 'Exit full screen' : 'Full screen'}>
+          {isFullscreen ? '✖' : '⛶'}
+        </button>
         <div className="user-menu" title={user?.email}>
           <div className="user-avatar">{(user?.email || '?').slice(0, 2).toUpperCase()}</div>
           <span className="user-name">{user?.email || 'Signed out'}{user?.role ? ` · ${user.role}` : ''}</span>
