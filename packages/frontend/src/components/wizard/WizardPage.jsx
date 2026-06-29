@@ -1591,6 +1591,15 @@ export default function WizardPage() {
         // Route each destination column to its chosen target (default 'primary').
         mappingsOut = mappings.map((m) => {
           const existing = m.routes || [];
+          // The KEY mapping MUST reach EVERY target — each target upserts/merges by its own
+          // natural-key column, so a target that never receives the key can't dedup/merge
+          // (DB appends duplicates; SharePoint delivery fails with "no natural key"). Force
+          // the key mapping to route to all targets using each target's key column name,
+          // regardless of the per-column dropdown.
+          const isKeyMapping = primaryKey && (m.destinations || []).includes(primaryKey);
+          if (isKeyMapping) {
+            return { ...m, routes: fanoutTargets.map((t) => ({ targetId: t.targetId, column: t.naturalKeyColumn || primaryKey })) };
+          }
           const routes = (m.destinations || []).map((col) => {
             const r = existing.find((x) => x.column === col);
             return { targetId: r && validIds.has(r.targetId) ? r.targetId : 'primary', column: col };

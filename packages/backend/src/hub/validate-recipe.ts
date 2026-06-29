@@ -78,8 +78,15 @@ export async function validateRecipe(integration: Integration): Promise<RecipeVa
         errors.push(`${legacy ? 'Destination' : label} credentials could not be resolved (missing or revoked).`);
       }
       // A fan-out target nothing maps to would write empty rows — block it.
-      if (!legacy && !mappingsForTarget(allMappings, t.targetId, legacy).length) {
-        errors.push(`${label} has no columns routed to it — map at least one field to it or remove it.`);
+      if (!legacy) {
+        const targetCols = mappingsForTarget(allMappings, t.targetId, legacy).flatMap((m) => m.destinations ?? []);
+        if (!targetCols.length) {
+          errors.push(`${label} has no columns routed to it — map at least one field to it or remove it.`);
+        } else if (t.naturalKeyColumn && !targetCols.includes(t.naturalKeyColumn)) {
+          // The key column MUST reach every target — each target upserts/merges by it. Without
+          // it a DB target appends duplicates and a SharePoint target fails ("no natural key").
+          errors.push(`${label} is missing its key column "${t.naturalKeyColumn}" — the match key must be mapped to every target.`);
+        }
       }
     }
 
