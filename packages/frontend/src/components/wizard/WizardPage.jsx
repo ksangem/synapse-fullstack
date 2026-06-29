@@ -337,7 +337,7 @@ function computeMappedValue(m, record) {
   return srcVal.join(', ');
 }
 
-function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey, onSetKey, onUpdate, onRemove, expanded, onToggle }) {
+function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey, onSetKey, onUpdate, onRemove, expanded, onToggle, targets = [] }) {
   const color = PAIR_COLORS[index % PAIR_COLORS.length];
   const [newColName, setNewColName] = useState('');
   const [newColType, setNewColType] = useState('');
@@ -471,11 +471,26 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
               </select>
             </div>
             <div className="editor-field">
-              <label>Destination Column(s)</label>
+              <label>Destination Column(s){targets.length > 1 ? ' → target' : ''}</label>
               <div className="multi-field-list">
                 {mapping.destinations.map((d, i) => (
-                  <span key={i} className="multi-field-chip">
+                  <span key={i} className="multi-field-chip" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                     {d}
+                    {targets.length > 1 && (
+                      <select
+                        value={(mapping.routes?.find((r) => r.column === d)?.targetId) || 'primary'}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => {
+                          const targetId = e.target.value;
+                          const others = (mapping.routes || []).filter((r) => r.column !== d);
+                          onUpdate({ ...mapping, routes: [...others, { targetId, column: d }] });
+                        }}
+                        title="Which destination target this column is written to"
+                        style={{ fontSize: '.68rem', padding: '0 2px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-card)', maxWidth: 110 }}
+                      >
+                        {targets.map((t) => <option key={t.targetId} value={t.targetId}>{t.label}</option>)}
+                      </select>
+                    )}
                     {mapping.destinations.length > 1 && (
                       <button onClick={() => {
                         const next = { ...mapping, destinations: mapping.destinations.filter((_, j) => j !== i), destTypes: mapping.destTypes.filter((_, j) => j !== i) };
@@ -666,6 +681,7 @@ export default function WizardPage() {
   const [destConnectionData, setDestConnectionData] = useState(null);
   const [saveStatus, setSaveStatus] = useState('idle'); // idle | saving | saved | error
   const [saveMsg, setSaveMsg] = useState('');
+  const [cloneStatus, setCloneStatus] = useState('idle'); // idle | cloning | cloned | error
   const [deleteStatus, setDeleteStatus] = useState('idle'); // idle | confirming | deleting | deleted
   const [activeIntegrationId, setActiveIntegrationId] = useState(null); // tracks which saved connection is loaded
 
@@ -694,6 +710,27 @@ export default function WizardPage() {
   const [destSearch, setDestSearch] = useState('');
   // Which destination column to dedup/upsert by. '' = default (first mapping); '__append__' = no matching (append every row).
   const [matchKey, setMatchKey] = useState('');
+
+  // Multi-target fan-out (Step 3): EXTRA destination targets beyond the primary one
+  // configured above. Each extra target reuses the primary connection + credentials and adds
+  // another table/list on the same server; per-column routing lives on each mapping (routes).
+  // Empty ⇒ legacy single-destination behaviour (no `targets`/`routes` emitted on save).
+  // Each extra target: { targetId, label, table, naturalKeyColumn } and OPTIONAL cross-server
+  // fields { connectorId, destCredId, host, port, database, schema, siteUrl, advancedOpen }.
+  // When connectorId is blank ⇒ same server as the primary (reuse its connection + creds).
+  const [extraTargets, setExtraTargets] = useState([]);
+  const [targetsPanelOpen, setTargetsPanelOpen] = useState(false);
+  const addExtraTarget = () => setExtraTargets((prev) => [...prev, { targetId: `t${Date.now()}${prev.length}`, label: '', table: '', naturalKeyColumn: '', connectorId: '', destCredId: '', host: '', port: '', database: '', schema: '', siteUrl: '', advancedOpen: false }]);
+  const updateExtraTarget = (i, patch) => setExtraTargets((prev) => prev.map((t, j) => (j === i ? { ...t, ...patch } : t)));
+  const removeExtraTarget = (i) => setExtraTargets((prev) => prev.filter((_, j) => j !== i));
+
+  // Multi-entity group: tag several saved connections (entities) with a shared groupId so they
+  // can be run together via "Run all in group" (POST /run-group). Empty ⇒ ungrouped.
+  const [groupId, setGroupId] = useState('');
+  const [groupRunStatus, setGroupRunStatus] = useState('idle'); // idle | running | done | error
+  const [groupRunResult, setGroupRunResult] = useState(null);
+  // Credentials list for the cross-server target picker (loaded on mount).
+  const [credentialsList, setCredentialsList] = useState([]);
 
   // Step 5 — Fetch & Review
   const [fetchStatus, setFetchStatus] = useState('idle'); // idle | fetching | done | error
@@ -752,6 +789,19 @@ export default function WizardPage() {
   const isFlatFile = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'flatfile';
   const connectorIdOf = (label) => connectorMeta[label]?.connectorId;
   const versionIdOf = (label) => connectorMeta[label]?.latestVersionId;
+  // Resolve a destination connector id → its label + runtime kind (for the cross-server picker).
+  const destLabelById = (id) => (destCards.find((c) => c.connectorId === id)?.label) || '';
+  const connectorKindById = (id) => connectorMeta[destLabelById(id)]?.runtimeConfig?.runtimeKind || '';
+
+  // Fan-out targets for the Mapping step's per-column routing selector. Empty unless the user
+  // added ≥1 extra destination target (then: primary + each named extra). Drives MappingRow.
+  const activeExtraTargets = extraTargets.filter((t) => (t.table || '').trim());
+  const routeTargets = activeExtraTargets.length
+    ? [
+        { targetId: 'primary', label: `Primary (${(createNewTable ? newTableName : selectedPgTable) || destCreds.listName || selectedDest || 'primary'})` },
+        ...activeExtraTargets.map((t) => ({ targetId: t.targetId, label: t.label || t.table })),
+      ]
+    : [];
 
   // ─── Load saved connections on mount ───────────────────
   useEffect(() => {
@@ -803,6 +853,14 @@ export default function WizardPage() {
         }];
       }));
       setConnectorMeta(Object.fromEntries(metas));
+    })();
+  }, []);
+
+  // ─── Load credentials (for the cross-server target picker) ──
+  useEffect(() => {
+    (async () => {
+      const r = await api.getCredentials();
+      if (r.ok && r.data?.data) setCredentialsList(r.data.data);
     })();
   }, []);
 
@@ -905,6 +963,39 @@ export default function WizardPage() {
 
     // Pre-select project (Jira only)
     if (fm.projectKey) setSelectedProject(fm.projectKey);
+
+    // Restore the entity group tag.
+    setGroupId(fm.groupId || '');
+
+    // Restore multi-target fan-out (extra targets beyond the primary). The primary target is
+    // already represented by the destination config loaded above, so drop it here. A target is
+    // "cross-server" when it pinned its own connector (≠ this integration's primary).
+    if (Array.isArray(fm.targets) && fm.targets.length > 1) {
+      const primaryConnId = intg.destConnectorId;
+      setExtraTargets(
+        fm.targets
+          .filter((t) => t.targetId !== 'primary')
+          .map((t) => {
+            const cfg = t.config || {};
+            const cross = !!t.connectorId && t.connectorId !== primaryConnId;
+            return {
+              targetId: t.targetId,
+              label: t.label || '',
+              table: (cfg.pgTable ?? cfg.destTable ?? cfg.listName ?? cfg.destListName ?? '') || '',
+              naturalKeyColumn: t.naturalKeyColumn || '',
+              connectorId: cross ? t.connectorId : '',
+              destCredId: cross ? (cfg.destCredId || '') : '',
+              host: cross ? (cfg.pgHost || '') : '', port: cross ? (cfg.pgPort || '') : '',
+              database: cross ? (cfg.pgDatabase || '') : '', schema: cross ? (cfg.pgSchema || '') : '',
+              siteUrl: cross ? (cfg.siteUrl || '') : '',
+              advancedOpen: cross,
+            };
+          }),
+      );
+      setTargetsPanelOpen(true);
+    } else {
+      setExtraTargets([]);
+    }
 
     // Track which integration is loaded
     setActiveIntegrationId(intg.integrationId);
@@ -1460,6 +1551,54 @@ export default function WizardPage() {
     setSaveStatus('saving');
     setSaveMsg('');
     try {
+      // ── Multi-target fan-out ──────────────────────────────────────────
+      // Only when EXTRA targets exist do we emit `targets` + per-mapping `routes`. With none,
+      // mappings are saved exactly as today (routes stripped) so legacy integrations are
+      // byte-identical and the backend's normalizeTargets keeps the single-dest behaviour.
+      const primaryKey = matchKey === '__append__' ? '' : (effectiveKey || '');
+      const hasFanout = extraTargets.some((t) => (t.table || '').trim());
+      let fanoutTargets;
+      let mappingsOut = mappings.map(({ routes, ...rest }) => rest); // strip stale routes
+      if (hasFanout) {
+        const dbDest = isDbDest(selectedDest);
+        const primaryConfig = dbDest
+          ? { destType: selectedDest, pgHost: destCreds.host, pgPort: destCreds.port, pgDatabase: destCreds.database, pgSchema: destCreds.schema, pgTable: (createNewTable ? newTableName : selectedPgTable), naturalKeyColumn: primaryKey }
+          : { siteUrl: destCreds.siteUrl, listName: destCreds.listName, naturalKeyColumn: primaryKey };
+        const primaryTarget = { targetId: 'primary', label: `Primary (${primaryConfig.pgTable || primaryConfig.listName || selectedDest})`, connectorId: connectorIdOf(selectedDest), naturalKeyColumn: primaryKey, config: primaryConfig };
+        // Each extra target: by default reuse the primary connector + credentials (config omits
+        // destCredId, so the backend inherits the primary's vaulted cred) — same server, another
+        // table/list. When the target picked its OWN connector (cross-server), use that
+        // connector + its credential + its connection fields instead.
+        const extra = extraTargets.filter((t) => (t.table || '').trim()).map((t) => {
+          const xKey = t.naturalKeyColumn || primaryKey;
+          const cross = !!t.connectorId;                       // picked a different connector/server
+          const xConnId = cross ? t.connectorId : connectorIdOf(selectedDest);
+          const xKind = cross ? connectorKindById(t.connectorId) : (dbDest ? 'database' : 'sharepoint');
+          let config;
+          if (xKind === 'database') {
+            config = cross
+              ? { destType: destLabelById(t.connectorId), pgHost: t.host, pgPort: t.port, pgDatabase: t.database, pgSchema: t.schema, pgTable: t.table, naturalKeyColumn: xKey, ...(t.destCredId ? { destCredId: t.destCredId } : {}) }
+              : { destType: selectedDest, pgHost: destCreds.host, pgPort: destCreds.port, pgDatabase: destCreds.database, pgSchema: destCreds.schema, pgTable: t.table, naturalKeyColumn: xKey };
+          } else {
+            config = cross
+              ? { siteUrl: t.siteUrl || destCreds.siteUrl, listName: t.table, naturalKeyColumn: xKey, ...(t.destCredId ? { destCredId: t.destCredId } : {}) }
+              : { siteUrl: destCreds.siteUrl, listName: t.table, naturalKeyColumn: xKey };
+          }
+          return { targetId: t.targetId, label: t.label || t.table, connectorId: xConnId, naturalKeyColumn: xKey, config };
+        });
+        fanoutTargets = [primaryTarget, ...extra];
+        const validIds = new Set(fanoutTargets.map((t) => t.targetId));
+        // Route each destination column to its chosen target (default 'primary').
+        mappingsOut = mappings.map((m) => {
+          const existing = m.routes || [];
+          const routes = (m.destinations || []).map((col) => {
+            const r = existing.find((x) => x.column === col);
+            return { targetId: r && validIds.has(r.targetId) ? r.targetId : 'primary', column: col };
+          });
+          return { ...m, routes };
+        });
+      }
+
       const body = {
         // Re-saves update the SAME connection instead of creating duplicates as the
         // list/table/mappings change through the wizard.
@@ -1499,10 +1638,14 @@ export default function WizardPage() {
         // Server-side mapping recipe (Wizard convergence): persist the mappings + dedup
         // key + date window so run-integration reads, maps, and busses without the
         // browser ever shipping the dataset.
-        mappings,
+        mappings: mappingsOut,
         naturalKeyColumn: matchKey === '__append__' ? '' : (effectiveKey || undefined),
         dateFrom: dateStart || undefined,
         dateTo: dateEnd || undefined,
+        // Fan-out targets — only present when the user added extra destinations.
+        ...(hasFanout ? { targets: fanoutTargets } : {}),
+        // Entity group tag — only present when the user grouped this connection.
+        ...(groupId ? { groupId } : {}),
       };
       const res = await api.saveConnection(body);
       if (res.ok && res.data?.success) {
@@ -1530,6 +1673,60 @@ export default function WizardPage() {
     }
   };
 
+  // ─── Run ALL entities in this group (serial) ───────────
+  // Triggers POST /run-group/:groupId — every ACTIVE saved connection tagged with the same
+  // groupId runs one after another. Surfaces per-entity delivered/failed counts.
+  const handleRunGroup = async () => {
+    if (!groupId) return;
+    setGroupRunStatus('running');
+    setGroupRunResult(null);
+    try {
+      const res = await api.runGroup(groupId);
+      if (res.ok && res.data?.success) {
+        setGroupRunResult(res.data.data);
+        setGroupRunStatus('done');
+      } else {
+        setGroupRunResult({ error: res.data?.error || 'Run all failed' });
+        setGroupRunStatus('error');
+      }
+    } catch {
+      setGroupRunResult({ error: 'Network error during group run' });
+      setGroupRunStatus('error');
+    }
+  };
+
+  // ─── Save as new copy (Clone) ──────────────────────────
+  // Forks the currently-loaded connection into a brand-new, independent one (new id,
+  // status 'draft') and switches the wizard to edit the copy. The ORIGINAL is left
+  // untouched. Vault credentials are SHARED by reference (not duplicated), matching the
+  // backend clone endpoint — rotating/revoking a cred still affects both. Clones the LAST
+  // SAVED state, so Save first if you have pending edits you want carried into the copy.
+  const handleCloneConnection = async () => {
+    if (!activeIntegrationId) return;
+    setCloneStatus('cloning');
+    setSaveMsg('');
+    try {
+      const res = await api.cloneIntegration(activeIntegrationId);
+      if (res.ok && res.data?.success && res.data.data) {
+        // Load the copy into the wizard (sets the new activeIntegrationId, shared creds, mappings).
+        await applySavedConnection(res.data.data);
+        setCloneStatus('cloned');
+        setSaveStatus('idle');
+        setSaveMsg('Saved as a new copy (shared credentials) — you are now editing the copy. The original is unchanged.');
+        const connRes = await api.getSavedConnections();
+        if (connRes.ok && connRes.data?.data) {
+          setSavedConnections(connRes.data.data.filter(c => c.status === 'active'));
+        }
+      } else {
+        setCloneStatus('error');
+        setSaveMsg(res.data?.error || 'Failed to clone connection');
+      }
+    } catch {
+      setCloneStatus('error');
+      setSaveMsg('Network error while cloning');
+    }
+  };
+
   // Auto-save the connection once a push succeeds, so every successful sync becomes a
   // reusable entry in "My Connections". Idempotent via the dedup on save-connection
   // (same source+destination updates the existing row instead of duplicating). Fires once
@@ -1547,6 +1744,21 @@ export default function WizardPage() {
     autoSavedPushRef.current = key;
     handleSaveConnection();
   }, [pushStatus, pushResult]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-arm the Push button when the RECIPE changes after a completed push. If the user
+  // finishes a push, goes back, and edits the mapping / dedup key / source scope / date
+  // window / destination, the prior 'done' state would otherwise stick and only offer
+  // "Done" — hiding the fact that the new format needs pushing again. Reset to 'idle' so
+  // Step 6 shows "▶ Push" once more. Guarded by `hydrated` so restoring a saved 'done'
+  // state on resume doesn't immediately clobber itself.
+  useEffect(() => {
+    if (!hydrated) return;
+    if (pushStatus === 'done') {
+      setPushStatus('idle');
+      setPushResult(null);
+      setQuickView(null);
+    }
+  }, [mappings, matchKey, selectedSource, selectedDest, selectedEntity, selectedProject, dateStart, dateEnd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Resume the wizard exactly where you left off — whether you bounced to the Mapping
   // Canvas (one-shot 'synapseWizardResume') or simply navigated away / refreshed and came
@@ -1585,6 +1797,8 @@ export default function WizardPage() {
       if (s.selectedPgTable) setSelectedPgTable(s.selectedPgTable);
       if (typeof s.createNewTable === 'boolean') setCreateNewTable(s.createNewTable);
       if (s.newTableName) setNewTableName(s.newTableName);
+      if (Array.isArray(s.extraTargets)) setExtraTargets(s.extraTargets);
+      if (s.groupId) setGroupId(s.groupId);
       if (s.activeIntegrationId) setActiveIntegrationId(s.activeIntegrationId);
       // Push progress — so a return mid-push shows where it's at.
       if (s.pushResult) setPushResult(s.pushResult);
@@ -1612,7 +1826,7 @@ export default function WizardPage() {
         srcCreds, destCreds, srcConnectionData, destConnectionData,
         srcTestStatus, destTestStatus, srcFields, destFields, mappings,
         fetchResult, fetchStatus, matchKey, connectionName, dateStart, dateEnd,
-        selectedPgTable, createNewTable, newTableName, activeIntegrationId,
+        selectedPgTable, createNewTable, newTableName, extraTargets, groupId, activeIntegrationId,
         pushStatus, pushResult, pushError, pushProgress,
       }));
     } catch { /* sessionStorage full / serialization issue — non-fatal */ }
@@ -1622,7 +1836,7 @@ export default function WizardPage() {
     srcCreds, destCreds, srcConnectionData, destConnectionData,
     srcTestStatus, destTestStatus, srcFields, destFields, mappings,
     fetchResult, fetchStatus, matchKey, connectionName, dateStart, dateEnd,
-    selectedPgTable, createNewTable, newTableName, activeIntegrationId,
+    selectedPgTable, createNewTable, newTableName, extraTargets, groupId, activeIntegrationId,
     pushStatus, pushResult, pushError, pushProgress,
   ]);
 
@@ -1642,6 +1856,8 @@ export default function WizardPage() {
     setFetchResult(null); setFetchStatus('idle'); setFetchError('');
     setMatchKey(''); setConnectionName(''); setActiveIntegrationId(null);
     setSelectedPgTable(''); setCreateNewTable(false); setNewTableName('');
+    setExtraTargets([]); setTargetsPanelOpen(false);
+    setGroupId(''); setGroupRunStatus('idle'); setGroupRunResult(null);
     setPushStatus('idle'); setPushResult(null); setPushError(''); setPushProgress(null);
     setWizardStep(1);
   };
@@ -2452,6 +2668,19 @@ export default function WizardPage() {
                   {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved' : 'Save Connection'}
                 </button>
 
+                {/* Save as new copy (Clone) — only when an existing connection is loaded */}
+                {activeIntegrationId && (
+                  <button
+                    className="btn btn-outline btn-sm"
+                    onClick={handleCloneConnection}
+                    disabled={cloneStatus === 'cloning'}
+                    style={{ minWidth: 140 }}
+                    title="Create an independent copy (new draft, shared credentials). The original is left unchanged."
+                  >
+                    {cloneStatus === 'cloning' ? 'Cloning...' : 'Save as New Copy'}
+                  </button>
+                )}
+
                 {/* Delete button — only show when a saved connection is loaded */}
                 {activeIntegrationId && (
                   <button
@@ -2484,6 +2713,7 @@ export default function WizardPage() {
               </div>
               <div style={{ fontSize: '.75rem', color: 'var(--text-dim)', marginTop: 6 }}>
                 Save stores source and destination connection details. Same source URL will update the existing connection.
+                {activeIntegrationId && ' "Save as New Copy" forks this into an independent connection (shares the same vault credentials) and leaves the original unchanged.'}
               </div>
             </div>
 
@@ -2738,6 +2968,106 @@ export default function WizardPage() {
               </div>
             )}
 
+            {/* ── Additional destination targets (fan-out) ── */}
+            {(isDbDest(selectedDest) || isSpSource(selectedDest)) && (
+              <div className="card" style={{ padding: 16, marginTop: 16 }}>
+                <div onClick={() => setTargetsPanelOpen((o) => !o)} style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <div style={{ fontWeight: 600, fontSize: '.9rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ color: 'var(--text-dim)' }}>{targetsPanelOpen ? '▾' : '▸'}</span>
+                    Additional destination targets (fan-out)
+                    {extraTargets.length > 0 && <span className="badge badge-neutral" style={{ fontSize: '.68rem' }}>{extraTargets.length}</span>}
+                  </div>
+                  <span style={{ fontSize: '.74rem', color: 'var(--text-dim)' }}>
+                    Write each record to more than one {isDbDest(selectedDest) ? 'table' : 'list'} — split columns per target in the Mapping step
+                  </span>
+                </div>
+                {targetsPanelOpen && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginBottom: 10 }}>
+                      By default extra targets reuse the <strong>primary {selectedDest} connection &amp; credentials</strong> (same server, another {isDbDest(selectedDest) ? 'table' : 'list'}); choose which columns go to each via the per-column selector in the Mapping step. Use <strong>Different server</strong> to fan out to another server/connector. For a target <strong>shared across entities</strong>, give it the same name &amp; natural key so rows merge.
+                    </div>
+                    {extraTargets.map((t, i) => {
+                      // Field set depends on the target's connector kind: its own (cross-server) or the primary's.
+                      const xIsDb = t.connectorId ? connectorKindById(t.connectorId) === 'database' : isDbDest(selectedDest);
+                      const fld = { padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', fontSize: '.82rem', minWidth: 0 };
+                      return (
+                      <div key={t.targetId} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 8, marginBottom: 8 }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <span className="badge badge-neutral" style={{ fontSize: '.68rem' }}>{i + 2}</span>
+                          <input
+                            placeholder={xIsDb ? 'table name' : 'list name'}
+                            value={t.table}
+                            onChange={(e) => updateExtraTarget(i, { table: xIsDb ? e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_') : e.target.value })}
+                            style={{ ...fld, flex: '1 1 160px', fontFamily: xIsDb ? 'monospace' : 'inherit' }}
+                          />
+                          <input
+                            placeholder="natural key column (optional)"
+                            value={t.naturalKeyColumn}
+                            onChange={(e) => updateExtraTarget(i, { naturalKeyColumn: e.target.value })}
+                            title="Column to dedup/upsert by for this target. Blank = use the primary key. For a SHARED target across entities, use the same key so rows merge."
+                            style={{ ...fld, flex: '1 1 160px' }}
+                          />
+                          <button className="btn btn-sm btn-outline" onClick={() => updateExtraTarget(i, { advancedOpen: !t.advancedOpen })}
+                            title="Send this target to a different server / connector with its own credentials">
+                            {t.advancedOpen ? 'Same server' : 'Different server'}
+                          </button>
+                          <button className="btn btn-sm" style={{ color: 'var(--error)', border: '1px solid var(--error)', background: 'transparent' }} onClick={() => removeExtraTarget(i)}>Remove</button>
+                        </div>
+                        {t.advancedOpen && (
+                          <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed var(--border)', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                            <select value={t.connectorId} onChange={(e) => updateExtraTarget(i, { connectorId: e.target.value })} style={{ ...fld, flex: '1 1 160px' }} title="Destination connector for this target">
+                              <option value="">Reuse primary connector</option>
+                              {destCards.map((c) => <option key={c.connectorId} value={c.connectorId}>{c.label}</option>)}
+                            </select>
+                            <select value={t.destCredId} onChange={(e) => updateExtraTarget(i, { destCredId: e.target.value })} style={{ ...fld, flex: '1 1 160px' }} title="Credential for this target's server">
+                              <option value="">Credential…</option>
+                              {credentialsList.map((c) => <option key={c.credId} value={c.credId}>{c.name || c.credId.slice(0, 8)}</option>)}
+                            </select>
+                            {xIsDb ? (
+                              <>
+                                <input placeholder="host" value={t.host} onChange={(e) => updateExtraTarget(i, { host: e.target.value })} style={{ ...fld, flex: '1 1 120px' }} />
+                                <input placeholder="port" value={t.port} onChange={(e) => updateExtraTarget(i, { port: e.target.value })} style={{ ...fld, width: 70 }} />
+                                <input placeholder="database" value={t.database} onChange={(e) => updateExtraTarget(i, { database: e.target.value })} style={{ ...fld, flex: '1 1 120px' }} />
+                                <input placeholder="schema" value={t.schema} onChange={(e) => updateExtraTarget(i, { schema: e.target.value })} style={{ ...fld, flex: '1 1 100px' }} />
+                              </>
+                            ) : (
+                              <input placeholder="site URL" value={t.siteUrl} onChange={(e) => updateExtraTarget(i, { siteUrl: e.target.value })} style={{ ...fld, flex: '1 1 240px' }} />
+                            )}
+                            <span style={{ fontSize: '.72rem', color: 'var(--text-dim)', flexBasis: '100%' }}>Leave the connector blank to reuse the primary server. Pick a connector + credential (and connection details) to fan out to a different server.</span>
+                          </div>
+                        )}
+                      </div>
+                      );
+                    })}
+                    <button className="btn btn-outline btn-sm" onClick={addExtraTarget} style={{ marginTop: 4 }}>
+                      + Add target {isDbDest(selectedDest) ? 'table' : 'list'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Entity group (multi-entity "Run all") ── */}
+            {selectedDest && (
+              <div className="card" style={{ padding: 16, marginTop: 16 }}>
+                <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 6 }}>Entity group (optional)</div>
+                <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginBottom: 10 }}>
+                  Tag this connection with a group id so several entities (separate saved connections) can be run together in one click. Paste an existing id to join a group, or generate a new one. Connections sharing a group can be triggered with <strong>“Run all in group”</strong> on the Push step.
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <input
+                    placeholder="group id (e.g. grp_ab12) — leave blank for ungrouped"
+                    value={groupId}
+                    onChange={(e) => setGroupId(e.target.value.trim())}
+                    style={{ flex: '1 1 240px', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', fontFamily: 'monospace', fontSize: '.84rem' }}
+                  />
+                  <button className="btn btn-outline btn-sm" onClick={() => setGroupId(`grp_${Date.now().toString(36)}`)}>Generate</button>
+                  {groupId && <button className="btn btn-sm" style={{ color: 'var(--error)', border: '1px solid var(--error)', background: 'transparent' }} onClick={() => setGroupId('')}>Clear</button>}
+                </div>
+                {groupId && <div style={{ marginTop: 6, fontSize: '.74rem', color: 'var(--success)' }}>Grouped as <strong>{groupId}</strong>. Save this connection (and tag others with the same id), then use “Run all in group” on the Push step.</div>}
+              </div>
+            )}
+
             {/* Validation messages */}
             {!selectedEntity && entities.length > 0 && (
               <div style={{ color: 'var(--text-dim)', fontSize: '.85rem', marginTop: 16, textAlign: 'center' }}>
@@ -2855,6 +3185,7 @@ export default function WizardPage() {
                           onRemove={() => removeMapping(i)}
                           expanded={expandedMapping === i}
                           onToggle={() => setExpandedMapping(expandedMapping === i ? -1 : i)}
+                          targets={routeTargets}
                         />
                       ))}
                     </div>
@@ -3078,6 +3409,40 @@ export default function WizardPage() {
         {wizardStep === 6 && (
           <div className="wizard-step active">
             <div style={{ fontWeight: 600, marginBottom: 16, fontSize: '1rem' }}>Push to {selectedDest}</div>
+
+            {/* ── Run all entities in this group (multi-entity orchestration) ── */}
+            {groupId && (
+              <div className="card" style={{ padding: 16, marginBottom: 16, borderLeft: '3px solid var(--primary)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '.9rem' }}>Entity group: <code style={{ background: 'var(--bg-main)', padding: '1px 6px', borderRadius: 3 }}>{groupId}</code></div>
+                    <div style={{ fontSize: '.76rem', color: 'var(--text-dim)' }}>Runs every <strong>active saved</strong> connection tagged with this group, one after another. Save this connection first so it's included.</div>
+                  </div>
+                  <button className="btn btn-primary btn-sm" disabled={groupRunStatus === 'running'} onClick={handleRunGroup}>
+                    {groupRunStatus === 'running' ? 'Running all…' : '▶ Run all in group'}
+                  </button>
+                </div>
+                {groupRunResult && (
+                  <div style={{ marginTop: 10, fontSize: '.8rem' }}>
+                    {groupRunResult.error ? (
+                      <span style={{ color: 'var(--error)' }}>{groupRunResult.error}</span>
+                    ) : (
+                      <div>
+                        <div style={{ color: 'var(--success)', fontWeight: 600, marginBottom: 4 }}>Ran {groupRunResult.count} entit{groupRunResult.count === 1 ? 'y' : 'ies'}:</div>
+                        {(groupRunResult.results || []).map((r, i) => (
+                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '2px 0', borderBottom: '1px solid var(--border)' }}>
+                            <span>{r.name || r.integrationId}</span>
+                            {r.error
+                              ? <span style={{ color: 'var(--error)' }}>{r.error}</span>
+                              : <span style={{ color: 'var(--text-dim)' }}>{r.published ?? 0} published &times; {r.targets ?? 1} target(s)</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               {/* Config + Status row */}

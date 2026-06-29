@@ -16,6 +16,8 @@ import { integrations } from '../db/schema';
 import { connectorService } from '../services/ConnectorService';
 import { resolveCredentials } from './credentials';
 import { hasSourceFactory, hasDestinationFactory, validateDestinationConfig, type ConnectorBuildSpec } from './connector-registry';
+import { normalizeTargets, mappingsForTarget } from './integration-targets';
+import type { MappingEntry } from '../services/MappingEngine';
 
 type Integration = typeof integrations.$inferSelect;
 
@@ -40,31 +42,55 @@ export async function validateRecipe(integration: Integration): Promise<RecipeVa
     }
   }
 
-  // ── Destination ──
-  if (!integration.destConnectorId) {
+  // ── Destination(s) — one or more fan-out targets (legacy = one synthesized target) ──
+  const { legacy, targets } = normalizeTargets(integration);
+  const allMappings = Array.isArray(config.mappings) ? (config.mappings as MappingEntry[]) : [];
+
+  if (!targets.length) {
     errors.push('No destination connector is configured.');
   } else {
-    const destHead = await connectorService.getConnector(integration.destConnectorId);
-    if (!destHead) {
-      errors.push('The destination connector no longer exists.');
-    } else if (!hasDestinationFactory(destHead.runtimeKind ?? '')) {
-      errors.push(`Destination type "${destHead.runtimeKind ?? 'unknown'}" can't be run on the bus.`);
-    } else {
-      const destCreds = await resolveCredentials((config.destCredId as string) ?? undefined);
+    for (const t of targets) {
+      const label = legacy ? 'destination' : `target "${t.label || t.targetId}"`;
+      if (!t.connectorId) {
+        errors.push(legacy ? 'No destination connector is configured.' : `The ${label} has no connector configured.`);
+        continue;
+      }
+      const destHead = await connectorService.getConnector(t.connectorId);
+      if (!destHead) { errors.push(`The ${label} connector no longer exists.`); continue; }
+      if (!hasDestinationFactory(destHead.runtimeKind ?? '')) {
+        errors.push(`Destination type "${destHead.runtimeKind ?? 'unknown'}" (${label}) can't be run on the bus.`);
+        continue;
+      }
+      const destCreds = await resolveCredentials(t.destCredId);
       const spec: ConnectorBuildSpec = {
-        connectorId: destHead.connectorId,
+        connectorId: t.connectorId,
         orgId: integration.orgId,
         kind: destHead.runtimeKind ?? '',
-        config,
+        config: t.config,
         creds: destCreds,
         entity: (config.destEntity as string) ?? undefined,
         integrationId: integration.integrationId,
       };
       // Connector-declared config checks (list/table/url present, etc.)
-      for (const problem of validateDestinationConfig(spec)) errors.push(problem);
+      for (const problem of validateDestinationConfig(spec)) errors.push(legacy ? problem : `${label}: ${problem}`);
       // Credentials referenced but not resolvable (deleted / revoked).
-      if (config.destCredId && Object.keys(destCreds).length === 0) {
-        errors.push('Destination credentials could not be resolved (missing or revoked).');
+      if (t.destCredId && Object.keys(destCreds).length === 0) {
+        errors.push(`${legacy ? 'Destination' : label} credentials could not be resolved (missing or revoked).`);
+      }
+      // A fan-out target nothing maps to would write empty rows — block it.
+      if (!legacy && !mappingsForTarget(allMappings, t.targetId, legacy).length) {
+        errors.push(`${label} has no columns routed to it — map at least one field to it or remove it.`);
+      }
+    }
+
+    // Multi-target only: warn about fields routed to NO target (silently dropped).
+    if (!legacy) {
+      const targetIds = new Set(targets.map((t) => t.targetId));
+      const orphan = allMappings
+        .filter((m) => !m.routes?.length || !m.routes.some((r) => targetIds.has(r.targetId)))
+        .map((m) => String(m.id ?? '?'));
+      if (orphan.length) {
+        warnings.push(`${orphan.length} field mapping(s) are not routed to any target and won't be written: ${orphan.join(', ')}.`);
       }
     }
   }

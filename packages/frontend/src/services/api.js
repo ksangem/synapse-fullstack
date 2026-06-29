@@ -249,9 +249,13 @@ export const api = {
     fetchApi(`/api/integrations/${integrationId}/clone`, { method: 'POST', body: JSON.stringify({}) }),
   bulkConnected: async (action, ids) =>
     fetchApi('/api/connected/bulk', { method: 'POST', body: JSON.stringify({ action, ids }) }),
-  // Trigger a generic bus adapter (non-Jira→SP). Returns { records, published, runId }.
+  // Trigger a generic bus adapter (non-Jira→SP). Returns { records, published, targets, runId }.
   runIntegration: async (integrationId) =>
     fetchApi(`/api/hub/run-integration/${integrationId}`, { method: 'POST', body: JSON.stringify({}) }),
+  // Run every ACTIVE integration in an entity group (fieldMappings.groupId), serially.
+  // Returns { groupId, count, results:[{ name, integrationId, published, targets, ... }] }.
+  runGroup: async (groupId) =>
+    fetchApi(`/api/hub/run-group/${groupId}`, { method: 'POST', body: JSON.stringify({}) }),
   // Server-side mapped preview: reads N source rows, applies the integration's mappings,
   // returns the mapped sample without publishing (no full dataset in the browser).
   previewIntegration: async (integrationId, limit = 20) =>

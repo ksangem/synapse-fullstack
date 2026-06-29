@@ -266,6 +266,13 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       if (body.naturalKeyColumn) fm.naturalKeyColumn = body.naturalKeyColumn;
       if (body.dateFrom) fm.dateFrom = body.dateFrom;
       if (body.dateTo) fm.dateTo = body.dateTo;
+      // Multi-target fan-out (per-mapping `routes` already ride inside body.mappings).
+      // `targets` is the canonical destination list; `groupId` ties an entity-group together;
+      // `sourceEntity` records which source object this integration reads. All optional —
+      // absent ⇒ legacy single-destination behaviour via normalizeTargets().
+      if (body.targets) fm.targets = body.targets;
+      if (body.groupId) fm.groupId = body.groupId;
+      if (body.sourceEntity) fm.sourceEntity = body.sourceEntity;
       return fm;
     };
 

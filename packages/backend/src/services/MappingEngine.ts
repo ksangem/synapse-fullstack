@@ -22,6 +22,13 @@ export interface MappingEntry {
   preset: string | null;      // e.g. 'joinArray', 'dateFormat'
   presetConfig?: Record<string, unknown>;
   expression: string;         // JS code: return source['key'];
+  /**
+   * Multi-target routing (fan-out). When present, this is AUTHORITATIVE: the computed
+   * value is delivered to each {targetId, column} pair, letting one source field be split
+   * across several destination targets (and different columns per target). When absent,
+   * `destinations` is used against the single (legacy) target — i.e. today's behaviour.
+   */
+  routes?: { targetId: string; column: string }[];
 }
 
 export interface MappingConfig {
@@ -204,6 +211,58 @@ export function applyRichMappings(
       for (const d of dests) out[d] = (val as Record<string, unknown>)[d];
     } else {
       out[dests[0]] = val;
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Target-aware variant of applyRichMappings — used for multi-destination fan-out PREVIEW
+ * (and as a testable model of the per-target split). For one source record it produces a
+ * SEPARATE row per target, containing only the columns that each target's `routes` ask for.
+ *
+ * Routing rules per mapping (value computed ONCE via computeValue):
+ *   - `routes` present → deliver the value to each {targetId, column} in routes.
+ *   - `routes` absent  → legacy: deliver to `destinations` against `legacyTargetId`
+ *     (so an un-migrated mapping still previews under the single synthesized target).
+ * The EXPRESSION-returns-object spread (a formula returning { ColA: v1, ColB: v2 }) is
+ * honored per target: a column is filled from the object's matching key when present.
+ *
+ * Returns Map<targetId, row>; every id in `targetIds` gets an entry (possibly empty).
+ */
+export function applyRichMappingsByTarget(
+  record: Record<string, unknown>,
+  mappings: MappingEntry[],
+  targetIds: string[],
+  legacyTargetId = 'legacy',
+): Map<string, Record<string, unknown>> {
+  const out = new Map<string, Record<string, unknown>>();
+  for (const id of targetIds) out.set(id, {});
+
+  const place = (targetId: string, column: string, value: unknown) => {
+    const row = out.get(targetId);
+    if (row) row[column] = value;
+  };
+
+  for (const m of mappings) {
+    if (!m.sources?.length) continue;
+
+    let val: unknown;
+    try { val = computeValue(m, record); } catch { val = ''; }
+    const isObj = val != null && typeof val === 'object' && !Array.isArray(val);
+
+    const routes = m.routes?.length
+      ? m.routes
+      : (m.destinations ?? []).map((column) => ({ targetId: legacyTargetId, column }));
+
+    // Mirror applyRichMappings: spread an EXPRESSION-returned object across columns ONLY
+    // when there is more than one destination column; a single column receives the whole
+    // value (object included). This keeps single-target preview identical to the run.
+    const spread = routes.length > 1 && isObj;
+    for (const r of routes) {
+      const v = spread ? (val as Record<string, unknown>)[r.column] : val;
+      place(r.targetId, r.column, v);
     }
   }
 

@@ -10,14 +10,16 @@
  *   loadIntegrationFlows     — register all ACTIVE adapters at boot / on reload
  */
 
-import { eq } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { integrations } from '../db/schema';
 import { connectorService } from '../services/ConnectorService';
 import { hubService } from './hub-service';
 import { resolveCredentials } from './credentials';
 import { buildSource, buildDestination, hasSourceFactory, hasDestinationFactory, sourceTopicPrefix, type ConnectorBuildSpec } from './connector-registry';
-import { FieldMappingStep, type FieldMapping } from './field-mapping-step';
+import { FieldMappingStep } from './field-mapping-step';
+import { normalizeTargets, mappingsForTarget } from './integration-targets';
+import type { MappingEntry } from '../services/MappingEngine';
 import type { TransformPipeline } from './transform-pipeline';
 import type { ISourceConnector } from './interfaces';
 
@@ -44,56 +46,39 @@ export interface FlowResult {
   flows: string[];
 }
 
+/** Outcome of wiring one integration: one subscription per LIVE destination target. */
+export interface FlowRegistration {
+  /** Human-readable subscription descriptions (one per live target). */
+  subscriptions: string[];
+  /** Number of live target subscriptions registered — the fan-out width. */
+  targetCount: number;
+}
+
 /**
- * Register the destination + subscription (+ mapping transform) for one adapter.
- * Returns a description, or null if it can't be wired (unknown kinds, missing
- * connectors) — callers treat that as "skipped", never fatal.
+ * Register the destination(s) + subscription(s) (+ per-target mapping transform) for one
+ * adapter. One source stream fans out to N destination TARGETS (see normalizeTargets): each
+ * target gets its own destination connector, a transform that emits only that target's
+ * column subset, and a subscription on the shared source topic. The bus router then delivers
+ * each published record to every target independently (per-destination outbox + idempotency).
+ *
+ * Returns null when nothing can be wired (unknown source/dest kinds, missing connectors, or
+ * no target receives any column) — callers treat that as "skipped", never fatal.
  */
 export async function registerIntegrationFlow(
   integration: Integration,
   pipeline: TransformPipeline,
-): Promise<string | null> {
+): Promise<FlowRegistration | null> {
   const config = (integration.fieldMappings ?? {}) as Record<string, unknown>;
-  if (!integration.sourceConnectorId || !integration.destConnectorId) return null;
+  if (!integration.sourceConnectorId) return null;
 
-  const [srcHead, destHead] = await Promise.all([
-    connectorService.getConnector(integration.sourceConnectorId),
-    connectorService.getConnector(integration.destConnectorId),
-  ]);
-  if (!srcHead || !destHead) return null;
-  if (!hasSourceFactory(srcHead.runtimeKind ?? '') || !hasDestinationFactory(destHead.runtimeKind ?? '')) return null;
+  const srcHead = await connectorService.getConnector(integration.sourceConnectorId);
+  if (!srcHead || !hasSourceFactory(srcHead.runtimeKind ?? '')) return null;
 
-  // Destination
-  const destCreds = await resolveCredentials(config.destCredId as string | undefined);
-  const destSpec: ConnectorBuildSpec = {
-    connectorId: destHead.connectorId,
-    orgId: integration.orgId,
-    kind: destHead.runtimeKind ?? '',
-    config,
-    creds: destCreds,
-    entity: (config.destEntity as string) ?? undefined,
-    integrationId: integration.integrationId,
-  };
-  hubService.registerDestination(await buildDestination(destSpec));
+  const allMappings = Array.isArray(config.mappings) ? (config.mappings as MappingEntry[]) : [];
 
-  // Generic mapping transform from the adapter's declared field mappings.
-  const mappings = Array.isArray(config.mappings) ? (config.mappings as FieldMapping[]) : [];
-  const transformSteps: string[] = [];
-  if (mappings.length) {
-    const stepId = `map-${integration.integrationId}`;
-    pipeline.register(
-      new FieldMappingStep({
-        stepId,
-        mappings,
-        naturalKeyColumn: (config.naturalKeyColumn as string) || mappings[0]?.to || 'id',
-        destTable: (config.pgTable as string) || (config.destTable as string) || undefined,
-      }),
-    );
-    transformSteps.push(stepId);
-  }
-
-  // Subscription scoped to the source's actual topic prefix, so adapters never
-  // cross-deliver (the prefix is supplied by the source plug-in, not the core).
+  // Source topic prefix — SHARED by every target (the one source stream fans to N targets).
+  // Scoped to the source's actual prefix so adapters never cross-deliver (prefix supplied by
+  // the source plug-in, not the core).
   const sourceKey = adapterSourceKey(
     srcHead.key || srcHead.runtimeKind || 'source',
     integration.integrationId,
@@ -110,21 +95,71 @@ export async function registerIntegrationFlow(
     integrationId: integration.integrationId,
   });
   const topic = `${prefix}.*`;
-  const subId = `intg-${integration.integrationId}`;
-  hubService.registry.register({
-    id: subId,
-    orgId: integration.orgId,
-    integrationId: integration.integrationId,
-    topic,
-    destinationConnectorId: destHead.connectorId,
-    transformSteps,
-    processingMode: 'serial',
-    workerCount: 1,
-    batchSize: 1,
-    channelCapacity: 100,
-  });
 
-  return `${subId}: ${topic} → ${destHead.runtimeKind}/${destHead.connectorId}`;
+  const { legacy, targets } = normalizeTargets(integration);
+  const subscriptions: string[] = [];
+
+  for (const t of targets) {
+    if (!t.connectorId) continue;
+    const destHead = await connectorService.getConnector(t.connectorId);
+    if (!destHead || !hasDestinationFactory(destHead.runtimeKind ?? '')) continue;
+
+    // The mappings sliced to the columns this target receives. For an explicit (non-legacy)
+    // target that nothing routes to, skip it entirely — it would write empty rows. A legacy
+    // target with no mappings stays a raw passthrough (preserves prior behaviour).
+    const targetMappings = mappingsForTarget(allMappings, t.targetId, legacy);
+    if (!legacy && !targetMappings.length) continue;
+
+    // Synthetic per-target connector id so two targets sharing one connector TEMPLATE but
+    // different tables/lists register as DISTINCT destinations — required for correct
+    // per-destination outbox/idempotency keying in the router/dispatch worker.
+    const syntheticId = `intg-${integration.integrationId}-tgt-${t.targetId}`;
+    const destCreds = await resolveCredentials(t.destCredId);
+    const destSpec: ConnectorBuildSpec = {
+      connectorId: syntheticId,
+      orgId: integration.orgId,
+      kind: destHead.runtimeKind ?? '',
+      config: t.config,
+      creds: destCreds,
+      entity: (config.destEntity as string) ?? undefined,
+      integrationId: integration.integrationId,
+    };
+    hubService.registerDestination(await buildDestination(destSpec));
+
+    // Per-target mapping transform (emits only this target's column subset + stamps its
+    // table + natural key on the envelope headers for the destination to upsert by).
+    const transformSteps: string[] = [];
+    if (targetMappings.length) {
+      const stepId = `map-${integration.integrationId}-${t.targetId}`;
+      pipeline.register(
+        new FieldMappingStep({
+          stepId,
+          mappings: targetMappings,
+          naturalKeyColumn: t.naturalKeyColumn || targetMappings[0]?.destinations?.[0] || 'id',
+          destTable: t.destTable || undefined,
+        }),
+      );
+      transformSteps.push(stepId);
+    }
+
+    const subId = `intg-${integration.integrationId}-${t.targetId}`;
+    hubService.registry.register({
+      id: subId,
+      orgId: integration.orgId,
+      integrationId: integration.integrationId,
+      topic,
+      destinationConnectorId: syntheticId,
+      transformSteps,
+      processingMode: 'serial',
+      workerCount: 1,
+      batchSize: 1,
+      channelCapacity: 100,
+    });
+    subscriptions.push(`${subId}: ${topic} → ${destHead.runtimeKind}/${t.targetId}`);
+  }
+
+  if (!subscriptions.length) return null;
+  return { subscriptions, targetCount: subscriptions.length };
 }
 
 /** Build the source connector for an adapter (for a run trigger). */
@@ -157,8 +192,8 @@ export async function loadIntegrationFlows(pipeline: TransformPipeline): Promise
   const result: FlowResult = { loaded: 0, skipped: 0, flows: [] };
   for (const intg of rows) {
     try {
-      const desc = await registerIntegrationFlow(intg, pipeline);
-      if (desc) { result.loaded++; result.flows.push(desc); }
+      const reg = await registerIntegrationFlow(intg, pipeline);
+      if (reg) { result.loaded++; result.flows.push(...reg.subscriptions); }
       else result.skipped++;
     } catch (err) {
       result.skipped++;
@@ -172,4 +207,16 @@ export async function loadIntegrationFlows(pipeline: TransformPipeline): Promise
 export async function getIntegration(id: string): Promise<Integration | null> {
   const [row] = await db.select().from(integrations).where(eq(integrations.integrationId, id)).limit(1);
   return row ?? null;
+}
+
+/**
+ * All ACTIVE integrations tagged with the given entity-group id (fieldMappings.groupId).
+ * Ordered by creation so a group run is deterministic. Used by the "Run all" group trigger.
+ */
+export async function getIntegrationsByGroup(groupId: string): Promise<Integration[]> {
+  return db
+    .select()
+    .from(integrations)
+    .where(and(eq(integrations.status, 'active'), sql`${integrations.fieldMappings} ->> 'groupId' = ${groupId}`))
+    .orderBy(integrations.createdAt);
 }
