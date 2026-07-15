@@ -13,6 +13,13 @@ export interface SharePointListConfig {
   tenantId: string;
   clientId: string;
   clientSecret: string;
+  /**
+   * Read the FULL list every time via the non-delta items endpoint (no cursor), instead of an
+   * incremental delta. Used for reference reads such as cross-entity joins, which need every
+   * current row and must avoid the Graph delta-pagination bug ("nextLink value without skip or
+   * skiptoken").
+   */
+  fullRead?: boolean;
 }
 
 export interface RawSpItem {

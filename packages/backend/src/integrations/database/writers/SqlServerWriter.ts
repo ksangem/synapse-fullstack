@@ -251,6 +251,13 @@ export class SqlServerWriter implements IDbWriter {
     };
   }
 
+  async loadRows(schema: string, table: string, columns: string[]): Promise<Record<string, unknown>[]> {
+    this.ensureConnected();
+    const cols = columns.length ? columns.map((c) => `[${c}]`).join(', ') : '*';
+    const result = await this.pool!.request().query(`SELECT ${cols} FROM [${schema}].[${table}]`);
+    return result.recordset as Record<string, unknown>[];
+  }
+
   async applyDdl(statements: string[]): Promise<void> {
     this.ensureConnected();
 

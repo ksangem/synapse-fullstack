@@ -108,7 +108,6 @@ export default function DashboardPage() {
   const [cards, setCards] = useState([]);
   const [kpis, setKpis] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [usingSample, setUsingSample] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -121,7 +120,6 @@ export default function DashboardPage() {
       const mapped = rows.map(mapToCard);
       setCards(mapped);
       setKpis(computeKpis(mapped));
-      setUsingSample(false);
       setLoading(false);
     })();
     return () => { alive = false; };
@@ -187,8 +185,7 @@ export default function DashboardPage() {
           <div className="page-title">Health Dashboard</div>
           <div className="page-subtitle">
             Real-time platform overview
-            {usingSample && <span className="badge badge-warning" style={{ marginLeft: 8 }}>Sample data</span>}
-            {!usingSample && !loading && <span className="badge badge-success" style={{ marginLeft: 8 }}>Live</span>}
+            {!loading && <span className="badge badge-success" style={{ marginLeft: 8 }}>Live</span>}
           </div>
         </div>
         <div className="flex gap-8">
@@ -321,14 +318,14 @@ export default function DashboardPage() {
       <div className="grid-2 mb-20">
         <div className="card">
           <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 12 }}>Records per Push (recent)</div>
-          <MiniBars series={usingSample ? [] : volumeSeries} color="#6366f1" empty="No run data yet — trigger a sync to populate." />
+          <MiniBars series={volumeSeries} color="#6366f1" empty="No run data yet — trigger a sync to populate." />
         </div>
         <div className="card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <div style={{ fontWeight: 600, fontSize: '.9rem' }}>Failures per Push (recent)</div>
             <a className="clickable" style={{ fontSize: '.75rem' }} onClick={() => navigate('/alerts')}>View All Alerts &#8594;</a>
           </div>
-          <MiniBars series={usingSample ? [] : errorSeries} color="#ef4444" empty="No failures recorded." />
+          <MiniBars series={errorSeries} color="#ef4444" empty="No failures recorded." />
         </div>
       </div>
       </div>

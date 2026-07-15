@@ -11,6 +11,7 @@
  */
 
 import { evalExpression } from './SafeExpression';
+import { aggregate } from './aggregate';
 
 export interface MappingEntry {
   id: string;
@@ -41,7 +42,7 @@ export interface MappingConfig {
  * Resolve a dot-path like "status.name" against a Jira issue object.
  * Tries both flat (issue.fields['status.name']) and nested (issue.fields.status.name).
  */
-function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
+export function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   // For issue-level fields like 'key', 'id'
   if (path === 'key' || path === 'id') return obj[path];
 
@@ -66,11 +67,27 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
 
 // ── Legacy mapper (used by SyncService) — DO NOT change its behaviour. ──
 
+/**
+ * Normalize a year / partial date / full ISO datetime into a SQL DATE string
+ * "YYYY-MM-DD". A bare year "2026" → "2026-01-01"; "2026-05" → "2026-05-01"; a
+ * full date or ISO datetime → its date portion. Unparseable values (e.g. "AM
+ * Ignored") → null, so a strict DATE column stores NULL instead of failing the row.
+ */
+export function toSqlDate(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const m = String(value).trim().match(/^(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?/);
+  if (!m) return null;
+  const mo = (m[2] ?? '1').padStart(2, '0');
+  const d = (m[3] ?? '1').padStart(2, '0');
+  return `${m[1]}-${mo}-${d}`;
+}
+
 /** Apply a built-in preset transform to a value (legacy). */
 function runPreset(preset: string, value: unknown, config?: Record<string, unknown>): unknown {
   if (value === null || value === undefined) return null;
   switch (preset) {
     case 'dateFormat': return typeof value === 'string' ? value.substring(0, 10) : String(value);
+    case 'toDate': return toSqlDate(value);
     case 'uppercase': return String(value).toUpperCase();
     case 'lowercase': return String(value).toLowerCase();
     case 'trim': return String(value).trim();
@@ -128,6 +145,22 @@ function extractScalar(raw: unknown): unknown {
 }
 
 /**
+ * Set a dotted path ("a.b.c") to `value` on `obj`, creating intermediate objects. Used so an
+ * EXPRESSION can read a dotted source (e.g. "@join.alias.col") as source['a']['b']['c'] in
+ * addition to the flat source['a.b.c'] key. Skips a hop if it already holds a non-object.
+ */
+function setNestedPath(obj: Record<string, unknown>, path: string, value: unknown): void {
+  const parts = path.split('.');
+  let cur: Record<string, unknown> = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const p = parts[i];
+    if (typeof cur[p] !== 'object' || cur[p] === null) cur[p] = {};
+    cur = cur[p] as Record<string, unknown>;
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+
+/**
  * Compute one mapping's output value for a record — a faithful port of the Wizard's
  * computeMappedValue (DIRECT, the 16 presets incl. row-local aggregations, EXPRESSION).
  */
@@ -139,16 +172,9 @@ function computeValue(m: MappingEntry, record: Record<string, unknown>): unknown
 
   if (!m.transform || m.transform === 'DIRECT') return srcVal[0] ?? '';
 
-  // Numeric aggregations skip MISSING/empty source fields entirely. An absent field
-  // is '' here and Number('') === 0, which would wrongly inflate sums and drag avg/min
-  // toward 0; filtering empties first means avg/min/max/sum reflect only present values.
-  // A genuine 0 (number or "0") is kept — only null/undefined/'' are dropped.
-  const nums = srcVal
-    .filter((v) => v !== null && v !== undefined && v !== '')
-    .map((v) => Number(v))
-    .filter((n) => !Number.isNaN(n));
   switch (m.preset) {
     case 'dateFormat': return String(srcVal[0] ?? '').substring(0, 10);
+    case 'toDate': return toSqlDate(srcVal[0]);
     case 'uppercase': return String(srcVal[0] ?? '').toUpperCase();
     case 'lowercase': return String(srcVal[0] ?? '').toLowerCase();
     case 'trim': return String(srcVal[0] ?? '').trim();
@@ -158,11 +184,17 @@ function computeValue(m: MappingEntry, record: Record<string, unknown>): unknown
     case 'toFloat': return Number(srcVal[0]) || 0;
     case 'toText': return String(srcVal[0] ?? '');
     case 'boolean': return !!srcVal[0] && srcVal[0] !== 'false' && srcVal[0] !== '0';
-    case 'sum': return nums.reduce((a, b) => a + b, 0);
-    case 'avg': return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
-    case 'min': return nums.length ? Math.min(...nums) : 0;
-    case 'max': return nums.length ? Math.max(...nums) : 0;
-    case 'count': return srcVal.filter((v) => v !== null && v !== undefined && v !== '').length;
+    // Group aggregations delegate to the shared helper — single source of truth with the join
+    // step (services/aggregate). Empty/missing values are dropped so an absent field never reads
+    // as 0 and drags an average toward zero; a genuine 0 is kept.
+    case 'sum':
+    case 'avg':
+    case 'min':
+    case 'max':
+    case 'count':
+      return aggregate(m.preset, srcVal);
+    // `concat` here is ROW-LOCAL field concatenation (space-joined, empties kept) — deliberately
+    // distinct from the join's group `concat` (comma-joined), so it stays inline.
     case 'concat': return srcVal.map((v) => v ?? '').join(' ');
     default: break;
   }
@@ -175,7 +207,12 @@ function computeValue(m: MappingEntry, record: Record<string, unknown>): unknown
     // over the pre-flattened scalar, so such formulas errored ("x is not a function")
     // or returned nothing — leaving the destination column empty.
     const source: Record<string, unknown> = {};
-    (m.sources || []).forEach((s, i) => { source[s] = rawVal[i]; });
+    (m.sources || []).forEach((s, i) => {
+      source[s] = rawVal[i]; // flat key: source['@join.alias.col'] / source['status.name']
+      // Also expose a NESTED view so an expression written as source['@join']['alias']['col']
+      // resolves — the Wizard auto-generates dotted source paths as nested optional chains.
+      if (s.includes('.')) setNestedPath(source, s, rawVal[i]);
+    });
     try {
       return evalExpression(m.expression, source);
     } catch (err) {

@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from 'express';
+import crypto from 'node:crypto';
 import { z } from 'zod';
 import { db } from '../db/client';
 import { integrations, runs, credentials, pushLog, syncState, runMessages, jiraTickets, sharepointPushRuns } from '../db/schema';
@@ -7,6 +8,7 @@ import { CredentialService } from '../services/CredentialService';
 import { mappingAIService } from '../services/MappingAIService';
 import { recordAudit } from '../services/AuditService';
 import { refreshHubSubscriptions } from '../hub/init-hub';
+import { validateJoins, type JoinSpec } from '../hub/entity-join-step';
 
 const credentialService = new CredentialService();
 
@@ -70,6 +72,10 @@ const saveConnectionSchema = z.object({
   projectKey: z.string().optional(),
   siteUrl: z.string().optional(),
   listName: z.string().optional(),
+  // SharePoint SOURCE list (the picked entity). Persisted so a server-side run resolves
+  // the source list by ID instead of a blank-name lookup ("List '' not found on this site").
+  sourceListId: z.string().optional(),
+  sourceListName: z.string().optional(),
   // SharePoint Azure app-registration creds (stored encrypted with the connection)
   tenantId: z.string().optional(),
   clientId: z.string().optional(),
@@ -93,6 +99,17 @@ const saveConnectionSchema = z.object({
   naturalKeyColumn: z.string().optional(),
   dateFrom: z.string().optional(),
   dateTo: z.string().optional(),
+  // Cross-entity joins (enrichment / lookup / aggregate). Optional — absent ⇒ no join
+  // step is wired and the flow is unchanged. Each entry is a JoinSpec (alias, on, entity,
+  // pull/aggregate). Kept in fieldMappings JSONB; validated structurally by the join step.
+  joins: z.array(z.record(z.string(), z.unknown())).optional(),
+  // Optional field-level encryption. The client sends only the toggle + the list of
+  // destination columns to encrypt; the data key (DEK) is generated & wrapped
+  // SERVER-SIDE (never accepted from the client). enabled:false clears the config.
+  encryption: z.object({
+    enabled: z.boolean(),
+    fields: z.array(z.string()).default([]),
+  }).optional(),
 });
 
 // destType label → DB writer engine id used by the credential payload
@@ -105,6 +122,12 @@ const DEST_ENGINE: Record<string, 'postgres' | 'mysql' | 'sqlserver'> = {
 router.post('/save-connection', async (req: Request, res: Response) => {
   try {
     const body = saveConnectionSchema.parse(req.body);
+    // Reject structurally-invalid joins at save (duplicate alias, forward/self chain reference,
+    // missing pull/aggregate column) so a bad recipe never reaches the flow builder.
+    if (body.joins?.length) {
+      const joinErrors = validateJoins(body.joins as unknown as JoinSpec[]);
+      if (joinErrors.length) return res.status(400).json({ error: 'Invalid joins', details: joinErrors });
+    }
     const sourceType = body.sourceType || 'Jira';
     const destType = body.destType || 'SharePoint';
     const endpointUrl = (body.endpointUrl ?? '').trim();
@@ -240,6 +263,24 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       destCredId = destCred.credId;
     }
 
+    // Field-level encryption config (optional). The 32-byte data key (DEK) is
+    // generated server-side and stored WRAPPED with the master key — never accepted
+    // from the client and never returned on normal reads (only via the audited
+    // reveal endpoint). On update we REUSE the existing DEK so ciphertext already
+    // written to the destination stays decryptable; a new key is minted only when
+    // encryption is first enabled.
+    const oldEnc = (existing?.fieldMappings as Record<string, unknown> | null)?.encryption as
+      | { wrappedDek?: string; keyId?: string; fields?: string[] }
+      | undefined;
+    let encryptionBlock: Record<string, unknown> | undefined | null;
+    if (body.encryption?.enabled && body.encryption.fields.length) {
+      const wrappedDek = oldEnc?.wrappedDek ?? credentialService.encrypt(crypto.randomBytes(32).toString('hex'));
+      const keyId = oldEnc?.keyId ?? 'k1';
+      encryptionBlock = { enabled: true, algorithm: 'aes-256-gcm', keyId, wrappedDek, fields: body.encryption.fields };
+    } else if (body.encryption && body.encryption.enabled === false) {
+      encryptionBlock = null; // explicit disable — clear any prior config
+    }
+
     // Build fieldMappings object
     const buildFm = (baseFm?: Record<string, unknown> | null): Record<string, unknown> => {
       const fm: Record<string, unknown> = { ...(baseFm ?? {}) };
@@ -251,6 +292,11 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       if (body.projectKey) fm.projectKey = body.projectKey;
       if (body.siteUrl) fm.siteUrl = body.siteUrl;
       if (body.listName) fm.listName = body.listName;
+      // SharePoint SOURCE list selection (list id + display name). Only sent for
+      // SP-source connections; consumed by the SP source factory so the run reads
+      // the right list instead of resolving a blank name.
+      if (body.sourceListId) { fm.listId = body.sourceListId; fm.sourceEntity = body.sourceListId; }
+      if (body.sourceListName) fm.sourceListName = body.sourceListName;
       if (body.destSiteUrl) fm.destSiteUrl = body.destSiteUrl;
       if (body.destListName) fm.destListName = body.destListName;
       if (body.pgHost) fm.pgHost = body.pgHost;
@@ -271,8 +317,13 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       // `sourceEntity` records which source object this integration reads. All optional —
       // absent ⇒ legacy single-destination behaviour via normalizeTargets().
       if (body.targets) fm.targets = body.targets;
+      if (body.joins) fm.joins = body.joins;
       if (body.groupId) fm.groupId = body.groupId;
       if (body.sourceEntity) fm.sourceEntity = body.sourceEntity;
+      // Field-level encryption: set the freshly-built block, clear on explicit
+      // disable, or leave any prior block untouched when the request omits it.
+      if (encryptionBlock) fm.encryption = encryptionBlock;
+      else if (encryptionBlock === null) delete fm.encryption;
       return fm;
     };
 
@@ -307,6 +358,51 @@ router.post('/save-connection', async (req: Request, res: Response) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(400).json({ success: false, error: message });
+  }
+});
+
+// GET /api/integrations/:id/encryption-key/reveal — audited reveal of the connection's
+// data key (DEK). The owning application uses this key + the documented envelope format
+// to decrypt encrypted destination columns. Every reveal is written to the audit log.
+// (More specific than GET /:id, but a distinct path depth so ordering doesn't matter.)
+router.get('/:id/encryption-key/reveal', async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    const [intg] = await db.select().from(integrations).where(eq(integrations.integrationId, id));
+    if (!intg) { res.status(404).json({ success: false, error: 'Integration not found' }); return; }
+
+    const enc = (intg.fieldMappings as Record<string, unknown> | null)?.encryption as
+      | { enabled?: boolean; wrappedDek?: string; keyId?: string; algorithm?: string; fields?: string[] }
+      | undefined;
+    if (!enc?.enabled || !enc.wrappedDek) {
+      res.status(404).json({ success: false, error: 'Encryption is not enabled on this connection' });
+      return;
+    }
+
+    const keyHex = credentialService.decrypt(enc.wrappedDek);
+
+    await recordAudit({
+      orgId: req.actor?.orgId ?? '00000000-0000-0000-0000-000000000001',
+      userId: req.actor?.userId ?? null,
+      action: 'reveal',
+      entityType: 'integration_key',
+      entityId: id,
+      diff: { name: intg.name, keyId: enc.keyId, algorithm: enc.algorithm, fields: enc.fields },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        keyId: enc.keyId ?? 'k1',
+        algorithm: enc.algorithm ?? 'aes-256-gcm',
+        keyHex, // 32-byte AES-256 key, hex-encoded
+        fields: enc.fields ?? [],
+        format: 'synz:v1:gcm:<keyId>:<base64 iv (12 bytes)>:<base64 ciphertext>:<base64 authTag (16 bytes)>',
+        howToDecrypt: 'Split on ":". Verify prefix synz:v1:gcm. AES-256-GCM decrypt the ciphertext using this keyHex (32 bytes) as key, the iv, and the authTag; the result is UTF-8 plaintext (JSON-stringified for non-string source values).',
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : 'Unknown error' });
   }
 });
 

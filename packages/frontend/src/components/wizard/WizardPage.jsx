@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { runtimeClient } from '../../services/runtimeClient';
+import JoinsPanel from '../mapping/JoinsPanel';
+import { toSqlDate, PAIR_COLORS } from '../mapping/mappingUtils';
 
 /* ─── Static Data ──────────────────────────────────────��── */
 const stepLabels = ['Select Systems', 'Credentials', 'Entities', 'Mapping', 'Fetch & Review', 'Push & Sync'];
@@ -25,6 +27,7 @@ function ConnIcon({ icon, size = 26 }) {
 const PRESET_TRANSFORMS = [
   // Text (single source)
   { value: 'dateFormat', label: 'Date Format (YYYY-MM-DD)', desc: 'Extracts date portion' },
+  { value: 'toDate', label: 'Year/Partial → Date (YYYY-MM-DD)', desc: 'Year "2026" → 2026-01-01; junk → empty. For SQL date columns.' },
   { value: 'uppercase', label: 'Uppercase', desc: 'Converts text to UPPER CASE' },
   { value: 'lowercase', label: 'Lowercase', desc: 'Converts text to lower case' },
   { value: 'trim', label: 'Trim Whitespace', desc: 'Removes leading/trailing spaces' },
@@ -57,7 +60,6 @@ function inferMappingOutputType(m) {
   return m.srcTypes?.[0] || 'string'; // EXPRESSION: unknown statically \u2192 user can override
 }
 
-const PAIR_COLORS = ['#6366f1','#22c55e','#a855f7','#f59e0b','#ef4444','#3b82f6','#14b8a6','#ec4899','#84cc16','#06b6d4'];
 
 /* ─── Helpers ───────────────────────────────────────────── */
 // Safe hostname extraction — fm.endpointUrl/siteUrl may be missing or not a
@@ -163,28 +165,8 @@ function autoMapFields(srcFields, destFields) {
   return mappings;
 }
 
-function runPresetTransform(preset, value) {
-  if (value === null || value === undefined) return '';
-  switch (preset) {
-    case 'dateFormat': return typeof value === 'string' ? value.substring(0, 10) : String(value);
-    case 'uppercase': return String(value).toUpperCase();
-    case 'lowercase': return String(value).toLowerCase();
-    case 'trim': return String(value).trim();
-    case 'joinArray': return Array.isArray(value) ? value.join(', ') : String(value);
-    case 'extractNumber': { const m = String(value).match(/[\d.]+/); return m ? Number(m[0]) : ''; }
-    case 'boolean': return Boolean(value);
-    default: return value;
-  }
-}
-
-function evaluateExpression(expression, sourceObj) {
-  try {
-    const fn = new Function('source', expression);
-    return { result: fn(sourceObj), error: null };
-  } catch (err) {
-    return { result: null, error: err.message };
-  }
-}
+// toSqlDate is imported from ../mapping/mappingUtils (single source). runPresetTransform +
+// evaluateExpression were dead here (computeMappedValue handles presets/expressions inline).
 
 /**
  * Auto-generate a JS expression based on source fields and destination type.
@@ -308,6 +290,7 @@ function computeMappedValue(m, record) {
   switch (m.preset) {
     // text
     case 'dateFormat': return String(srcVal[0] ?? '').substring(0, 10);
+    case 'toDate': return toSqlDate(srcVal[0]);
     case 'uppercase': return String(srcVal[0] ?? '').toUpperCase();
     case 'lowercase': return String(srcVal[0] ?? '').toLowerCase();
     case 'trim': return String(srcVal[0] ?? '').trim();
@@ -329,7 +312,16 @@ function computeMappedValue(m, record) {
   }
   if (m.transform === 'EXPRESSION' && m.expression) {
     const source = {};
-    (m.sources || []).forEach((s, i) => { source[s] = srcVal[i]; });
+    (m.sources || []).forEach((s, i) => {
+      source[s] = srcVal[i]; // flat key: source['@join.alias.col']
+      // Also expose a nested view so source['@join']['alias']['col'] resolves — matches the
+      // backend and the way dotted source paths are auto-generated as nested chains.
+      if (String(s).includes('.')) {
+        const parts = String(s).split('.'); let cur = source;
+        for (let k = 0; k < parts.length - 1; k++) { const p = parts[k]; if (typeof cur[p] !== 'object' || cur[p] === null) cur[p] = {}; cur = cur[p]; }
+        cur[parts[parts.length - 1]] = srcVal[i];
+      }
+    });
     // eslint-disable-next-line no-new-func
     const fn = new Function('source', m.expression);
     return fn(source);
@@ -692,6 +684,14 @@ export default function WizardPage() {
   const [projects, setProjects] = useState([]);
   const [selectedProject, setSelectedProject] = useState('');
 
+  // ── Field-level encryption (optional) ──
+  // encryptFields holds DESTINATION column names to encrypt before the push. The
+  // data key is generated + stored server-side; the UI only toggles + reveals it.
+  const [encryptionEnabled, setEncryptionEnabled] = useState(false);
+  const [encryptFields, setEncryptFields] = useState([]);
+  const [revealedKey, setRevealedKey] = useState(null);
+  const [revealMsg, setRevealMsg] = useState('');
+
   // Step 3 — Search + PG tables
   const [entitySearch, setEntitySearch] = useState('');
   const [pgTables, setPgTables] = useState([]); // [{ name, columnCount }]
@@ -705,6 +705,8 @@ export default function WizardPage() {
   const [destFields, setDestFields] = useState([]);
   const [fieldsLoading, setFieldsLoading] = useState(false);
   const [mappings, setMappings] = useState([]);
+  // Cross-entity joins (enrichment/lookup/aggregate). Each exposes @join.<alias>.<as> fields.
+  const [joins, setJoins] = useState([]);
   const [expandedMapping, setExpandedMapping] = useState(-1);
   const [srcSearch, setSrcSearch] = useState('');
   const [destSearch, setDestSearch] = useState('');
@@ -966,6 +968,18 @@ export default function WizardPage() {
 
     // Restore the entity group tag.
     setGroupId(fm.groupId || '');
+
+    // Restore cross-entity joins.
+    setJoins(Array.isArray(fm.joins) ? fm.joins : []);
+
+    // Restore field-level encryption config (the wrapped key stays server-side).
+    setEncryptionEnabled(!!fm.encryption?.enabled);
+    setEncryptFields(Array.isArray(fm.encryption?.fields) ? fm.encryption.fields : []);
+    setRevealedKey(null); setRevealMsg('');
+
+    // Restore the SharePoint source list selection so a re-save keeps it and the
+    // server-side run can resolve the list (fixes "List '' not found on this site").
+    if (fm.listId) setSelectedEntity(fm.listId);
 
     // Restore multi-target fan-out (extra targets beyond the primary). The primary target is
     // already represented by the destination config loaded above, so drop it here. A target is
@@ -1608,6 +1622,16 @@ export default function WizardPage() {
         });
       }
 
+      // Cross-entity joins: drop half-filled pull/aggregate rows and incomplete joins so an
+      // in-progress panel never trips the backend's validateJoins (which 400s on bad joins).
+      const joinsOut = joins
+        .map((j) => ({
+          ...j,
+          pull: (j.pull || []).filter((p) => p.column && p.as),
+          aggregate: (j.aggregate || []).filter((a) => a.as && a.fn && (a.fn === 'count' || a.column)),
+        }))
+        .filter((j) => j.alias && j.entity?.ref && j.entity?.keyColumn && j.on?.localField && (j.pull.length || j.aggregate.length));
+
       const body = {
         // Re-saves update the SAME connection instead of creating duplicates as the
         // list/table/mappings change through the wizard.
@@ -1626,6 +1650,11 @@ export default function WizardPage() {
         projectKey: selectedProject || undefined,
         siteUrl: isSpSource(selectedSource) ? srcCreds.siteUrl : (destCreds.siteUrl || undefined),
         listName: srcCreds.listName || destCreds.listName || undefined,
+        // SharePoint SOURCE list (the picked entity id + display name) so the saved
+        // connection knows which list to read on a server-side run — without it the
+        // backend resolves a blank name and fails with "List '' not found on this site".
+        sourceListId: isSpSource(selectedSource) ? (selectedEntity || undefined) : undefined,
+        sourceListName: isSpSource(selectedSource) ? (entities.find((e) => e.id === selectedEntity)?.name || undefined) : undefined,
         // SharePoint Azure creds — stored encrypted with the connection (no env fallback)
         tenantId: srcCreds.tenantId || undefined,
         clientId: srcCreds.clientId || undefined,
@@ -1655,6 +1684,12 @@ export default function WizardPage() {
         ...(hasFanout ? { targets: fanoutTargets } : {}),
         // Entity group tag — only present when the user grouped this connection.
         ...(groupId ? { groupId } : {}),
+        // Cross-entity joins — only present when the user configured at least one complete join.
+        ...(joinsOut.length ? { joins: joinsOut } : {}),
+        // Field-level encryption — the backend generates/wraps the key; we send only
+        // the toggle + which destination columns to encrypt. Sent unconditionally so
+        // turning it OFF clears any prior config server-side.
+        encryption: { enabled: encryptionEnabled, fields: encryptionEnabled ? encryptFields : [] },
       };
       const res = await api.saveConnection(body);
       if (res.ok && res.data?.success) {
@@ -1797,6 +1832,7 @@ export default function WizardPage() {
       setSrcFields(s.srcFields || []);
       setDestFields(s.destFields || []);
       setMappings(s.mappings || []);
+      if (Array.isArray(s.joins)) setJoins(s.joins);
       if (s.fetchResult) setFetchResult(s.fetchResult);
       if (s.fetchStatus) setFetchStatus(s.fetchStatus);
       if (s.matchKey) setMatchKey(s.matchKey);
@@ -1833,7 +1869,7 @@ export default function WizardPage() {
       sessionStorage.setItem(WIZARD_STATE_KEY, JSON.stringify({
         wizardStep, selectedSource, selectedDest, selectedEntity, selectedProject,
         srcCreds, destCreds, srcConnectionData, destConnectionData,
-        srcTestStatus, destTestStatus, srcFields, destFields, mappings,
+        srcTestStatus, destTestStatus, srcFields, destFields, mappings, joins,
         fetchResult, fetchStatus, matchKey, connectionName, dateStart, dateEnd,
         selectedPgTable, createNewTable, newTableName, extraTargets, groupId, activeIntegrationId,
         pushStatus, pushResult, pushError, pushProgress,
@@ -1843,7 +1879,7 @@ export default function WizardPage() {
     hydrated,
     wizardStep, selectedSource, selectedDest, selectedEntity, selectedProject,
     srcCreds, destCreds, srcConnectionData, destConnectionData,
-    srcTestStatus, destTestStatus, srcFields, destFields, mappings,
+    srcTestStatus, destTestStatus, srcFields, destFields, mappings, joins,
     fetchResult, fetchStatus, matchKey, connectionName, dateStart, dateEnd,
     selectedPgTable, createNewTable, newTableName, extraTargets, groupId, activeIntegrationId,
     pushStatus, pushResult, pushError, pushProgress,
@@ -1861,12 +1897,13 @@ export default function WizardPage() {
     setSrcTestStatus('idle'); setDestTestStatus('idle');
     setSrcTestMsg(''); setDestTestMsg('');
     setSelectedEntity(null); setSelectedProject('');
-    setSrcFields([]); setDestFields([]); setMappings([]);
+    setSrcFields([]); setDestFields([]); setMappings([]); setJoins([]);
     setFetchResult(null); setFetchStatus('idle'); setFetchError('');
     setMatchKey(''); setConnectionName(''); setActiveIntegrationId(null);
     setSelectedPgTable(''); setCreateNewTable(false); setNewTableName('');
     setExtraTargets([]); setTargetsPanelOpen(false);
     setGroupId(''); setGroupRunStatus('idle'); setGroupRunResult(null);
+    setEncryptionEnabled(false); setEncryptFields([]); setRevealedKey(null); setRevealMsg('');
     setPushStatus('idle'); setPushResult(null); setPushError(''); setPushProgress(null);
     setWizardStep(1);
   };
@@ -2381,12 +2418,102 @@ export default function WizardPage() {
     });
   }, [mappings]);
 
+  // Synthetic source fields produced by joins (@join.<alias>.<as>) — selectable in mappings
+  // exactly like native source fields. Derived from the joins config, not the source system.
+  const joinFields = useMemo(() =>
+    joins.flatMap((j) =>
+      [...(j.pull || []), ...(j.aggregate || [])]
+        .filter((o) => o.as && j.alias)
+        .map((o) => ({ name: `@join.${j.alias}.${o.as}`, type: 'join' })),
+    ), [joins]);
+  // The field list the mapper picker + rows see: native source fields plus join outputs.
+  const srcFieldsAll = useMemo(() => [...srcFields, ...joinFields], [srcFields, joinFields]);
+
+  // On-demand: a destination table's real column names — powers the Joins panel's column
+  // dropdowns so users pick instead of typing. Returns [] on any miss (panel falls back to
+  // free-text, e.g. for a table that doesn't exist yet). Reuses the same handler the
+  // destination step uses to read columns.
+  const loadDestColumns = useCallback(async (table) => {
+    if (!isDbDest(selectedDest) || !table) return [];
+    const cfg = connectorMeta[selectedDest]?.runtimeConfig;
+    const dbCfg = destConnectionData || destCreds;
+    if (!cfg?.handlers?.columns || !dbCfg.host || !dbCfg.database) return [];
+    const res = await api.call(cfg.handlers.columns, {
+      host: dbCfg.host, port: Number(dbCfg.port) || cfg.defaultPort,
+      database: dbCfg.database, username: dbCfg.username, password: dbCfg.password,
+      schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
+      table,
+    });
+    const cols = res.ok && res.data?.success && res.data.data?.exists ? (res.data.data.columns || []) : [];
+    return cols.map((c) => c.name || c.columnName).filter(Boolean);
+  }, [selectedDest, destConnectionData, destCreds, connectorMeta]);
+
+  // Generic, side-aware discovery for the Joins panel (works for any adapter).
+  // Entities to offer for a side: destination DB tables, or the source's discovered entities/lists.
+  const entitiesForSide = useCallback((side) => (
+    side === 'dest' ? pgTables.map((t) => t.name) : entities.map((e) => e.name).filter(Boolean)
+  ), [pgTables, entities]);
+
+  // Columns of a chosen entity on a side. Dest → DB introspection. Source → the selected entity's
+  // already-loaded fields, else a runtime field-discovery call; unknown → [] (panel falls back to typing).
+  const loadColumnsForSide = useCallback(async (side, entity) => {
+    if (!entity) return [];
+    if (side === 'dest') return loadDestColumns(entity);
+    const selName = entities.find((e) => e.id === selectedEntity)?.name;
+    if (entity === selName) return srcFields.map((f) => f.name);
+    if (isSpSource(selectedSource)) {
+      // Another SharePoint list: discover its columns by the list's id + the site id.
+      const ent = entities.find((e) => e.name === entity || e.id === entity);
+      const siteId = srcConnectionData?.siteId;
+      if (ent?.id && siteId) {
+        const res = await api.call('/api/hub/sp-list-fields', {
+          siteId, listId: ent.id,
+          tenantId: srcCreds.tenantId, clientId: srcCreds.clientId, clientSecret: srcCreds.clientSecret,
+        });
+        if (res.ok && res.data?.success) return (res.data.data?.fields || []).map((f) => f.name).filter(Boolean);
+      }
+      return [];
+    }
+    if (isRuntimeSource(selectedSource)) {
+      const meta = connectorMeta[selectedSource];
+      const res = await runtimeClient.discoverFields(meta?.connectorId, meta?.latestVersionId, srcCreds, entity);
+      if (res.ok && res.data?.success) return (res.data.data || []).map((f) => f.name).filter(Boolean);
+    }
+    return [];
+  }, [pgTables, entities, selectedEntity, srcFields, selectedSource, connectorMeta, srcCreds, srcConnectionData, loadDestColumns]);
+
+  // Generic "where does the value live?" options — reflect THIS connection's actual connectors so
+  // the join feature reads naturally for any adapter: PostgreSQL → "table", SharePoint → "list",
+  // Keka/REST/others → "entity". `discover` marks a side whose schema we can list (dest DB today).
+  const nounForConnector = (label) => (isDbDest(label) ? 'table' : isSpSource(label) ? 'list' : 'entity');
+  const joinSides = useMemo(() => [
+    { side: 'dest', label: selectedDest || 'Destination', noun: nounForConnector(selectedDest), discover: isDbDest(selectedDest) },
+    { side: 'source', label: selectedSource || 'Source', noun: nounForConnector(selectedSource), discover: true },
+  ], [selectedSource, selectedDest]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ensure the destination table list exists on the mapping step (it may be empty if a saved
+  // connection was opened straight into step 4) — powers the Joins panel's table dropdown.
+  useEffect(() => {
+    if (wizardStep !== 4 || !isDbDest(selectedDest) || pgTables.length) return;
+    const cfg = connectorMeta[selectedDest]?.runtimeConfig;
+    const dbCfg = destConnectionData || destCreds;
+    if (!cfg?.handlers?.listTables || !dbCfg.host || !dbCfg.database) return;
+    (async () => {
+      const res = await api.call(cfg.handlers.listTables, {
+        host: dbCfg.host, port: Number(dbCfg.port) || cfg.defaultPort,
+        database: dbCfg.database, username: dbCfg.username, password: dbCfg.password,
+        schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
+      });
+      if (res.ok && res.data?.success) setPgTables(res.data.data?.tables || []);
+    })();
+  }, [wizardStep, selectedDest]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Filtered field lists for Step 4 ────────────────────
   const filteredSrc = useMemo(() => {
-    if (!srcSearch) return srcFields;
+    if (!srcSearch) return srcFieldsAll;
     const q = srcSearch.toLowerCase();
-    return srcFields.filter(f => f.name.toLowerCase().includes(q));
-  }, [srcFields, srcSearch]);
+    return srcFieldsAll.filter(f => f.name.toLowerCase().includes(q));
+  }, [srcFieldsAll, srcSearch]);
 
   const filteredDest = useMemo(() => {
     if (!destSearch) return destFields;
@@ -3142,6 +3269,56 @@ export default function WizardPage() {
                   </div>
                 )}
 
+                {mappings.length > 0 && (
+                  <div style={{ margin: '8px 0', padding: '10px 12px', background: 'var(--bg-main)', borderRadius: 6, fontSize: '.8rem' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={encryptionEnabled} onChange={(e) => setEncryptionEnabled(e.target.checked)} />
+                      <span>&#128274; Encrypt sensitive columns before writing to the destination (AES-256-GCM)</span>
+                    </label>
+                    {encryptionEnabled && (
+                      <div style={{ marginTop: 10 }}>
+                        <div style={{ color: 'var(--text-dim)', fontSize: '.74rem', marginBottom: 6 }}>
+                          Choose which destination columns to encrypt. Values are written as ciphertext (<code>synz:v1:gcm:…</code>); the owning application decrypts them with this connection&rsquo;s key. The identity-key column can&rsquo;t be encrypted (it must stay usable for matching).
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                          {mappings.flatMap((m) => m.destinations || []).filter((d, i, a) => d && a.indexOf(d) === i && d !== effectiveKey).map((col) => (
+                            <label key={col} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', background: encryptFields.includes(col) ? 'var(--primary-dim)' : 'transparent' }}>
+                              <input
+                                type="checkbox"
+                                checked={encryptFields.includes(col)}
+                                onChange={(e) => setEncryptFields((prev) => e.target.checked ? [...prev, col] : prev.filter((c) => c !== col))}
+                              />
+                              <span>{col}</span>
+                            </label>
+                          ))}
+                        </div>
+                        {activeIntegrationId ? (
+                          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <button
+                              className="btn btn-outline btn-sm"
+                              onClick={async () => {
+                                setRevealMsg('Revealing…'); setRevealedKey(null);
+                                const res = await api.call(`/api/integrations/${activeIntegrationId}/encryption-key/reveal`, null, 'GET');
+                                if (res.ok && res.data?.success) { setRevealedKey(res.data.data.keyHex); setRevealMsg(''); }
+                                else { setRevealMsg(res.data?.error || 'Save the connection (with encryption on) first, then reveal.'); }
+                              }}
+                            >Reveal decryption key</button>
+                            {revealMsg && <span style={{ color: 'var(--text-dim)', fontSize: '.74rem' }}>{revealMsg}</span>}
+                            {revealedKey && (
+                              <code style={{ background: 'var(--bg-card)', padding: '4px 8px', borderRadius: 4, wordBreak: 'break-all', fontSize: '.72rem' }}>{revealedKey}</code>
+                            )}
+                          </div>
+                        ) : (
+                          <div style={{ marginTop: 8, color: 'var(--text-dim)', fontSize: '.72rem' }}>Save the connection to generate the key — a &ldquo;Reveal decryption key&rdquo; button will appear here.</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <JoinsPanel joins={joins} setJoins={setJoins} srcFields={srcFields} sides={joinSides}
+                  entitiesFor={entitiesForSide} loadColumns={loadColumnsForSide} />
+
                 <div className="mapper-layout">
                   {/* Left: Source fields */}
                   <div className="mapper-col">
@@ -3185,7 +3362,7 @@ export default function WizardPage() {
                           key={m.id}
                           mapping={m}
                           index={i}
-                          srcFields={srcFields}
+                          srcFields={srcFieldsAll}
                           destFields={destFields}
                           allowNewDest={isSpSource(selectedDest) || (isDbDest(selectedDest) && createNewTable)}
                           isKey={!!effectiveKey && (m.destinations || []).includes(effectiveKey)}

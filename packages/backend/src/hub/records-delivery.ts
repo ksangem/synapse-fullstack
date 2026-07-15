@@ -25,7 +25,7 @@ import { db } from '../db/client';
 import { runs, runMessages } from '../db/schema';
 import { getHub } from './init-hub';
 import { hubService, DEFAULT_ORG } from './hub-service';
-import { buildDestination, hasDestinationFactory, type ConnectorBuildSpec } from './connector-registry';
+import { buildDestination, hasDestinationFactory, destinationTargetKey, type ConnectorBuildSpec } from './connector-registry';
 import { createEnvelope, computeChecksum, serializePayload } from './envelope';
 import { H, type ChangeEvent } from './envelope-meta';
 import { HUB_DEMO_INTEGRATION_ID, startRun, finishRun } from './run-recorder';
@@ -76,12 +76,13 @@ export async function publishRecords(input: PublishRecordsInput): Promise<Publis
   const nkColumn = input.naturalKeyColumn ?? '';
   const integrationId = input.integrationId || HUB_DEMO_INTEGRATION_ID;
 
-  // A target identity stable across pushes to the same table/list, so the
-  // destination + subscription registration is reused rather than leaked.
-  const targetKey =
-    `${input.kind}:${input.destTable ?? input.config.pgTable ?? input.config.destTable ?? ''}` +
-    `:${input.config.listName ?? input.config.siteUrl ?? ''}` +
-    `:${input.config.pgHost ?? input.config.host ?? ''}:${input.config.pgDatabase ?? input.config.database ?? ''}`;
+  // A target identity stable across pushes to the same table/list, so the destination +
+  // subscription registration is reused rather than leaked. The fingerprint is supplied by the
+  // destination plug-in (registry) — this generic module must NOT know a connector's config keys.
+  const fingerprintSpec: ConnectorBuildSpec = {
+    connectorId: '', orgId: DEFAULT_ORG, kind: input.kind, config: input.config, creds: {}, integrationId,
+  };
+  const targetKey = `${input.kind}:${destinationTargetKey(fingerprintSpec)}`;
   const id8 = shortHash(targetKey);
   const destinationConnectorId = `wiz-${id8}`;
   const topicBase = `wiz-${id8}`;
@@ -105,10 +106,6 @@ export async function publishRecords(input: PublishRecordsInput): Promise<Publis
     topic: `${topicBase}.records.*`,
     destinationConnectorId,
     transformSteps: [],
-    processingMode: 'serial',
-    workerCount: 1,
-    batchSize: 1,
-    channelCapacity: 100,
   };
   hubService.registry.register(subscription);
 

@@ -62,8 +62,4 @@ export interface Subscription {
   readonly topic: string;
   readonly destinationConnectorId: string;
   readonly transformSteps: readonly string[];
-  readonly processingMode: ProcessingMode;
-  readonly workerCount: number;
-  readonly batchSize: number;
-  readonly channelCapacity: number;
 }

@@ -125,6 +125,9 @@ export async function writeRecordsToDb(opts: {
         const row: Record<string, unknown> = {};
         for (const m of mappings) {
           let v = (rec as Record<string, unknown>)[m.from];
+          // A missing/unmapped value is `undefined`; the mysql2 driver rejects undefined
+          // bind params ("Bind parameters must not contain undefined") — store SQL NULL.
+          if (v === undefined) v = null;
           const t = (m.type || '').toLowerCase();
           const isJson = t === 'json' || t === 'object' || t === 'array';
           // Nested objects/arrays (common in REST/Jira payloads) can't bind to a

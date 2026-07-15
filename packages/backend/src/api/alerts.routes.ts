@@ -2,9 +2,9 @@ import { Router, type Request, type Response } from 'express';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { alerts } from '../db/schema';
+import { DEFAULT_ORG_ID as DEFAULT_ORG } from '../constants';
 
 const router = Router();
-const DEFAULT_ORG = '00000000-0000-0000-0000-000000000001';
 
 // GET /api/alerts — list alerts for the org.
 // Query: ?resolved=false (only open), ?severity=critical

@@ -9,7 +9,8 @@
  * connector-specific parsing inside the plug-in.
  */
 
-import { registerSourceFactory, registerDestinationFactory, type ConnectorBuildSpec } from './connector-registry';
+import { registerSourceFactory, registerDestinationFactory, registerJoinProviderFactory, type ConnectorBuildSpec } from './connector-registry';
+import { buildDbJoinProvider } from '../services/join/DbJoinProvider';
 import { AuthoredConnectorSource } from './authored-source';
 import { JiraSourceConnector } from './jira-source';
 import { SharePointSourceConnector } from '../integrations/sharepoint-source/SharePointSourceConnector';
@@ -53,11 +54,15 @@ function dbConnOf(config: Record<string, unknown>, creds: Record<string, string>
 }
 
 function spCredsOf(cfg: Record<string, unknown>, creds: Record<string, string>): SharePointCredentials {
-  // Azure AD app creds: per-adapter vault creds first, else the app-level env app.
+  // Azure AD app creds: per-adapter vault creds first, then per-connection config. The app-level
+  // ENV app is used ONLY when explicitly opted in (cfg.useEnvApp) — otherwise missing/revoked
+  // per-connection creds must SURFACE (auth fails / validator flags) instead of silently pushing
+  // under a global app identity.
+  const useEnv = !!cfg.useEnvApp;
   return {
-    tenantId: creds.tenantId || str(cfg.tenantId) || str(config.AZURE_TENANT_ID),
-    clientId: creds.clientId || str(cfg.clientId) || str(config.AZURE_CLIENT_ID),
-    clientSecret: creds.clientSecret || str(cfg.clientSecret) || str(config.AZURE_CLIENT_SECRET),
+    tenantId: creds.tenantId || str(cfg.tenantId) || (useEnv ? str(config.AZURE_TENANT_ID) : ''),
+    clientId: creds.clientId || str(cfg.clientId) || (useEnv ? str(config.AZURE_CLIENT_ID) : ''),
+    clientSecret: creds.clientSecret || str(cfg.clientSecret) || (useEnv ? str(config.AZURE_CLIENT_SECRET) : ''),
     siteUrl: str(cfg.siteUrl || creds.siteUrl),
     listName: str(cfg.listName || cfg.destListName),
   };
@@ -92,7 +97,7 @@ export function registerBuiltinConnectors(): void {
       new JiraSourceConnector({
         connectorId: s.connectorId,
         orgId: s.orgId,
-        projectKey: str(s.config.projectKey || s.config.jiraProject || 'AIP'),
+        projectKey: str(s.config.projectKey || s.config.jiraProject),
         limit: Number(s.config.limit) || 1000,
         dateFrom: str(s.config.dateFrom) || undefined,
         dateTo: str(s.config.dateTo) || undefined,
@@ -107,8 +112,11 @@ export function registerBuiltinConnectors(): void {
     let siteId = str(s.config.siteId);
     let listId = str(s.config.listId);
     if (!siteId || !listId) {
+      // Pass whatever we already know as overrides so resolveIds only fills the gaps.
+      // Critically, a known listId skips the by-NAME lookup — otherwise an empty
+      // listName would query `displayName eq ''` and throw "List '' not found".
       const push = new SharePointPushService();
-      const ids = await push.resolveIds(creds);
+      const ids = await push.resolveIds(creds, siteId || undefined, listId || undefined);
       siteId = siteId || ids.siteId;
       listId = listId || ids.listId;
     }
@@ -116,7 +124,7 @@ export function registerBuiltinConnectors(): void {
     const source = new SharePointSourceConnector(
       s.connectorId,
       s.orgId,
-      { siteId, listId, triggerMode: 'delta', pollIntervalSec: 0, tenantId: creds.tenantId, clientId: creds.clientId, clientSecret: creds.clientSecret },
+      { siteId, listId, triggerMode: 'delta', pollIntervalSec: 0, tenantId: creds.tenantId, clientId: creds.clientId, clientSecret: creds.clientSecret, fullRead: Boolean(s.config.fullRead) },
       slug,
       s.sourceKey,
     );
@@ -156,6 +164,13 @@ export function registerBuiltinConnectors(): void {
       if (!str(s.config.pgTable || s.config.destTable)) problems.push('Destination table is not set.');
       return problems;
     },
+  );
+
+  // Cross-entity JOIN provider for DB destinations — resolves `side:"dest"` joins
+  // (incl. the FK-lookup name→id case) by SELECTing the joined table from the SAME
+  // destination database. Reuses the exact engine/conn parsing as the DB destination.
+  registerJoinProviderFactory('database', (s: ConnectorBuildSpec, joins) =>
+    buildDbJoinProvider(joins, dbEngineOf(s.config), dbConnOf(s.config, s.creds)),
   );
 
   registerDestinationFactory('sharepoint', (s: ConnectorBuildSpec) =>

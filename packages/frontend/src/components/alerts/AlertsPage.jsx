@@ -57,17 +57,6 @@ function AlertDetailContent({ alert, showToast, navigate }) {
         </>
       )}
 
-      <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
-        {!alert.resolved && (
-          <>
-            <button className="btn btn-primary btn-sm" onClick={() => showToast('Credential re-authorization started')}>Re-authorize Credential</button>
-            <button className="btn btn-outline btn-sm" onClick={() => showToast('Retrying queued messages')}>Retry Queued</button>
-            <button className="btn btn-danger btn-sm" onClick={() => showToast('Support ticket created for ' + alert.adapter)}>Create Ticket</button>
-            <button className="btn btn-outline btn-sm" onClick={() => showToast('Escalated to designer')}>Escalate to Designer</button>
-          </>
-        )}
-        <button className="btn btn-ghost btn-sm" onClick={() => showToast('Alert suppressed')}>Suppress</button>
-      </div>
     </>
   );
 }

@@ -17,7 +17,6 @@ export default function RegistryPage() {
   // ── Real data (T-07): load integrations from the backend ──
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [usingSample, setUsingSample] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -28,7 +27,6 @@ export default function RegistryPage() {
       if (!res.ok) showToast(res.data?.error || 'Could not load integrations');
       const rows = (res.ok && Array.isArray(res.data?.data)) ? res.data.data : [];
       setCards(rows.map(mapToCard));
-      setUsingSample(false);
       setLoading(false);
     })();
     return () => { alive = false; };
@@ -187,8 +185,7 @@ export default function RegistryPage() {
           <div className="page-title">Integration Registry</div>
           <div className="page-subtitle">
             All deployed adapters and integrations
-            {usingSample && <span className="badge badge-warning" style={{ marginLeft: 8 }}>Sample data</span>}
-            {!usingSample && !loading && <span className="badge badge-success" style={{ marginLeft: 8 }}>Live</span>}
+            {!loading && <span className="badge badge-success" style={{ marginLeft: 8 }}>Live</span>}
           </div>
         </div>
         <button className="btn btn-primary btn-sm" onClick={() => navigate('/wizard')}>+ New Integration</button>

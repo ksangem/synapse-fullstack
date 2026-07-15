@@ -4,6 +4,7 @@
 
 export const PRESET_TRANSFORMS = [
   { value: 'dateFormat', label: 'Date Format (YYYY-MM-DD)', desc: 'Extracts date portion' },
+  { value: 'toDate', label: 'Year/Partial → Date (YYYY-MM-DD)', desc: 'Year "2026" → 2026-01-01; junk → empty. For SQL date columns.' },
   { value: 'uppercase', label: 'Uppercase', desc: 'Converts text to UPPER CASE' },
   { value: 'lowercase', label: 'Lowercase', desc: 'Converts text to lower case' },
   { value: 'trim', label: 'Trim Whitespace', desc: 'Removes leading/trailing spaces' },
@@ -26,10 +27,20 @@ export function typesCompatible(srcType, destType) {
   return false;
 }
 
+// Year / partial date / ISO datetime → SQL "YYYY-MM-DD"; unparseable → '' (NULL).
+// "2026" → "2026-01-01"; "2026-05" → "2026-05-01"; "AM Ignored" → ''.
+export function toSqlDate(value) {
+  if (value === null || value === undefined) return '';
+  const m = String(value).trim().match(/^(\d{4})(?:-(\d{1,2}))?(?:-(\d{1,2}))?/);
+  if (!m) return '';
+  return `${m[1]}-${(m[2] ?? '1').padStart(2, '0')}-${(m[3] ?? '1').padStart(2, '0')}`;
+}
+
 export function runPresetTransform(preset, value) {
   if (value === null || value === undefined) return '';
   switch (preset) {
     case 'dateFormat': return typeof value === 'string' ? value.substring(0, 10) : String(value);
+    case 'toDate': return toSqlDate(value);
     case 'uppercase': return String(value).toUpperCase();
     case 'lowercase': return String(value).toLowerCase();
     case 'trim': return String(value).trim();
@@ -78,50 +89,6 @@ export function generateExpression(sources, srcTypes, destinations, destTypes) {
   if (srcType0 === 'datetime' && destType0 === 'date') return `return (source['${src0}'] || '').substring(0, 10);`;
   if (destType0 === 'boolean') return `return Boolean(source['${src0}']);`;
   return `return source['${src0}'];`;
-}
-
-/** Deterministic client-side auto-map (used as a fallback / offline). */
-export function autoMapFields(srcFields, destFields) {
-  const mappings = [];
-  const usedDest = new Set();
-  const normalise = (n) => n.toLowerCase().replace(/[^a-z0-9]/g, '');
-  let seq = 0;
-  const make = (sf, df) => {
-    const compat = typesCompatible(sf.type, df.type) && sf.type !== 'object' && sf.type !== 'array' && !sf.name.includes('.');
-    mappings.push({
-      id: `m${seq}-${++seq}`,
-      sources: [sf.name], destinations: [df.name],
-      srcTypes: [sf.type], destTypes: [df.type],
-      transform: compat ? 'DIRECT' : 'EXPRESSION', preset: null,
-      expression: compat ? '' : generateExpression([sf.name], [sf.type], [df.name], [df.type]),
-      confidence: 0.9,
-    });
-    usedDest.add(df.name);
-  };
-  for (const sf of srcFields) {
-    const sn = normalise(sf.name);
-    const df = destFields.find((f) => !usedDest.has(f.name) && (normalise(f.name) === sn || normalise(f.displayName || f.name) === sn));
-    if (df) make(sf, df);
-  }
-  const semanticMap = [
-    [['key'], ['IssueKey', 'ExternalId']],
-    [['summary'], ['Title', 'Summary']],
-    [['status.name', 'status'], ['Status', 'StatusName']],
-    [['priority.name', 'priority'], ['Priority']],
-    [['assignee.displayName', 'assignee'], ['Assignee', 'AssigneeName', 'AssignedTo']],
-    [['reporter.displayName', 'reporter'], ['Reporter']],
-    [['issuetype.name', 'issuetype'], ['IssueType']],
-    [['created'], ['CreatedDate', 'JiraCreated']],
-    [['updated'], ['UpdatedDate', 'JiraUpdated', 'ModifiedDate']],
-    [['labels'], ['Labels', 'Tags']],
-  ];
-  for (const [srcNames, destNames] of semanticMap) {
-    const sf = srcFields.find((f) => srcNames.includes(f.name));
-    if (!sf || mappings.some((m) => m.sources.includes(sf.name))) continue;
-    const df = destFields.find((f) => !usedDest.has(f.name) && destNames.some((dn) => dn === f.name || dn.toLowerCase() === (f.displayName || '').toLowerCase()));
-    if (df) make(sf, df);
-  }
-  return mappings;
 }
 
 /** Build a small sample source object for live preview. */

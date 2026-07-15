@@ -12,7 +12,9 @@
  * call. Keep this the single source of truth for those paths.
  */
 
-export const DEFAULT_ORG = '00000000-0000-0000-0000-000000000001';
+import { DEFAULT_ORG_ID } from '../constants';
+
+export const DEFAULT_ORG = DEFAULT_ORG_ID;
 // Default seeded admin user — the actor attributed to requests until real auth (§7.8)
 // lands. Used by the actor middleware fallback and as the audit_log.user_id FK target.
 export const DEFAULT_USER_ID = '00000000-0000-0000-0000-0000000000a1';

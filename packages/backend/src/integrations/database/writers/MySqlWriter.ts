@@ -207,6 +207,14 @@ export class MySqlWriter implements IDbWriter {
     };
   }
 
+  async loadRows(schema: string, table: string, columns: string[]): Promise<Record<string, unknown>[]> {
+    this.ensureConnected();
+    const cols = columns.length ? columns.map((c) => `\`${c}\``).join(', ') : '*';
+    const qualifiedTable = schema ? `\`${schema}\`.\`${table}\`` : `\`${table}\``;
+    const [rows] = (await this.pool!.query(`SELECT ${cols} FROM ${qualifiedTable}`)) as unknown as [Record<string, unknown>[]];
+    return rows;
+  }
+
   async applyDdl(statements: string[]): Promise<void> {
     this.ensureConnected();
 

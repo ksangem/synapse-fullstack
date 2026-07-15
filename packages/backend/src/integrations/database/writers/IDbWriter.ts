@@ -42,6 +42,14 @@ export interface IDbWriter {
   introspect(schema: string, table: string): Promise<IntrospectResult>;
 
   /**
+   * Read-only bulk SELECT of the given columns from a table (or all columns when
+   * `columns` is empty). Returns the raw rows; grouping/indexing by a join key is
+   * the caller's job (the entity-join provider). Used ONLY by cross-entity
+   * join/lookup enrichment — never by the write path.
+   */
+  loadRows(schema: string, table: string, columns: string[]): Promise<Record<string, unknown>[]>;
+
+  /**
    * Execute raw DDL (ALTER TABLE, etc.) within a transaction.
    */
   applyDdl(statements: string[]): Promise<void>;

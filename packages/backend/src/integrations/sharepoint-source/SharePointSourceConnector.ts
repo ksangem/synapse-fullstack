@@ -65,21 +65,27 @@ export class SharePointSourceConnector implements ISourceConnector {
       this.columnTypes = await this.reader.buildColumnTypeMap();
     }
 
-    // Get saved delta cursor (treat an empty/reset value as "no cursor").
-    const deltaLink = (this.getCursor ? await this.getCursor() : null) || undefined;
-
-    // Fetch delta. A saved cursor can go stale (Graph returns 404 itemNotFound);
-    // recover by resetting and doing a fresh full sync rather than failing the run.
     let result;
-    try {
-      result = await this.reader.fetchDelta(deltaLink);
-    } catch (err) {
-      const msg = (err as Error).message ?? '';
-      if (deltaLink && /\b404\b|itemNotFound/i.test(msg)) {
-        if (this.saveCursor) await this.saveCursor('');
-        result = await this.reader.fetchDelta(undefined);
-      } else {
-        throw err;
+    if (this.config.fullRead) {
+      // Full snapshot (reference read, e.g. a cross-entity join): read the whole list via the
+      // non-delta endpoint, no cursor. Avoids the Graph delta-pagination bug on multi-page lists.
+      result = await this.reader.fetchAll();
+    } else {
+      // Get saved delta cursor (treat an empty/reset value as "no cursor").
+      const deltaLink = (this.getCursor ? await this.getCursor() : null) || undefined;
+
+      // Fetch delta. A saved cursor can go stale (Graph returns 404 itemNotFound);
+      // recover by resetting and doing a fresh full sync rather than failing the run.
+      try {
+        result = await this.reader.fetchDelta(deltaLink);
+      } catch (err) {
+        const msg = (err as Error).message ?? '';
+        if (deltaLink && /\b404\b|itemNotFound/i.test(msg)) {
+          if (this.saveCursor) await this.saveCursor('');
+          result = await this.reader.fetchDelta(undefined);
+        } else {
+          throw err;
+        }
       }
     }
 

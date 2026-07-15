@@ -212,6 +212,13 @@ export class PostgresWriter implements IDbWriter {
     };
   }
 
+  async loadRows(schema: string, table: string, columns: string[]): Promise<Record<string, unknown>[]> {
+    this.ensureConnected();
+    const cols = columns.length ? columns.map((c) => `"${c}"`).join(', ') : '*';
+    const result = await this.pool!.query(`SELECT ${cols} FROM "${schema}"."${table}"`);
+    return result.rows as Record<string, unknown>[];
+  }
+
   async applyDdl(statements: string[]): Promise<void> {
     this.ensureConnected();
 

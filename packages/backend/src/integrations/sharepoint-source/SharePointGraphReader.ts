@@ -72,6 +72,34 @@ export class SharePointGraphReader {
   }
 
   /**
+   * Fetch the FULL current list via the regular (non-delta) items endpoint, following
+   * $skiptoken pagination. Used for reference reads (e.g. cross-entity joins) that need every
+   * row — and which must avoid the Graph delta-pagination bug ("nextLink value without skip or
+   * skiptoken") that /items/delta hits on multi-page lists.
+   */
+  async fetchAll(): Promise<SpDeltaResult> {
+    const token = await this.ensureToken();
+    const allItems: RawSpItem[] = [];
+    let url: string | undefined =
+      `${GRAPH_BASE}/sites/${this.config.siteId}/lists/${this.config.listId}/items?$expand=fields&$top=500`;
+
+    while (url) {
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Graph list query failed (${response.status}): ${text.substring(0, 500)}`);
+      }
+      const data = (await response.json()) as SpDeltaResponse;
+      allItems.push(...(data.value || []));
+      url = data['@odata.nextLink'];
+    }
+
+    return { items: allItems, deltaLink: '', hasMore: false };
+  }
+
+  /**
    * Discover all column definitions from a SharePoint list.
    * Used at studio-time for schema introspection.
    */

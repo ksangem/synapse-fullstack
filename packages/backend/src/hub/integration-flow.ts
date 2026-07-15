@@ -16,8 +16,13 @@ import { integrations } from '../db/schema';
 import { connectorService } from '../services/ConnectorService';
 import { hubService } from './hub-service';
 import { resolveCredentials } from './credentials';
-import { buildSource, buildDestination, hasSourceFactory, hasDestinationFactory, sourceTopicPrefix, type ConnectorBuildSpec } from './connector-registry';
+import { buildSource, buildDestination, hasSourceFactory, hasDestinationFactory, hasJoinProviderFactory, buildJoinProvider, sourceTopicPrefix, type ConnectorBuildSpec } from './connector-registry';
 import { FieldMappingStep } from './field-mapping-step';
+import { FieldEncryptionStep } from './field-encryption-step';
+import { EntityJoinStep, type JoinSpec, type EntityIndexProvider } from './entity-join-step';
+import { buildSourceJoinProvider } from '../services/join/SourceJoinProvider';
+import { CompositeJoinProvider } from '../services/join/CompositeJoinProvider';
+import { CredentialService } from '../services/CredentialService';
 import { normalizeTargets, mappingsForTarget } from './integration-targets';
 import type { MappingEntry } from '../services/MappingEngine';
 import type { TransformPipeline } from './transform-pipeline';
@@ -130,6 +135,44 @@ export async function registerIntegrationFlow(
     // table + natural key on the envelope headers for the destination to upsert by).
     const transformSteps: string[] = [];
     if (targetMappings.length) {
+      // Cross-entity JOIN enrichment — runs FIRST (before mapping) so mappings can read
+      // the pulled/aggregated `@join.<alias>.*` columns as if native. Purely additive:
+      // wired only when the connection declares `joins` AND the destination kind supplies
+      // a join provider. The step itself is a generic ITransformStep; the DB reach-back
+      // lives in the injected provider, so the bus stays connector-agnostic.
+      const joins = (integration.fieldMappings as Record<string, unknown> | null)?.joins as JoinSpec[] | undefined;
+      if (Array.isArray(joins) && joins.length) {
+        // Compose one provider per side: dest joins resolve against the destination DB
+        // (registry factory), source joins by reading another source entity. The step gets
+        // the full ordered joins list; the composite routes each by `entity.side`.
+        const destJoins = joins.filter((j) => j?.entity?.side === 'dest');
+        const srcJoins = joins.filter((j) => j?.entity?.side === 'source');
+        const bySide: { source?: EntityIndexProvider; dest?: EntityIndexProvider } = {};
+        if (destJoins.length && hasJoinProviderFactory(destHead.runtimeKind ?? '')) {
+          bySide.dest = await buildJoinProvider(destSpec, destJoins);
+        }
+        if (srcJoins.length) {
+          const srcCreds = await resolveCredentials((config.srcCredId as string) ?? (config.sourceCredId as string) ?? (config.credId as string) ?? undefined);
+          const sourceSpec: ConnectorBuildSpec = {
+            connectorId: srcHead.connectorId,
+            orgId: integration.orgId,
+            kind: srcHead.runtimeKind ?? '',
+            config,
+            creds: srcCreds,
+            entity: (config.sourceEntity as string) ?? (config.entity as string) ?? undefined,
+            sourceKey,
+            integrationId: integration.integrationId,
+          };
+          bySide.source = buildSourceJoinProvider(sourceSpec);
+        }
+        if (bySide.dest || bySide.source) {
+          const provider = new CompositeJoinProvider(bySide);
+          const joinStepId = `join-${integration.integrationId}-${t.targetId}`;
+          pipeline.register(new EntityJoinStep({ stepId: joinStepId, joins, provider }));
+          transformSteps.push(joinStepId);
+        }
+      }
+
       const stepId = `map-${integration.integrationId}-${t.targetId}`;
       pipeline.register(
         new FieldMappingStep({
@@ -140,6 +183,34 @@ export async function registerIntegrationFlow(
         }),
       );
       transformSteps.push(stepId);
+
+      // Optional field-level encryption — runs immediately after mapping and
+      // before the destination write. Only wired when the connection carries an
+      // `encryption` block; connections without one are completely unchanged.
+      const enc = (integration.fieldMappings as Record<string, unknown> | null)?.encryption as
+        | { enabled?: boolean; fields?: string[]; wrappedDek?: string; keyId?: string }
+        | undefined;
+      if (enc?.enabled && Array.isArray(enc.fields) && enc.fields.length && enc.wrappedDek) {
+        try {
+          // Unwrap the per-connection data key (DEK) with the master key (KEK).
+          const dekHex = new CredentialService().decrypt(enc.wrappedDek);
+          const encStepId = `encrypt-${integration.integrationId}-${t.targetId}`;
+          pipeline.register(
+            new FieldEncryptionStep({
+              stepId: encStepId,
+              fields: enc.fields,
+              dekHex,
+              keyId: enc.keyId || 'k1',
+            }),
+          );
+          transformSteps.push(encStepId);
+        } catch (err) {
+          // Fail safe: if the DEK can't be unwrapped, skip encryption wiring rather
+          // than writing plaintext silently — surface it and drop the target below.
+          console.error(`[Hub] encryption wiring failed for ${integration.integrationId}/${t.targetId}:`, (err as Error).message);
+          continue;
+        }
+      }
     }
 
     const subId = `intg-${integration.integrationId}-${t.targetId}`;
@@ -150,10 +221,6 @@ export async function registerIntegrationFlow(
       topic,
       destinationConnectorId: syntheticId,
       transformSteps,
-      processingMode: 'serial',
-      workerCount: 1,
-      batchSize: 1,
-      channelCapacity: 100,
     });
     subscriptions.push(`${subId}: ${topic} → ${destHead.runtimeKind}/${t.targetId}`);
   }
@@ -169,7 +236,7 @@ export async function buildIntegrationSource(integration: Integration): Promise<
   if (!srcHead || !hasSourceFactory(srcHead.runtimeKind ?? '')) return null;
 
   const config = (integration.fieldMappings ?? {}) as Record<string, unknown>;
-  const creds = await resolveCredentials((config.srcCredId as string) ?? (config.sourceCredId as string) ?? undefined);
+  const creds = await resolveCredentials((config.srcCredId as string) ?? (config.sourceCredId as string) ?? (config.credId as string) ?? undefined);
   return buildSource({
     connectorId: srcHead.connectorId,
     orgId: integration.orgId,

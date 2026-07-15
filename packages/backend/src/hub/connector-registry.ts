@@ -13,6 +13,7 @@
  */
 
 import type { ISourceConnector, IDestinationConnector } from './interfaces';
+import type { EntityIndexProvider, JoinSpec } from './entity-join-step';
 
 export interface ConnectorBuildSpec {
   /** connectors.connector_id (UUID) — also the registration key on the bus. */
@@ -58,12 +59,21 @@ export type DestinationTargetKey = (spec: ConnectorBuildSpec) => string;
  * supplied so the core never knows a connector's required config keys.
  */
 export type DestinationValidate = (spec: ConnectorBuildSpec) => string[];
+/**
+ * Builds the EntityIndexProvider that resolves a connection's cross-entity joins for a
+ * given destination kind — e.g. the DB plug-in returns a provider that SELECTs the joined
+ * table from the destination database. Plug-in supplied so the core (and the flow builder)
+ * never knows how a particular connector reaches its reference data. Only invoked when a
+ * connection actually declares `joins`.
+ */
+export type JoinProviderFactory = (spec: ConnectorBuildSpec, joins: JoinSpec[]) => EntityIndexProvider | Promise<EntityIndexProvider>;
 
 interface SourceEntry { factory: SourceFactory; topicPrefix?: SourceTopicPrefix }
 interface DestinationEntry { factory: DestinationFactory; targetKey?: DestinationTargetKey; validate?: DestinationValidate }
 
 const sourceFactories = new Map<string, SourceEntry>();
 const destinationFactories = new Map<string, DestinationEntry>();
+const joinProviderFactories = new Map<string, JoinProviderFactory>();
 
 export function registerSourceFactory(kind: string, factory: SourceFactory, topicPrefix?: SourceTopicPrefix): void {
   sourceFactories.set(kind, { factory, topicPrefix });
@@ -114,6 +124,21 @@ export function buildDestination(spec: ConnectorBuildSpec): IDestinationConnecto
   const entry = destinationFactories.get(spec.kind);
   if (!entry) throw new Error(`No destination connector registered for kind "${spec.kind}"`);
   return entry.factory(spec);
+}
+
+export function registerJoinProviderFactory(kind: string, factory: JoinProviderFactory): void {
+  joinProviderFactories.set(kind, factory);
+}
+
+export function hasJoinProviderFactory(kind: string): boolean {
+  return joinProviderFactories.has(kind);
+}
+
+/** Build the cross-entity join provider for a destination spec + its declared joins. */
+export function buildJoinProvider(spec: ConnectorBuildSpec, joins: JoinSpec[]): EntityIndexProvider | Promise<EntityIndexProvider> {
+  const factory = joinProviderFactories.get(spec.kind);
+  if (!factory) throw new Error(`No join provider registered for kind "${spec.kind}"`);
+  return factory(spec, joins);
 }
 
 export function hasSourceFactory(kind: string): boolean {

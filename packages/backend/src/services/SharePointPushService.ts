@@ -409,6 +409,22 @@ export class SharePointPushService {
   }
 
   /**
+   * Resolve a list's DISPLAY NAME from its id. Used when a connection only has a
+   * listId (e.g. recovered from push history) but a downstream path targets by name
+   * — notably the bus SharePoint destination, so a name-less connection can still be
+   * delivered through the bus instead of falling back to a direct write.
+   */
+  async getListName(siteId: string, listId: string, token: string): Promise<string> {
+    const r = await graphFetch(`${GRAPH_BASE}/sites/${siteId}/lists/${listId}?$select=displayName`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) throw new Error(`Failed to resolve list name for ${listId} (${r.status})`);
+    const d = await r.json() as { displayName?: string };
+    if (!d.displayName) throw new Error(`List ${listId} has no displayName`);
+    return d.displayName;
+  }
+
+  /**
    * Like resolveIds, but CREATES the destination list if it doesn't exist yet (used by
    * the bus dispatch path, where the operator-named list may not be provisioned).
    */

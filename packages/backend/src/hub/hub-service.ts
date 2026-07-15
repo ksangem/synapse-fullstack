@@ -20,7 +20,9 @@ import { DlqReplayService } from './dlq-replay-service';
 import type { TransformPipeline } from './transform-pipeline';
 import type { IDestinationConnector, MessageEnvelope } from './interfaces';
 
-export const DEFAULT_ORG = '00000000-0000-0000-0000-000000000001';
+import { DEFAULT_ORG_ID } from '../constants';
+
+export const DEFAULT_ORG = DEFAULT_ORG_ID;
 
 class HubService {
   readonly registry = new SubscriptionRegistry();
