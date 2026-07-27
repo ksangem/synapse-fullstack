@@ -351,7 +351,33 @@ input:focus,select:focus,textarea:focus{border-color:var(--primary)}
    box, so align-items:center lands it dead centre in any font. */
 .dp-close{background:none;border:none;color:var(--text-secondary);line-height:1;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:pointer;transition:var(--t-interactive)}
 .dp-close:hover{background:var(--bg-card-hover);color:var(--text)}
-.detail-pane-body{flex:1;overflow-y:auto;padding:20px}
+.detail-pane-body{flex:1;overflow-y:auto;overflow-x:hidden;padding:20px;min-width:0}
+
+/* ── Detail-pane tables ──────────────────────────────────────────────────
+   The pane is a fixed 420px column, but the global `td` rule is nowrap, so any
+   long cell (a `mappings` JSON blob, a full date-time stamp) pushed the table
+   wider than the pane and the overflow ran off the right of the SCREEN — the
+   pane only scrolled vertically. Wide content now scrolls inside its own box. */
+.dp-table-wrap{overflow-x:auto;max-width:100%}
+.dp-table{width:100%}
+/* Overriding the global nowrap is the actual fix — cells wrap and the table stays
+   inside the pane, instead of growing until it leaves the viewport. */
+.dp-table th,.dp-table td{padding:8px 10px;vertical-align:top;white-space:normal}
+/* Only the key/value table pins its columns; the runs table auto-sizes, since
+   fixed layout would hand Records/Type/Status the same width as the stamp. */
+.dp-table--kv{table-layout:fixed}
+.dp-key{width:38%;word-break:break-word}
+
+/* The value box the long JSON lives in: wraps instead of widening, and scrolls
+   vertically once it passes a few lines. */
+.dp-value{max-height:150px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+  font-size:var(--fs-sm);line-height:var(--lh-normal)}
+.dp-value.is-json{font-family:var(--font-mono);font-size:var(--fs-xs);
+  background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px}
+
+/* Date over time, so the stamp stops being the widest column in the table. */
+.dp-stamp{display:flex;flex-direction:column;line-height:var(--lh-tight)}
+.dp-stamp-time{font-size:var(--fs-xs);color:var(--text-dim);font-variant-numeric:tabular-nums}
 .detail-pane-breadcrumb{padding:6px 16px;font-size:var(--fs-xs);color:var(--text-dim);border-bottom:1px solid var(--border);background:var(--bg-input)}
 .detail-pane-breadcrumb a{color:var(--primary);cursor:pointer}
 

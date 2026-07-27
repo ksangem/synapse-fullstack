@@ -182,41 +182,64 @@ export default function RegistryPage() {
         </div>
 
         <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-base)', marginBottom: 8 }}>Configuration</div>
-        <table className="mb-16">
-          <thead><tr><th scope="col">Field</th><th scope="col">Value</th></tr></thead>
-          <tbody>
-            {mappingRows.length ? mappingRows.map(([k, v]) => (
-              <tr key={k}>
-                <td>{k}</td>
-                <td>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</td>
-              </tr>
-            )) : (
-              <tr><td colSpan={2}>No field mapping configured.</td></tr>
-            )}
-          </tbody>
-        </table>
+        {/* A value like `mappings` is a long JSON blob. Global `td` is nowrap, so it
+            used to force the table wider than the 420px pane and run off-screen.
+            Each value now wraps and scrolls inside its own fixed-height box. */}
+        <div className="dp-table-wrap mb-16">
+          <table className="dp-table dp-table--kv">
+            <thead><tr><th scope="col">Field</th><th scope="col">Value</th></tr></thead>
+            <tbody>
+              {mappingRows.length ? mappingRows.map(([k, v]) => (
+                <tr key={k}>
+                  <td className="dp-key">{k}</td>
+                  <td>
+                    <div className={`dp-value${typeof v === 'object' ? ' is-json' : ''}`}>
+                      {/* Pretty-printed, so the vertical scroll is actually readable
+                          rather than one endless line. */}
+                      {typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v)}
+                    </div>
+                  </td>
+                </tr>
+              )) : (
+                <tr><td colSpan={2}>No field mapping configured.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
 
         <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-base)', marginBottom: 8 }}>Recent Runs</div>
-        <table>
-          <thead>
-            <tr><th scope="col">Timestamp</th><th scope="col">Records</th><th scope="col">Type</th><th scope="col">Status</th></tr>
-          </thead>
-          <tbody>
-            {pushes.length ? pushes.map((p, i) => {
-              const sc = p.status === 'FAILED' ? 'error' : p.status === 'PARTIAL' ? 'warning' : 'success';
-              return (
-                <tr key={i}>
-                  <td>{p.pushedAt ? new Date(p.pushedAt).toLocaleString() : '—'}</td>
-                  <td>{p.recordCount ?? 0}</td>
-                  <td>{p.pushType || '—'}</td>
-                  <td><span className={`badge badge-${sc}`}>{p.status}</span></td>
-                </tr>
-              );
-            }) : (
-              <tr><td colSpan={4}>No runs recorded yet.</td></tr>
-            )}
-          </tbody>
-        </table>
+        <div className="dp-table-wrap">
+          <table className="dp-table">
+            <thead>
+              <tr><th scope="col">Timestamp</th><th scope="col">Records</th><th scope="col">Type</th><th scope="col">Status</th></tr>
+            </thead>
+            <tbody>
+              {pushes.length ? pushes.map((p, i) => {
+                const sc = p.status === 'FAILED' ? 'error' : p.status === 'PARTIAL' ? 'warning' : 'success';
+                const at = p.pushedAt ? new Date(p.pushedAt) : null;
+                return (
+                  <tr key={i}>
+                    {/* Date over time — one line held the widest cell in the table
+                        and pushed Status out of the pane. */}
+                    <td>
+                      {at ? (
+                        <div className="dp-stamp">
+                          <span>{at.toLocaleDateString()}</span>
+                          <span className="dp-stamp-time">{at.toLocaleTimeString()}</span>
+                        </div>
+                      ) : '—'}
+                    </td>
+                    <td>{p.recordCount ?? 0}</td>
+                    <td>{p.pushType || '—'}</td>
+                    <td><span className={`badge badge-${sc}`}>{p.status}</span></td>
+                  </tr>
+                );
+              }) : (
+                <tr><td colSpan={4}>No runs recorded yet.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
 
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
           <button className="btn btn-ghost btn-sm" onClick={() => handleShowLogs(int)}>&#128196; View Logs</button>

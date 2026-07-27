@@ -43,26 +43,38 @@ function IntegrationDetailContent({ tile }) {
       </div>
 
       <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-base)', marginBottom: 8 }}>Recent Runs</div>
-      <table className="mb-16">
-        <thead>
-          <tr><th scope="col">Timestamp</th><th scope="col">Records</th><th scope="col">Type</th><th scope="col">Status</th></tr>
-        </thead>
-        <tbody>
-          {pushes.length ? pushes.map((p, i) => {
-            const sc = p.status === 'FAILED' ? 'error' : p.status === 'PARTIAL' ? 'warning' : 'success';
-            return (
-              <tr key={i}>
-                <td>{p.pushedAt ? new Date(p.pushedAt).toLocaleString() : '—'}</td>
-                <td>{p.recordCount ?? 0}</td>
-                <td>{p.pushType || '—'}</td>
-                <td><span className={`badge badge-${sc}`}>{p.status}</span></td>
-              </tr>
-            );
-          }) : (
-            <tr><td colSpan={4}>No runs recorded yet.</td></tr>
-          )}
-        </tbody>
-      </table>
+      {/* Same treatment as the Registry pane: a one-line date-time stamp was the
+          widest cell and pushed Status off the edge of the 420px pane. */}
+      <div className="dp-table-wrap mb-16">
+        <table className="dp-table">
+          <thead>
+            <tr><th scope="col">Timestamp</th><th scope="col">Records</th><th scope="col">Type</th><th scope="col">Status</th></tr>
+          </thead>
+          <tbody>
+            {pushes.length ? pushes.map((p, i) => {
+              const sc = p.status === 'FAILED' ? 'error' : p.status === 'PARTIAL' ? 'warning' : 'success';
+              const at = p.pushedAt ? new Date(p.pushedAt) : null;
+              return (
+                <tr key={i}>
+                  <td>
+                    {at ? (
+                      <div className="dp-stamp">
+                        <span>{at.toLocaleDateString()}</span>
+                        <span className="dp-stamp-time">{at.toLocaleTimeString()}</span>
+                      </div>
+                    ) : '—'}
+                  </td>
+                  <td>{p.recordCount ?? 0}</td>
+                  <td>{p.pushType || '—'}</td>
+                  <td><span className={`badge badge-${sc}`}>{p.status}</span></td>
+                </tr>
+              );
+            }) : (
+              <tr><td colSpan={4}>No runs recorded yet.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
       {color === 'red' && pushes[0]?.errorMessage && (
         <>
