@@ -8,13 +8,14 @@
 import type { MessageEnvelope } from './interfaces';
 import type { InboxRepository } from './inbox-repository';
 import { HUB_INTAKE_QUEUE } from './queue-names';
-import { hubIntakeQueue } from '../queues';
+import { getHubIntakeQueue } from '../queues';
 
 const INTAKE_QUEUE_NAME = HUB_INTAKE_QUEUE;
 
 export class IntegrationBus {
   // The shared `hub-intake` producer queue (declared in queues/index.ts, decision #2).
-  private readonly intakeQueue = hubIntakeQueue;
+  // Resolved on access (see queues/index.ts) so constructing a bus doesn't open Redis.
+  private get intakeQueue() { return getHubIntakeQueue(); }
 
   constructor(private readonly inboxRepo: InboxRepository) {}
 

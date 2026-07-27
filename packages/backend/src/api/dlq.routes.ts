@@ -14,8 +14,13 @@ const router = Router();
 router.get('/', async (req: Request, res: Response) => {
   try {
     const limit = Number(req.query.limit) || 50;
-    const data = await hubService.deadLetterRepo.list(limit);
-    res.json({ success: true, data, destinations: hubService.listDestinations() });
+    const [data, counts] = await Promise.all([
+      hubService.deadLetterRepo.list(limit),
+      hubService.deadLetterRepo.counts(),
+    ]);
+    // `counts` is the true queue size; `data` is only the first `limit` rows, so
+    // anything displaying a total must read counts, not data.length.
+    res.json({ success: true, data, counts, destinations: hubService.listDestinations() });
   } catch (err) {
     res.status(500).json({ success: false, error: err instanceof Error ? err.message : 'Unknown error' });
   }

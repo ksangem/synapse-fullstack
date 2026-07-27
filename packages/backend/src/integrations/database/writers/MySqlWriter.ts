@@ -179,7 +179,8 @@ export class MySqlWriter implements IDbWriter {
         NUMERIC_PRECISION,
         NUMERIC_SCALE,
         COLUMN_DEFAULT,
-        ORDINAL_POSITION
+        ORDINAL_POSITION,
+        COLUMN_KEY
       FROM information_schema.columns
       WHERE TABLE_SCHEMA = ?
         AND TABLE_NAME = ?
@@ -197,6 +198,8 @@ export class MySqlWriter implements IDbWriter {
       numericScale: r.NUMERIC_SCALE,
       columnDefault: r.COLUMN_DEFAULT,
       ordinalPosition: r.ORDINAL_POSITION,
+      // MySQL reports key membership in COLUMN_KEY; 'PRI' = part of the PRIMARY KEY.
+      isPrimaryKey: r.COLUMN_KEY === 'PRI',
     }));
 
     return {

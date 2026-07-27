@@ -76,4 +76,12 @@ if (config.NODE_ENV === 'production') {
   if (config.JWT_SECRET === 'dev-insecure-jwt-secret-change-me') {
     throw new Error('JWT_SECRET is unset (dev default) in production. Refusing to start.');
   }
+  // The seed/login passwords default to publicly-known dev values. Left unset in
+  // production they would seed a login anyone can guess, so refuse to start too.
+  if (config.ADMIN_PASSWORD === 'admin12345') {
+    throw new Error('ADMIN_PASSWORD is unset (dev default) in production. Refusing to start.');
+  }
+  if (config.DEMO_USER_PASSWORD === 'demo12345') {
+    throw new Error('DEMO_USER_PASSWORD is unset (dev default) in production. Refusing to start.');
+  }
 }

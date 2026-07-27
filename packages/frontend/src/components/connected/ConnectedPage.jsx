@@ -1,16 +1,21 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import Button from '../ui/Button';
+import Card, { CardEmpty, CardSkeleton } from '../ui/Card';
+import Icon from '../ui/Icon';
+import StatStrip from '../ui/StatStrip';
 import { useToast } from '../../hooks/useToast';
 import { useConfirm } from '../../hooks/useConfirm';
 import { usePolling } from '../../hooks/usePolling';
 import { api } from '../../services/api';
 import { systemIcon } from '../../services/integrationMap';
-import { SkeletonCards } from '../layout/Skeleton';
 import {
-  btnStyle, btnPrimaryStyle, btnDangerStyle, thStyle, tdStyle,
-  overlayStyle, modalStyle, labelStyle, inputStyle, selectStyle,
-  statusColor, statusBadgeClass, fmtDate,
+  overlayStyle, modalStyle, labelStyle, inputStyle, selectStyle, statusBadgeClass, fmtDate,
 } from './styles';
+
+/* My Connections — running integration instances. Adopts the shared design system:
+   StatStrip summary/filter, the Card primitive for each connection, shared filter
+   classes, and Icon buttons. Real data from /api/connected; no mock rows. */
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
@@ -41,10 +46,15 @@ const STATUS_FILTERS = ['all', 'active', 'paused', 'error', 'draft'];
 const ident = (side, fm, key) => side?.name || fm?.[key] || (key === 'sourceType' ? 'Source' : 'Destination');
 const identIcon = (side, fm, key) => side?.icon || systemIcon(side?.name || fm?.[key]);
 
+/** Lifecycle → the Card status rail tone (ok/warn/fail/idle). */
+const toneFor = (lifecycle) => (
+  lifecycle === 'error' ? 'fail' : lifecycle === 'active' ? 'ok' : 'idle'
+);
+
 /** Tiny dependency-free SVG bar sparkline for the 7-day volume. */
 function Sparkline({ data = [], width = 84, height = 22 }) {
   const counts = data.map((d) => Number(d?.count) || 0);
-  if (counts.length === 0) return <span style={{ fontSize: '.7rem', color: 'var(--text-dim)' }}>—</span>;
+  if (counts.length === 0) return <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>—</span>;
   const max = Math.max(1, ...counts);
   const bw = width / counts.length;
   return (
@@ -80,12 +90,6 @@ function IntegrationCard(props) {
     onTerminal: (syncState) => onSyncTerminal(intg.integrationId, syncState),
   });
 
-  const dotColor = isRunning ? 'var(--info)'
-    : paused ? 'var(--text-dim)'
-    : lifecycle === 'error' ? 'var(--error)'
-    : lifecycle === 'draft' ? 'var(--info)'
-    : 'var(--success)';
-
   const fm = intg.fieldMappings || {};
   const srcName = ident(intg.source, fm, 'sourceType');
   const destName = ident(intg.dest, fm, 'destType');
@@ -93,90 +97,93 @@ function IntegrationCard(props) {
 
   const pushes = pushHistoryCache[intg.integrationId] || intg.recentPushes || [];
   const isExpanded = expandedPushes.has(intg.integrationId);
-  const smallBtn = { ...btnStyle, fontSize: '.74rem', padding: '4px 9px' };
+
+  const eyebrowLabel = isRunning ? 'Syncing…'
+    : paused ? 'Paused'
+    : lifecycle === 'error' ? 'Error'
+    : lifecycle === 'draft' ? 'Draft'
+    : 'Active';
 
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--bg-main)', borderLeft: `3px solid ${dotColor}` }}>
-      {/* Header row */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input type="checkbox" checked={selected} onChange={() => onToggleSelect(intg.integrationId)} style={{ marginTop: 4, accentColor: 'var(--primary)' }} title="Select" />
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
-              <span style={{ width: 10, height: 10, borderRadius: '50%', background: dotColor, display: 'inline-block', flexShrink: 0 }} />
-              <span style={{ fontWeight: 700, fontSize: '.95rem' }}>{intg.name || fm.projectKey || 'Connection'}</span>
-              <span className={`badge ${paused ? 'badge-neutral' : lifecycle === 'error' ? 'badge-error' : lifecycle === 'draft' ? 'badge-info' : 'badge-success'}`}>{lifecycle}</span>
-              <span className="badge badge-neutral" style={{ fontSize: '.66rem' }}>{kind}</span>
-              {isRunning && <span style={{ fontSize: '.72rem', color: 'var(--info)', fontStyle: 'italic' }}>syncing…</span>}
-            </div>
-            <div style={{ fontSize: '.8rem', color: 'var(--text-dim)', marginLeft: 18 }}>
-              <span title={srcName}>{identIcon(intg.source, fm, 'sourceType')} {srcName}</span>
-              {' '}&rarr;{' '}
-              <span title={destName}>{identIcon(intg.dest, fm, 'destType')} {destName}</span>
-              {fm.projectKey ? ` · ${fm.projectKey}` : ''}
-            </div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-          <Sparkline data={intg.volume7d} />
-          <span style={{ fontSize: '.7rem', color: 'var(--text-dim)' }}>
+    <Card
+      status={isRunning ? 'idle' : toneFor(lifecycle)}
+      selected={selected}
+      onSelect={() => onToggleSelect(intg.integrationId)}
+      eyebrow={<span>{eyebrowLabel}</span>}
+      badge={kind}
+      title={intg.name || fm.projectKey || 'Connection'}
+      ariaLabel={`${intg.name || 'Connection'}, ${eyebrowLabel}, ${srcName} to ${destName}`}
+      sub={
+        <>
+          <span className="ucard-node"><span className="ucard-ico" aria-hidden="true">{identIcon(intg.source, fm, 'sourceType')}</span>{srcName}</span>
+          <span className="ucard-arrow" aria-hidden="true">→</span>
+          <span className="ucard-node"><span className="ucard-ico" aria-hidden="true">{identIcon(intg.dest, fm, 'destType')}</span>{destName}</span>
+          {fm.projectKey ? <span className="badge badge-neutral" style={{ marginLeft: 6 }}>{fm.projectKey}</span> : null}
+        </>
+      }
+      foot={
+        <>
+          <span title={intg.lastRun ? new Date(intg.lastRun.at).toLocaleString() : 'Never run'}>
             {intg.lastRun ? `last run ${fmtDate(intg.lastRun.at)} · ${intg.lastRun.status}` : 'never run'}
           </span>
-        </div>
+          <span>{cronLabel(intg.scheduleCron)}</span>
+        </>
+      }
+    >
+      {/* Payload: 7-day volume + details */}
+      <div className="ucard-body" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <Sparkline data={intg.volume7d} />
+        <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>7-day volume</span>
       </div>
 
-      {/* Action row */}
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
-        <button style={{ ...btnPrimaryStyle, fontSize: '.74rem', padding: '4px 10px', opacity: isRunning ? 0.5 : 1, pointerEvents: isRunning ? 'none' : 'auto' }} disabled={isRunning} onClick={() => onRun(intg)}>
-          {kind === 'sync' ? '↻ Sync' : '▶ Run'}
-        </button>
-        {paused
-          ? <button style={smallBtn} onClick={() => onResume(intg)}>Resume</button>
-          : <button style={smallBtn} onClick={() => onPause(intg)}>Pause</button>}
-        <button style={smallBtn} onClick={() => onOpenSchedule(intg)} title="Schedule">&#128339; Schedule</button>
-        <button style={smallBtn} onClick={() => onViewLogs(intg)}>View Logs</button>
-        <button style={smallBtn} onClick={() => onEditMapping(intg)}>Edit Mapping</button>
-        <button style={smallBtn} onClick={() => onClone(intg)}>Clone</button>
-        <button style={{ ...btnDangerStyle, fontSize: '.74rem', padding: '4px 10px' }} onClick={() => onDelete(intg)}>Delete</button>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, marginTop: 10 }}>
+        <div><div style={labelStyle}>Last Synced</div><div style={{ fontSize: 'var(--fs-sm)' }}>{fmtDate(ss.lastSyncedAt)}</div></div>
+        <div><div style={labelStyle}>Date Range</div><div style={{ fontSize: 'var(--fs-sm)' }}>{ss.dateRangeStart || '--'} → {ss.dateRangeEnd || '--'}</div></div>
+        <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Target</div><div style={{ fontSize: 'var(--fs-sm)', wordBreak: 'break-all' }}>{target}</div></div>
       </div>
 
-      {/* Details grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginTop: 12 }}>
-        <div><div style={labelStyle}>Schedule</div><div style={{ fontSize: '.85rem' }}>{cronLabel(intg.scheduleCron)}</div></div>
-        <div><div style={labelStyle}>Last Synced</div><div style={{ fontSize: '.85rem' }}>{fmtDate(ss.lastSyncedAt)}</div></div>
-        <div><div style={labelStyle}>Date Range</div><div style={{ fontSize: '.85rem' }}>{ss.dateRangeStart || '--'} &rarr; {ss.dateRangeEnd || '--'}</div></div>
-        <div><div style={labelStyle}>Target</div><div style={{ fontSize: '.82rem', wordBreak: 'break-all' }}>{target}</div></div>
-      </div>
-
-      {/* Error banner */}
       {ss.syncError && (
-        <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--error-dim)', border: '1px solid var(--error)', borderRadius: 6, fontSize: '.82rem', color: 'var(--error)' }}>
+        <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--error-dim)', border: '1px solid var(--error)', borderRadius: 6, fontSize: 'var(--fs-sm)', color: 'var(--error-on)' }}>
           <strong>Error:</strong> {ss.syncError}
         </div>
       )}
 
+      {/* Operational actions — always visible on this operations page. */}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
+        <button className="btn btn-primary btn-xs" disabled={isRunning} onClick={() => onRun(intg)}>
+          <Icon name={kind === 'sync' ? 'refresh' : 'play'} />{kind === 'sync' ? 'Sync' : 'Run'}
+        </button>
+        {paused
+          ? <button className="btn btn-outline btn-xs" onClick={() => onResume(intg)}><Icon name="play" />Resume</button>
+          : <button className="btn btn-outline btn-xs" onClick={() => onPause(intg)}><Icon name="pause" />Pause</button>}
+        <button className="btn btn-outline btn-xs" onClick={() => onOpenSchedule(intg)} title="Schedule">Schedule</button>
+        <button className="btn btn-outline btn-xs" onClick={() => onViewLogs(intg)}><Icon name="external" />Logs</button>
+        <button className="btn btn-outline btn-xs" onClick={() => onEditMapping(intg)}><Icon name="pencil" />Mapping</button>
+        <button className="btn btn-outline btn-xs" onClick={() => onClone(intg)}><Icon name="copy" />Clone</button>
+        <button className="btn btn-danger-ghost btn-xs" onClick={() => onDelete(intg)}><Icon name="close" />Delete</button>
+      </div>
+
       {/* Push history toggle */}
-      <div style={{ marginTop: 12 }}>
-        <button style={{ ...btnStyle, fontSize: '.78rem', padding: '4px 10px' }} onClick={() => onTogglePushes(intg.integrationId)}>
+      <div style={{ marginTop: 10 }}>
+        <button className="btn btn-ghost btn-xs" onClick={() => onTogglePushes(intg.integrationId)}>
           {isExpanded ? '▼' : '▶'} Push History ({pushes.length})
         </button>
         {isExpanded && pushes.length > 0 && (
           <div className="table-wrap" style={{ marginTop: 8 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <table className="conn-table">
               <thead><tr>
-                <th style={thStyle}>Push ID</th><th style={thStyle}>Type</th><th style={thStyle}>Date Range</th>
-                <th style={thStyle}>Records</th><th style={thStyle}>Status</th><th style={thStyle}>Pushed At</th><th style={thStyle}>Error</th>
+                <th scope="col">Type</th><th scope="col">Date Range</th>
+                <th scope="col">Records</th><th scope="col">Status</th><th scope="col">Pushed At</th><th scope="col">Error</th>
               </tr></thead>
               <tbody>
-                {pushes.map((push) => (
-                  <tr key={push.id}>
-                    <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '.76rem' }}>{push.id}</td>
-                    <td style={tdStyle}><span className={`badge ${push.pushType === 'INITIAL' ? 'badge-primary' : 'badge-info'}`}>{push.pushType}</span></td>
-                    <td style={tdStyle}>{push.dateRangeStart} &rarr; {push.dateRangeEnd}</td>
-                    <td style={tdStyle}>{push.recordCount?.toLocaleString?.() ?? push.recordCount}</td>
-                    <td style={tdStyle}><span className={`badge ${statusBadgeClass(push.status)}`}>{push.status}</span></td>
-                    <td style={{ ...tdStyle, fontSize: '.78rem' }}>{fmtDate(push.pushedAt)}</td>
-                    <td style={{ ...tdStyle, color: 'var(--error)', fontSize: '.78rem' }}>{push.errorMessage || '--'}</td>
+                {pushes.map((push, i) => (
+                  <tr key={push.id || i}>
+                    <td><span className={`badge ${push.pushType === 'INITIAL' ? 'badge-primary' : 'badge-info'}`}>{push.pushType}</span></td>
+                    <td>{push.dateRangeStart} → {push.dateRangeEnd}</td>
+                    <td>{push.recordCount?.toLocaleString?.() ?? push.recordCount}</td>
+                    <td><span className={`badge ${statusBadgeClass(push.status)}`}>{push.status}</span></td>
+                    <td style={{ fontSize: 'var(--fs-sm)' }}>{fmtDate(push.pushedAt)}</td>
+                    <td style={{ color: 'var(--error-on)', fontSize: 'var(--fs-sm)' }}>{push.errorMessage || '--'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -184,10 +191,10 @@ function IntegrationCard(props) {
           </div>
         )}
         {isExpanded && pushes.length === 0 && (
-          <div style={{ marginTop: 8, fontSize: '.82rem', color: 'var(--text-dim)' }}>No push history available.</div>
+          <div style={{ marginTop: 8, fontSize: 'var(--fs-sm)', color: 'var(--text-dim)' }}>No push history available.</div>
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -201,7 +208,6 @@ export default function ConnectedPage() {
 
   const [integrations, setIntegrations] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [expandedClients, setExpandedClients] = useState(new Set());
   const [expandedPushes, setExpandedPushes] = useState(new Set());
   const [pushHistoryCache, setPushHistoryCache] = useState({});
 
@@ -227,35 +233,32 @@ export default function ConnectedPage() {
     const res = await api.getConnected();
     const data = (res.ok && Array.isArray(res.data?.data)) ? res.data.data : [];
     setIntegrations(data);
-    setExpandedClients(new Set(data.map((intg) => intg.fieldMappings?.clientId).filter(Boolean)));
     setLoading(false);
   }, []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- loads data on mount via a reusable async loader (data fetch, not derived-state-in-effect)
   useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
 
-  /* ---- Filter + group ---- */
-  const grouped = useMemo(() => {
+  /* ---- Status counts (StatStrip) ---- */
+  const counts = useMemo(() => integrations.reduce((a, i) => {
+    const s = i.status || 'active'; a[s] = (a[s] || 0) + 1; return a;
+  }, {}), [integrations]);
+
+  /* ---- Search + status filter ---- */
+  const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const filtered = integrations.filter((intg) => {
+    return integrations.filter((intg) => {
       if (statusFilter !== 'all' && (intg.status || 'active') !== statusFilter) return false;
       if (!q) return true;
-      const hay = [intg.name, intg.source?.name, intg.dest?.name, intg.fieldMappings?.sourceType, intg.fieldMappings?.destType]
+      const hay = [intg.name, intg.source?.name, intg.dest?.name,
+        intg.fieldMappings?.sourceType, intg.fieldMappings?.destType]
         .filter(Boolean).join(' ').toLowerCase();
       return hay.includes(q);
     });
-    const map = {};
-    filtered.forEach((intg) => {
-      const cid = intg.fieldMappings?.clientId || 'unknown';
-      if (!map[cid]) map[cid] = { clientName: intg.name, clientId: cid, projects: [] };
-      map[cid].projects.push(intg);
-    });
-    return Object.values(map);
   }, [integrations, search, statusFilter]);
 
-  /* ---- Toggle helpers ---- */
-  const toggleClient = (cid) => setExpandedClients((prev) => {
-    const next = new Set(prev); next.has(cid) ? next.delete(cid) : next.add(cid); return next;
-  });
+  const shownCount = visible.length;
 
+  /* ---- Toggle helpers ---- */
   const togglePushes = useCallback(async (integrationId) => {
     setExpandedPushes((prev) => {
       const next = new Set(prev);
@@ -285,7 +288,7 @@ export default function ConnectedPage() {
   const handleSyncTerminal = useCallback((integrationId, syncState) => {
     const intg = integrations.find((i) => i.integrationId === integrationId);
     const label = intg?.name || intg?.fieldMappings?.projectKey || integrationId;
-    showToast(syncState.syncStatus === 'COMPLETED' ? `Sync completed for ${label}` : `Sync failed for ${label}: ${syncState.syncError || 'Unknown error'}`);
+    showToast(syncState.syncStatus === 'COMPLETED' ? `Sync completed for ${label}` : `Sync failed for ${label}: ${syncState.syncError || 'Unknown error'}`, syncState.syncStatus === 'COMPLETED' ? 'success' : 'error');
     setPushHistoryCache((prev) => ({ ...prev, [integrationId]: undefined }));
     if (expandedPushes.has(integrationId)) {
       api.getPushHistory(integrationId).then((res) => {
@@ -300,35 +303,35 @@ export default function ConnectedPage() {
     runBus(intg);
   };
   const runBus = async (intg) => {
-    showToast(`Running ${intg.name}…`);
+    showToast(`Running ${intg.name}…`, 'info');
     const res = await api.runIntegration(intg.integrationId);
     if (res.ok && res.data?.success !== false) {
       const d = res.data?.data || res.data || {};
-      showToast(`Run published ${d.published ?? d.records ?? 0} record(s) for ${intg.name}`);
+      showToast(`Run published ${d.published ?? d.records ?? 0} record(s) for ${intg.name}`, 'success');
       setTimeout(fetchIntegrations, 1500);
     } else {
-      showToast(res.data?.error || 'Run failed');
+      showToast(res.data?.error || 'Run failed', 'error');
     }
   };
 
   /* ---- Lifecycle actions ---- */
   const handlePause = async (intg) => {
     const res = await api.pauseIntegration(intg.integrationId);
-    if (res.ok) { showToast(`Paused ${intg.name}`); fetchIntegrations(); } else showToast(res.data?.error || 'Pause failed');
+    if (res.ok) { showToast(`Paused ${intg.name}`, 'success'); fetchIntegrations(); } else showToast(res.data?.error || 'Pause failed', 'error');
   };
   const handleResume = async (intg) => {
     const res = await api.resumeIntegration(intg.integrationId);
-    if (res.ok) { showToast(`Resumed ${intg.name}`); fetchIntegrations(); } else showToast(res.data?.error || 'Resume failed');
+    if (res.ok) { showToast(`Resumed ${intg.name}`, 'success'); fetchIntegrations(); } else showToast(res.data?.error || 'Resume failed', 'error');
   };
   const handleClone = async (intg) => {
     const res = await api.cloneIntegration(intg.integrationId);
-    if (res.ok && res.data?.success) { showToast(`Cloned ${intg.name} (draft)`); fetchIntegrations(); } else showToast(res.data?.error || 'Clone failed');
+    if (res.ok && res.data?.success) { showToast(`Cloned ${intg.name} (draft)`, 'success'); fetchIntegrations(); } else showToast(res.data?.error || 'Clone failed', 'error');
   };
   const handleDelete = async (intg) => {
     const ok = await confirm({ title: `Delete "${intg.name}"?`, message: 'This removes the integration and all its runs, history, and (unshared) credentials. This cannot be undone.', danger: true, confirmLabel: 'Delete' });
     if (!ok) return;
     const res = await api.deleteIntegration(intg.integrationId);
-    if (res.ok && res.data?.success) { showToast(`Deleted ${intg.name}`); fetchIntegrations(); } else showToast(res.data?.error || 'Delete failed');
+    if (res.ok && res.data?.success) { showToast(`Deleted ${intg.name}`, 'success'); fetchIntegrations(); } else showToast(res.data?.error || 'Delete failed', 'error');
   };
   const handleViewLogs = async (intg) => {
     const res = await api.getRuns(intg.integrationId);
@@ -341,14 +344,12 @@ export default function ConnectedPage() {
     const ids = [...selected];
     if (ids.length === 0) return;
     const res = await api.bulkConnected(action, ids);
-    if (res.ok && res.data?.success) { showToast(`${action === 'pause' ? 'Paused' : 'Resumed'} ${res.data.data?.updated ?? ids.length}`); setSelected(new Set()); fetchIntegrations(); }
-    else showToast(res.data?.error || (res.status === 403 ? 'Bulk actions require admin' : 'Bulk action failed'));
+    if (res.ok && res.data?.success) { showToast(`${action === 'pause' ? 'Paused' : 'Resumed'} ${res.data.data?.updated ?? ids.length}`, 'success'); setSelected(new Set()); fetchIntegrations(); }
+    else showToast(res.data?.error || (res.status === 403 ? 'Bulk actions require admin' : 'Bulk action failed'), 'error');
   };
-  // Pause/Resume EVERY connection at once (real replacement for the old dashboard
-  // "Pause All / Resume All" stubs) — one confirmed bulk call over all ids.
   const allAction = async (action) => {
     const ids = integrations.map((i) => i.integrationId);
-    if (ids.length === 0) { showToast('No connections'); return; }
+    if (ids.length === 0) { showToast('No connections', 'warning'); return; }
     const ok = await confirm({
       title: `${action === 'pause' ? 'Pause' : 'Resume'} all connections?`,
       message: `This ${action === 'pause' ? 'pauses' : 'resumes'} all ${ids.length} connection(s) and their schedules.`,
@@ -356,12 +357,12 @@ export default function ConnectedPage() {
     });
     if (!ok) return;
     const res = await api.bulkConnected(action, ids);
-    if (res.ok && res.data?.success) { showToast(`${action === 'pause' ? 'Paused' : 'Resumed'} ${res.data.data?.updated ?? ids.length}`); fetchIntegrations(); }
-    else showToast(res.data?.error || (res.status === 403 ? 'Bulk actions require admin' : 'Action failed'));
+    if (res.ok && res.data?.success) { showToast(`${action === 'pause' ? 'Paused' : 'Resumed'} ${res.data.data?.updated ?? ids.length}`, 'success'); fetchIntegrations(); }
+    else showToast(res.data?.error || (res.status === 403 ? 'Bulk actions require admin' : 'Action failed'), 'error');
   };
 
   const exportCsv = () => {
-    if (integrations.length === 0) { showToast('Nothing to export'); return; }
+    if (integrations.length === 0) { showToast('Nothing to export', 'warning'); return; }
     const cols = ['name', 'source', 'dest', 'kind', 'status', 'schedule', 'lastRun', 'lastStatus', 'volume7dTotal'];
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const rows = integrations.map((i) => [
@@ -373,7 +374,7 @@ export default function ConnectedPage() {
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
     const a = document.createElement('a'); a.href = url; a.download = 'my-connections.csv'; a.click();
     URL.revokeObjectURL(url);
-    showToast(`Exported ${integrations.length} connection(s)`);
+    showToast(`Exported ${integrations.length} connection(s)`, 'success');
   };
 
   /* ---- Schedule + sync modals ---- */
@@ -390,15 +391,15 @@ export default function ConnectedPage() {
     setScheduleSaving(true);
     const res = await api.updateSchedule(scheduleModal.integrationId, cron);
     setScheduleSaving(false);
-    if (res.ok) { showToast(`Schedule saved: ${cronLabel(cron)}`); setScheduleModal(null); fetchIntegrations(); }
-    else showToast(res.data?.error || 'Failed to save schedule');
+    if (res.ok) { showToast(`Schedule saved: ${cronLabel(cron)}`, 'success'); setScheduleModal(null); fetchIntegrations(); }
+    else showToast(res.data?.error || 'Failed to save schedule', 'error');
   };
   const clearSchedule = async () => {
     setScheduleSaving(true);
     const res = await api.clearSchedule(scheduleModal.integrationId);
     setScheduleSaving(false);
-    if (res.ok) { showToast('Schedule cleared'); setScheduleModal(null); fetchIntegrations(); }
-    else showToast(res.data?.error || 'Failed to clear schedule');
+    if (res.ok) { showToast('Schedule cleared', 'success'); setScheduleModal(null); fetchIntegrations(); }
+    else showToast(res.data?.error || 'Failed to clear schedule', 'error');
   };
   const openSyncModal = (intg) => {
     setSyncMode('RESYNC_SAME');
@@ -413,80 +414,83 @@ export default function ConnectedPage() {
     const res = await api.triggerSync(intg.integrationId, payload);
     setSyncTriggering(false);
     if (res.ok || res.status === 202) {
-      showToast(`Sync started for ${intg.name}`);
+      showToast(`Sync started for ${intg.name}`, 'info');
       setIntegrations((prev) => prev.map((i) => i.integrationId === intg.integrationId ? { ...i, syncState: { ...i.syncState, syncStatus: 'RUNNING', syncError: null } } : i));
       setSyncModal(null);
-    } else if (res.status === 409) { showToast('Sync already in progress'); setSyncModal(null); }
-    else showToast(res.data?.error || 'Failed to trigger sync');
+    } else if (res.status === 409) { showToast('Sync already in progress', 'warning'); setSyncModal(null); }
+    else showToast(res.data?.error || 'Failed to trigger sync', 'error');
   };
 
   /* ---------------------------------------------------------------- */
-  if (loading) {
-    return (
-      <div className="page active">
-        <div className="page-header">
-          <div>
-            <div className="page-title">My Connections</div>
-            <div className="page-subtitle">Loading…</div>
-          </div>
-        </div>
-        <div className="page-body"><SkeletonCards count={6} /></div>
-      </div>
-    );
-  }
-
-  const chipStyle = (active) => ({ ...btnStyle, fontSize: '.76rem', padding: '4px 12px', background: active ? 'var(--primary)' : 'var(--bg-main)', color: active ? '#fff' : undefined, borderColor: active ? 'var(--primary)' : 'var(--border)' });
-
   return (
     <div className="page active">
       <div className="page-header">
         <div>
-          <div className="page-title">My Connections</div>
-          <div className="page-subtitle">Running integration instances &mdash; status, schedule, and actions</div>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button style={btnStyle} onClick={() => allAction('pause')} disabled={integrations.length === 0}>Pause All</button>
-          <button style={btnStyle} onClick={() => allAction('resume')} disabled={integrations.length === 0}>Resume All</button>
-          <button style={btnStyle} onClick={exportCsv}>Export CSV</button>
-          <button style={btnPrimaryStyle} onClick={() => navigate('/wizard')}>+ New Connection</button>
-        </div>
-      </div>
-
-      <div className="page-body">
-      {/* Filter bar */}
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
-        <input style={{ ...inputStyle, maxWidth: 280 }} placeholder="Search by name or system…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        <div style={{ display: 'flex', gap: 6 }}>
-          {STATUS_FILTERS.map((s) => (
-            <button key={s} style={chipStyle(statusFilter === s)} onClick={() => setStatusFilter(s)}>{s}</button>
-          ))}
-        </div>
-      </div>
-
-      {/* Bulk action bar */}
-      {selected.size > 0 && (
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 14px', marginBottom: 14, background: 'var(--primary-dim)', border: '1px solid var(--primary)', borderRadius: 8 }}>
-          <span style={{ fontSize: '.85rem', fontWeight: 600 }}>{selected.size} selected</span>
-          <button style={btnStyle} onClick={() => bulkAction('pause')}>Pause selected</button>
-          <button style={btnStyle} onClick={() => bulkAction('resume')}>Resume selected</button>
-          <button style={{ ...btnStyle, marginLeft: 'auto' }} onClick={() => setSelected(new Set())}>Clear</button>
-        </div>
-      )}
-
-      {/* Client groups */}
-      {grouped.map((group) => (
-        <div key={group.clientId} className="card" style={{ marginBottom: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', padding: '4px 0' }} onClick={() => toggleClient(group.clientId)}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: '1.1rem', transition: 'transform .2s', transform: expandedClients.has(group.clientId) ? 'rotate(90deg)' : 'rotate(0)' }}>&#9654;</span>
-              <span style={{ fontWeight: 700, fontSize: '1rem' }}>{group.clientName}</span>
-              <span className="badge badge-neutral" style={{ marginLeft: 4 }}>{group.projects.length} connection{group.projects.length !== 1 ? 's' : ''}</span>
-            </div>
-            <span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Client ID: {group.clientId}</span>
+          <h1 className="page-title">My Connections</h1>
+          <div className="page-subtitle">
+            {loading ? 'Loading…' : <>Running integration instances &mdash; {integrations.length} connection{integrations.length === 1 ? '' : 's'}</>}
           </div>
-          {expandedClients.has(group.clientId) && (
-            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 14 }}>
-              {group.projects.map((intg) => (
+        </div>
+        <div className="flex gap-8">
+          <button className="btn btn-outline btn-sm" onClick={() => allAction('pause')} disabled={integrations.length === 0}>Pause All</button>
+          <button className="btn btn-outline btn-sm" onClick={() => allAction('resume')} disabled={integrations.length === 0}>Resume All</button>
+          <button className="btn btn-outline btn-sm" onClick={exportCsv}><Icon name="download" />Export CSV</button>
+          <button className="btn btn-primary btn-sm" onClick={() => navigate('/wizard')}>+ New Connection</button>
+        </div>
+      </div>
+
+      <div className="page-body fit">
+        {/* Summary doubles as the status filter. */}
+        <StatStrip
+          active={statusFilter}
+          onFilter={setStatusFilter}
+          items={[
+            { key: 'all', label: 'Connections', value: integrations.length, tone: 'info', sub: 'All instances' },
+            { key: 'active', label: 'Active', value: counts.active || 0, tone: 'ok', filter: 'active', sub: 'Running' },
+            { key: 'paused', label: 'Paused', value: counts.paused || 0, tone: 'idle', filter: 'paused', sub: 'Schedule off' },
+            { key: 'error', label: 'Error', value: counts.error || 0, tone: 'fail', filter: 'error', sub: 'Needs attention' },
+            { key: 'draft', label: 'Draft', value: counts.draft || 0, tone: 'idle', filter: 'draft', sub: 'Not activated' },
+          ]}
+        />
+
+        {/* Filter bar */}
+        <div className="flex gap-12 mb-16" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+          <div className="search-bar">
+            <span className="search-icon"><Icon name="search" size={15} /></span>
+            <input type="text" aria-label="Search connections by name or system"
+              placeholder="Search connections…" style={{ width: 280 }}
+              value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <div className="filter-chips">
+            {STATUS_FILTERS.map((s) => (
+              <button key={s} type="button" className={`chip${statusFilter === s ? ' active' : ''}`}
+                aria-pressed={statusFilter === s} onClick={() => setStatusFilter(s)}>{s}</button>
+            ))}
+          </div>
+          {(statusFilter !== 'all' || search) && (
+            <button type="button" className="link-btn" onClick={() => { setStatusFilter('all'); setSearch(''); }}>
+              Clear filters ({shownCount} of {integrations.length} shown)
+            </button>
+          )}
+        </div>
+
+        {/* Bulk action bar */}
+        {selected.size > 0 && (
+          <div className="bulk-bar">
+            <span style={{ fontWeight: 'var(--fw-semibold)' }}>{selected.size} selected</span>
+            <button className="btn btn-outline btn-sm" onClick={() => bulkAction('pause')}>Pause selected</button>
+            <button className="btn btn-outline btn-sm" onClick={() => bulkAction('resume')}>Resume selected</button>
+            <button className="btn btn-outline btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setSelected(new Set())}>Clear</button>
+          </div>
+        )}
+
+        {/* Connection grid — the scrolling region */}
+        <div className="fit-scroll">
+          {loading && <div className="ucard-grid"><CardSkeleton count={6} /></div>}
+
+          {!loading && visible.length > 0 && (
+            <div className="ucard-grid">
+              {visible.map((intg) => (
                 <IntegrationCard
                   key={intg.integrationId}
                   intg={intg}
@@ -509,120 +513,121 @@ export default function ConnectedPage() {
               ))}
             </div>
           )}
-        </div>
-      ))}
 
-      {grouped.length === 0 && (
-        <div className="card" style={{ textAlign: 'center', padding: 40, color: 'var(--text-dim)' }}>
-          <div style={{ fontSize: '2rem', marginBottom: 8 }}>&#128279;</div>
-          <div style={{ fontSize: '.95rem', fontWeight: 600 }}>No connections match</div>
-          <div style={{ fontSize: '.82rem', marginTop: 4 }}>Adjust the filters, or create a new connection.</div>
-          <button style={{ ...btnPrimaryStyle, marginTop: 16 }} onClick={() => navigate('/wizard')}>+ New Connection</button>
+          {!loading && integrations.length === 0 && (
+            <CardEmpty title="No connections yet" action={<button className="btn btn-primary btn-sm" onClick={() => navigate('/wizard')}>+ New Connection</button>}>
+              Build your first connection in the Connection Wizard — it appears here once saved.
+            </CardEmpty>
+          )}
+          {!loading && integrations.length > 0 && visible.length === 0 && (
+            <CardEmpty title="Nothing matches this view">
+              {integrations.length} connection{integrations.length === 1 ? '' : 's'}, but none match the current search or filters.
+            </CardEmpty>
+          )}
         </div>
-      )}
 
-      {/* Schedule Modal */}
-      {scheduleModal && (
-        <div style={overlayStyle} onClick={() => setScheduleModal(null)}>
-          <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h3 style={{ margin: 0, fontSize: '1.05rem' }}>Schedule &mdash; {scheduleModal.name}</h3>
-              <button style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-dim)' }} onClick={() => setScheduleModal(null)}>&times;</button>
-            </div>
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>Preset</label>
-              <select style={selectStyle} value={schedulePreset} onChange={(e) => { setSchedulePreset(e.target.value); if (e.target.value !== 'custom') setCustomCron(e.target.value); }}>
-                <option value="">-- Select a schedule --</option>
-                {cronPresets.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
-            </div>
-            {schedulePreset === 'custom' && (
+        {/* Schedule Modal */}
+        {scheduleModal && (
+          <div style={overlayStyle} onClick={() => setScheduleModal(null)}>
+            <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <h3 style={{ margin: 0, fontSize: 'var(--fs-md)' }}>Schedule &mdash; {scheduleModal.name}</h3>
+                <button className="dp-close" aria-label="Close" onClick={() => setScheduleModal(null)}><Icon name="close" size={16} /></button>
+              </div>
               <div style={{ marginBottom: 14 }}>
-                <label style={labelStyle}>Custom Cron Expression</label>
-                <input style={inputStyle} value={customCron} onChange={(e) => setCustomCron(e.target.value)} placeholder="e.g. 0 9 * * 1-5" />
-                <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', marginTop: 4 }}>Format: minute hour day-of-month month day-of-week</div>
+                <label style={labelStyle} htmlFor="connectedpage-preset">Preset</label>
+                <select id="connectedpage-preset" style={selectStyle} value={schedulePreset} onChange={(e) => { setSchedulePreset(e.target.value); if (e.target.value !== 'custom') setCustomCron(e.target.value); }}>
+                  <option value="">-- Select a schedule --</option>
+                  {cronPresets.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
               </div>
-            )}
-            {scheduleModal.scheduleCron && (
-              <div style={{ fontSize: '.82rem', color: 'var(--text-dim)', marginBottom: 14 }}>Current: <strong>{cronLabel(scheduleModal.scheduleCron)}</strong> ({scheduleModal.scheduleCron})</div>
-            )}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              {scheduleModal.scheduleCron && <button style={btnDangerStyle} onClick={clearSchedule} disabled={scheduleSaving}>{scheduleSaving ? 'Clearing…' : 'Clear Schedule'}</button>}
-              <button style={btnStyle} onClick={() => setScheduleModal(null)}>Cancel</button>
-              <button style={btnPrimaryStyle} onClick={saveSchedule} disabled={(!schedulePreset && !customCron) || scheduleSaving}>{scheduleSaving ? 'Saving…' : 'Save Schedule'}</button>
+              {schedulePreset === 'custom' && (
+                <div style={{ marginBottom: 14 }}>
+                  <label style={labelStyle} htmlFor="connectedpage-custom-cron-expression">Custom Cron Expression</label>
+                  <input id="connectedpage-custom-cron-expression" style={inputStyle} value={customCron} onChange={(e) => setCustomCron(e.target.value)} placeholder="e.g. 0 9 * * 1-5" />
+                  <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginTop: 4 }}>Format: minute hour day-of-month month day-of-week</div>
+                </div>
+              )}
+              {scheduleModal.scheduleCron && (
+                <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)', marginBottom: 14 }}>Current: <strong>{cronLabel(scheduleModal.scheduleCron)}</strong> ({scheduleModal.scheduleCron})</div>
+              )}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                {scheduleModal.scheduleCron && <Button className="btn btn-danger btn-sm" onClick={clearSchedule} loading={scheduleSaving} loadingLabel="Clearing">Clear Schedule</Button>}
+                <button className="btn btn-outline btn-sm" onClick={() => setScheduleModal(null)}>Cancel</button>
+                <Button className="btn btn-primary btn-sm" onClick={saveSchedule} loading={scheduleSaving} loadingLabel="Saving" disabled={!schedulePreset && !customCron}>Save Schedule</Button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* View Logs Modal */}
-      {logsModal && (
-        <div style={overlayStyle} onClick={() => setLogsModal(null)}>
-          <div style={{ ...modalStyle, minWidth: 560 }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <h3 style={{ margin: 0, fontSize: '1.05rem' }}>Run logs &mdash; {logsModal.intg.name}</h3>
-              <button style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-dim)' }} onClick={() => setLogsModal(null)}>&times;</button>
-            </div>
-            {logsModal.runs.length === 0 ? (
-              <div style={{ fontSize: '.85rem', color: 'var(--text-dim)', padding: 12 }}>No runs recorded yet.</div>
-            ) : (
-              <div className="table-wrap">
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead><tr><th style={thStyle}>Started</th><th style={thStyle}>Finished</th><th style={thStyle}>Status</th><th style={thStyle}>In</th><th style={thStyle}>Out</th></tr></thead>
-                  <tbody>
-                    {logsModal.runs.map((r) => (
-                      <tr key={r.runId}>
-                        <td style={{ ...tdStyle, fontSize: '.78rem' }}>{fmtDate(r.startedAt)}</td>
-                        <td style={{ ...tdStyle, fontSize: '.78rem' }}>{fmtDate(r.finishedAt)}</td>
-                        <td style={tdStyle}><span className={`badge ${statusBadgeClass(r.status)}`}>{r.status}</span></td>
-                        <td style={tdStyle}>{r.recordsIn ?? '—'}</td>
-                        <td style={tdStyle}>{r.recordsOut ?? '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+        {/* View Logs Modal */}
+        {logsModal && (
+          <div style={overlayStyle} onClick={() => setLogsModal(null)}>
+            <div style={{ ...modalStyle, minWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <h3 style={{ margin: 0, fontSize: 'var(--fs-md)' }}>Run logs &mdash; {logsModal.intg.name}</h3>
+                <button className="dp-close" aria-label="Close" onClick={() => setLogsModal(null)}><Icon name="close" size={16} /></button>
               </div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
-              <button style={btnStyle} onClick={() => { setLogsModal(null); navigate('/monitor'); }}>Open Monitor</button>
+              {logsModal.runs.length === 0 ? (
+                <div style={{ fontSize: 'var(--fs-base)', color: 'var(--text-dim)', padding: 12 }}>No runs recorded yet.</div>
+              ) : (
+                <div className="table-wrap">
+                  <table className="conn-table">
+                    <thead><tr><th scope="col">Started</th><th scope="col">Finished</th><th scope="col">Status</th><th scope="col">In</th><th scope="col">Out</th></tr></thead>
+                    <tbody>
+                      {logsModal.runs.map((r) => (
+                        <tr key={r.runId}>
+                          <td style={{ fontSize: 'var(--fs-sm)' }}>{fmtDate(r.startedAt)}</td>
+                          <td style={{ fontSize: 'var(--fs-sm)' }}>{fmtDate(r.finishedAt)}</td>
+                          <td><span className={`badge ${statusBadgeClass(r.status)}`}>{r.status}</span></td>
+                          <td>{r.recordsIn ?? '—'}</td>
+                          <td>{r.recordsOut ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+                <button className="btn btn-outline btn-sm" onClick={() => { setLogsModal(null); navigate('/monitor'); }}>Open Monitor</button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Sync Dialog Modal */}
+        {syncModal && (
+          <div style={overlayStyle} onClick={() => setSyncModal(null)}>
+            <div style={{ ...modalStyle, minWidth: 440 }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <h3 style={{ margin: 0, fontSize: 'var(--fs-md)' }}>Sync &mdash; {syncModal.name}</h3>
+                <button className="dp-close" aria-label="Close" onClick={() => setSyncModal(null)}><Icon name="close" size={16} /></button>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
+                {syncModes.map((mode) => (
+                  <label key={mode.value} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', border: `1px solid ${syncMode === mode.value ? 'var(--primary)' : 'var(--border)'}`, borderRadius: 8, cursor: 'pointer', background: syncMode === mode.value ? 'var(--primary-dim)' : 'transparent' }}>
+                    <input type="radio" name="syncMode" value={mode.value} checked={syncMode === mode.value} onChange={() => setSyncMode(mode.value)} style={{ marginTop: 2, accentColor: 'var(--primary)' }} />
+                    <div>
+                      <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-base)' }}>{mode.label}</div>
+                      <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)', marginTop: 2 }}>{mode.description}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+              {syncMode === 'CUSTOM' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+                  <div><label style={labelStyle} htmlFor="connectedpage-start-date">Start Date</label><input id="connectedpage-start-date" type="date" style={inputStyle} value={customStart} onChange={(e) => setCustomStart(e.target.value)} /></div>
+                  <div><label style={labelStyle} htmlFor="connectedpage-end-date">End Date</label><input id="connectedpage-end-date" type="date" style={inputStyle} value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} /></div>
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button className="btn btn-outline btn-sm" onClick={() => setSyncModal(null)}>Cancel</button>
+                <Button className="btn btn-primary btn-sm" onClick={() => triggerSync(syncModal)} loading={syncTriggering} loadingLabel="Starting">↻ Start Sync</Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-
-      {/* Sync Dialog Modal */}
-      {syncModal && (
-        <div style={overlayStyle} onClick={() => setSyncModal(null)}>
-          <div style={{ ...modalStyle, minWidth: 440 }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <h3 style={{ margin: 0, fontSize: '1.05rem' }}>Sync &mdash; {syncModal.name}</h3>
-              <button style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: 'var(--text-dim)' }} onClick={() => setSyncModal(null)}>&times;</button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-              {syncModes.map((mode) => (
-                <label key={mode.value} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', border: `1px solid ${syncMode === mode.value ? 'var(--primary)' : 'var(--border)'}`, borderRadius: 8, cursor: 'pointer', background: syncMode === mode.value ? 'var(--primary-dim)' : 'transparent' }}>
-                  <input type="radio" name="syncMode" value={mode.value} checked={syncMode === mode.value} onChange={() => setSyncMode(mode.value)} style={{ marginTop: 2, accentColor: 'var(--primary)' }} />
-                  <div>
-                    <div style={{ fontWeight: 600, fontSize: '.88rem' }}>{mode.label}</div>
-                    <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginTop: 2 }}>{mode.description}</div>
-                  </div>
-                </label>
-              ))}
-            </div>
-            {syncMode === 'CUSTOM' && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-                <div><label style={labelStyle}>Start Date</label><input type="date" style={inputStyle} value={customStart} onChange={(e) => setCustomStart(e.target.value)} /></div>
-                <div><label style={labelStyle}>End Date</label><input type="date" style={inputStyle} value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} /></div>
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button style={btnStyle} onClick={() => setSyncModal(null)}>Cancel</button>
-              <button style={{ ...btnPrimaryStyle, opacity: syncTriggering ? 0.5 : 1 }} onClick={() => triggerSync(syncModal)} disabled={syncTriggering}>{syncTriggering ? 'Starting…' : '↻ Start Sync'}</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

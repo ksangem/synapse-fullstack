@@ -1,42 +1,15 @@
 import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAlerts } from '../../hooks/useAlerts';
 
-const notifications = [
-  {
-    id: 1,
-    type: 'critical',
-    title: 'SAP ERP Adapter Down',
-    meta: '47 min ago \u00B7 Integration Registry',
-  },
-  {
-    id: 2,
-    type: 'warning',
-    title: 'Salesforce token expires in 3 days',
-    meta: '2 hours ago \u00B7 Credential Vault',
-  },
-  {
-    id: 3,
-    type: 'warning',
-    title: 'High latency on Workday sync',
-    meta: '3 hours ago \u00B7 Message Monitor',
-  },
-  {
-    id: 4,
-    type: '',
-    title: 'New connector published: Stripe v2.1',
-    meta: '5 hours ago \u00B7 Connector Studio',
-  },
-  {
-    id: 5,
-    type: '',
-    title: 'Weekly performance report ready',
-    meta: '1 day ago \u00B7 Dashboard',
-  },
-];
+/* The notification tray renders REAL alerts from GET /api/alerts (via AlertsContext).
+   It previously rendered a hardcoded array of alerts for SAP / Salesforce / Workday /
+   Stripe — systems Synapse does not connect to — alongside a badge that always read "3". */
 
 export default function NotificationDropdown({ isOpen, onClose }) {
   const ref = useRef(null);
   const navigate = useNavigate();
+  const { recent, unresolvedCount, loading, error } = useAlerts();
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -57,12 +30,18 @@ export default function NotificationDropdown({ isOpen, onClose }) {
     };
   }, [isOpen, onClose]);
 
-  function handleItemClick(notif) {
-    if (notif.type === 'critical') {
-      navigate('/alerts');
-    }
+  function handleItemClick() {
+    navigate('/alerts');
     onClose();
   }
+
+  // Severity → the left-border accent class already defined in styles.css.
+  const itemClass = (a) => {
+    if (a.resolved) return '';
+    if (a.severity === 'critical') return ' critical';
+    if (a.severity === 'warning') return ' warning';
+    return '';
+  };
 
   return (
     <div
@@ -73,19 +52,37 @@ export default function NotificationDropdown({ isOpen, onClose }) {
     >
       <div className="notif-header">
         <span>Notifications</span>
-        <span className="badge badge-error">3 unresolved</span>
+        {unresolvedCount > 0 && (
+          <span className="badge badge-error">{unresolvedCount} unresolved</span>
+        )}
       </div>
-      {notifications.map((notif) => (
+
+      {loading && <div className="empty-state" style={{ padding: '24px 16px' }}>Loading alerts…</div>}
+
+      {!loading && error && (
+        <div className="empty-state" style={{ padding: '24px 16px' }}>{error}</div>
+      )}
+
+      {!loading && !error && recent.length === 0 && (
+        <div className="empty-state" style={{ padding: '24px 16px' }}>
+          No alerts — everything looks healthy.
+        </div>
+      )}
+
+      {!loading && !error && recent.map((a) => (
         <div
-          key={notif.id}
-          className={`notif-item${notif.type ? ` ${notif.type}` : ''}`}
+          key={a.id}
+          className={`notif-item${itemClass(a)}`}
           role="button"
           tabIndex={0}
-          onClick={() => handleItemClick(notif)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleItemClick(notif); } }}
+          onClick={handleItemClick}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleItemClick(); } }}
         >
-          <div className="notif-title">{notif.title}</div>
-          <div className="notif-meta">{notif.meta}</div>
+          <div className="notif-title">{a.title}</div>
+          <div className="notif-meta">
+            {a.relative}
+            {a.resolved ? ' · Resolved' : ''}
+          </div>
         </div>
       ))}
     </div>

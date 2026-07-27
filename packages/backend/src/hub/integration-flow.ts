@@ -25,6 +25,7 @@ import { CompositeJoinProvider } from '../services/join/CompositeJoinProvider';
 import { CredentialService } from '../services/CredentialService';
 import { normalizeTargets, mappingsForTarget } from './integration-targets';
 import type { MappingEntry } from '../services/MappingEngine';
+import { foreignKeysFromMappings } from '../services/MappingEngine';
 import type { TransformPipeline } from './transform-pipeline';
 import type { ISourceConnector } from './interfaces';
 
@@ -93,6 +94,7 @@ export async function registerIntegrationFlow(
     connectorId: srcHead.connectorId,
     orgId: integration.orgId,
     kind: srcHead.runtimeKind ?? '',
+    key: srcHead.key ?? undefined,
     config,
     creds: {},
     entity: (config.sourceEntity as string) ?? (config.entity as string) ?? undefined,
@@ -120,11 +122,16 @@ export async function registerIntegrationFlow(
     // per-destination outbox/idempotency keying in the router/dispatch worker.
     const syntheticId = `intg-${integration.integrationId}-tgt-${t.targetId}`;
     const destCreds = await resolveCredentials(t.destCredId);
+    /* Foreign-key lookups travel on the destination's CONFIG, because the
+       destination is handed `t.config` and never the mappings. The mapping step
+       leaves the parent's name in the column; the destination swaps it for the
+       parent's id using a cached parent map (it owns the DB connection). */
+    const foreignKeys = foreignKeysFromMappings(targetMappings);
     const destSpec: ConnectorBuildSpec = {
       connectorId: syntheticId,
       orgId: integration.orgId,
       kind: destHead.runtimeKind ?? '',
-      config: t.config,
+      config: foreignKeys.length ? { ...t.config, foreignKeys } : t.config,
       creds: destCreds,
       entity: (config.destEntity as string) ?? undefined,
       integrationId: integration.integrationId,
@@ -241,6 +248,7 @@ export async function buildIntegrationSource(integration: Integration): Promise<
     connectorId: srcHead.connectorId,
     orgId: integration.orgId,
     kind: srcHead.runtimeKind ?? '',
+    key: srcHead.key ?? undefined,
     config,
     creds,
     entity: (config.sourceEntity as string) ?? (config.entity as string) ?? undefined,
@@ -280,10 +288,21 @@ export async function getIntegration(id: string): Promise<Integration | null> {
  * All ACTIVE integrations tagged with the given entity-group id (fieldMappings.groupId).
  * Ordered by creation so a group run is deterministic. Used by the "Run all" group trigger.
  */
+/**
+ * Members of an entity group, in RUN order.
+ *
+ * Ordered by `fieldMappings.groupOrder` (ascending), then createdAt. Without this
+ * a group ran in creation order, so a child table could load before its parent and
+ * every child row failed its foreign key. Members with no `groupOrder` sort LAST,
+ * which keeps existing groups behaving exactly as they did (pure createdAt order).
+ */
 export async function getIntegrationsByGroup(groupId: string): Promise<Integration[]> {
   return db
     .select()
     .from(integrations)
     .where(and(eq(integrations.status, 'active'), sql`${integrations.fieldMappings} ->> 'groupId' = ${groupId}`))
-    .orderBy(integrations.createdAt);
+    .orderBy(
+      sql`(${integrations.fieldMappings} ->> 'groupOrder')::int ASC NULLS LAST`,
+      integrations.createdAt,
+    );
 }

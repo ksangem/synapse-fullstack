@@ -6,9 +6,10 @@ import { SyncStateRepository } from '../db/repositories/syncStateRepository';
 import { JiraItemCacheRepository } from '../db/repositories/jiraItemCacheRepository';
 import { SharePointPushService, getColumnTypeMap, coerceToColumnTypes } from './SharePointPushService';
 import { SharePointMapperService } from './SharePointMapperService';
-import { applyMappings, type MappingConfig } from './MappingEngine';
+import { applyRichMappings, type MappingEntry } from './MappingEngine';
 import { isTerminalStatus } from '../mappers/jiraToSharePoint';
 import { config } from '../config';
+import { resolveCredentials } from '../hub/credentials';
 import type { SharePointCredentials } from '../integrations/sharepoint/types';
 import type { SyncTriggerPayload, PushType } from '../types/sync.types';
 import type { JsonValue } from '../hub/interfaces';
@@ -19,11 +20,19 @@ const cacheRepo = new JiraItemCacheRepository();
 const mapper = new SharePointMapperService();
 const spPushService = new SharePointPushService();
 
-function getSpCreds(siteUrl: string, listName: string): SharePointCredentials {
+function getSpCreds(
+  siteUrl: string,
+  listName: string,
+  vaultCreds: Record<string, string>,
+): SharePointCredentials {
+  // Per-connection vault Azure creds FIRST — the connection authenticates as itself — with the
+  // env Azure app kept only as a fallback for connections that carry no creds of their own. This
+  // matches how the bus SharePoint destination resolves creds (register-connectors' spCredsOf);
+  // previously this path used the global env app unconditionally and ignored the vault entirely.
   return {
-    tenantId: config.AZURE_TENANT_ID!,
-    clientId: config.AZURE_CLIENT_ID!,
-    clientSecret: config.AZURE_CLIENT_SECRET!,
+    tenantId: vaultCreds.tenantId || config.AZURE_TENANT_ID || '',
+    clientId: vaultCreds.clientId || config.AZURE_CLIENT_ID || '',
+    clientSecret: vaultCreds.clientSecret || config.AZURE_CLIENT_SECRET || '',
     siteUrl,
     listName,
   };
@@ -59,8 +68,10 @@ export async function runSync(
     const clientId = fieldMappings?.clientId ?? integration.orgId;
     if (!projectKey) throw new Error('No projectKey in integration fieldMappings');
 
-    const siteId = config.SHAREPOINT_SITE_ID;
-    if (!siteId) throw new Error('SHAREPOINT_SITE_ID not set in env');
+    // SHAREPOINT_SITE_ID is now an OPTIONAL override — when unset, resolveIds derives the site
+    // from the connection's own siteUrl (below), so the sync path no longer requires a single
+    // env-configured site for every connection.
+    const siteIdOverride = config.SHAREPOINT_SITE_ID || undefined;
 
     // Resolve SP list name + site URL from fieldMappings → sharepoint_push_runs → push_log
     let siteUrl = fieldMappings?.endpointUrl ?? '';
@@ -93,8 +104,12 @@ export async function runSync(
       throw new Error('Cannot resolve SharePoint list — no listName in integration and no prior push runs found');
     }
 
-    const creds = getSpCreds(siteUrl, listName);
-    const { token, listId } = await spPushService.resolveIds(creds, siteId, listIdOverride);
+    // Per-connection SharePoint Azure creds (like the bus destination). destCredId is the SP
+    // DESTINATION credential; fall back to credId for older single-credential connection shapes.
+    const spVaultCreds = await resolveCredentials(fieldMappings?.destCredId ?? fieldMappings?.credId);
+    const creds = getSpCreds(siteUrl, listName, spVaultCreds);
+    // siteId now comes back from resolveIds (override, else derived from siteUrl) rather than env.
+    const { token, listId, siteId } = await spPushService.resolveIds(creds, siteIdOverride, listIdOverride);
 
     // The bus SharePoint destination targets its list by NAME. When this connection only
     // had a listId (resolved from push history, no name), backfill the display name so the
@@ -239,11 +254,14 @@ export async function runSync(
         const issueKey = (issue.key as string) ?? '';
         if (!issueKey) continue;
 
-        const userMappingConfig = (fieldMappings as Record<string, unknown> | null)?.mappings
-          ? (fieldMappings as unknown as MappingConfig)
-          : null;
-        const rawMapped = userMappingConfig?.mappings?.length
-          ? applyMappings(issue, userMappingConfig)
+        // Map with the SAME rich engine the bus's run-integration path uses, so a Jira→SP
+        // integration produces IDENTICAL output however it is triggered (delta sync here vs
+        // run-integration). Previously this path used the legacy applyMappings, so the same
+        // connection could map differently depending on the trigger. Only the explicit
+        // user-mapping branch changes; the default mapper (no user mappings) is untouched.
+        const userMappings = (fieldMappings as Record<string, unknown> | null)?.mappings as MappingEntry[] | undefined;
+        const rawMapped = userMappings?.length
+          ? applyRichMappings(issue, userMappings)
           : mapper.mapToSharePointItem(issue, { source: triggeredBy, runId: integrationId }).fields;
         const mapped = coerceToColumnTypes(rawMapped, colTypes) as Record<string, JsonValue>;
 

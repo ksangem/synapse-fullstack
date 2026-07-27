@@ -75,6 +75,22 @@ export function getRuntime(kind: string | null | undefined): IConnectorRuntime |
   return registry.get(kind);
 }
 
+/**
+ * Every runtime kind that can act as a PULL SOURCE on the bus: it implements `fetch`, it
+ * declares itself readable (`role` source|both), and it is request/response rather than
+ * inbound-push or a streaming consumer (webhook / mq need different plumbing, not a poll).
+ *
+ * register-connectors uses this to wire the generic source adapter, so adding a readable
+ * runtime never means editing a hardcoded list of kinds.
+ */
+export function pullSourceKinds(): string[] {
+  return [...registry.values()]
+    .filter((rt) => typeof rt.fetch === 'function')
+    .filter((rt) => rt.capabilities.role === 'source' || rt.capabilities.role === 'both')
+    .filter((rt) => rt.capabilities.ingestModel === 'pull')
+    .map((rt) => rt.kind);
+}
+
 /** Capabilities for any of the known kinds, falling back to DEFAULT_CAPS. */
 export function capabilitiesFor(kind: string | null | undefined): RuntimeCapabilities {
   if (kind && registry.has(kind)) return registry.get(kind)!.capabilities;

@@ -18,6 +18,7 @@
  */
 import type { StorageState } from './BrowserSessionService';
 import { applyFieldRules, coerceTypes, type FieldRule } from './fieldTransform';
+import { launchBrowser, type BrowserEngine } from './browserEngine';
 import { extractFromJson } from './jsonExtract';
 
 export type { FieldRule } from './fieldTransform';
@@ -69,6 +70,8 @@ export interface CrawlSpec {
   userAgent?: string;
   /** when true, skip URLs disallowed by the site's robots.txt (default: off). */
   respectRobots?: boolean;
+  /** Browser engine to crawl in (defaults to chromium). */
+  engine?: BrowserEngine;
 }
 
 export interface CrawlResult {
@@ -231,15 +234,13 @@ export class CrawlEngine {
    *   authenticates both page loads and the SPA's XHRs.
    */
   async crawl(spec: CrawlSpec, storageState?: StorageState | null, extraHeaders?: Record<string, string> | null): Promise<CrawlResult> {
-    const mod = await import('playwright');
-    const chromium = (mod as { chromium: { launch(o: unknown): Promise<PwBrowser> } }).chromium;
     const maxRows = spec.maxRows ?? DEFAULT_MAX_ROWS;
     const records: Record<string, unknown>[] = [];
     const errors: string[] = [];
     let pagesVisited = 0;
     let truncated = false;
 
-    const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+    const browser = await launchBrowser<PwBrowser>(spec.engine ?? 'chromium', { headless: true });
     try {
       const context = await browser.newContext({
         ...(spec.userAgent ? { userAgent: spec.userAgent } : {}),

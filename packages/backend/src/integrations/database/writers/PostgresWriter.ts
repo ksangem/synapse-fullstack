@@ -175,20 +175,33 @@ export class PostgresWriter implements IDbWriter {
   async introspect(schema: string, table: string): Promise<IntrospectResult> {
     this.ensureConnected();
 
+    // LEFT JOIN the PK constraint so each column reports whether it's part of the primary
+    // key (used to order + resume a keyset-paged source read).
     const sql = `
       SELECT
-        column_name,
-        data_type,
-        is_nullable,
-        character_maximum_length,
-        numeric_precision,
-        numeric_scale,
-        column_default,
-        ordinal_position
-      FROM information_schema.columns
-      WHERE table_schema = $1
-        AND table_name = $2
-      ORDER BY ordinal_position
+        c.column_name,
+        c.data_type,
+        c.is_nullable,
+        c.character_maximum_length,
+        c.numeric_precision,
+        c.numeric_scale,
+        c.column_default,
+        c.ordinal_position,
+        (pk.column_name IS NOT NULL) AS is_primary_key
+      FROM information_schema.columns c
+      LEFT JOIN (
+        SELECT kcu.column_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON kcu.constraint_name = tc.constraint_name
+         AND kcu.table_schema = tc.table_schema
+        WHERE tc.constraint_type = 'PRIMARY KEY'
+          AND tc.table_schema = $1
+          AND tc.table_name = $2
+      ) pk ON pk.column_name = c.column_name
+      WHERE c.table_schema = $1
+        AND c.table_name = $2
+      ORDER BY c.ordinal_position
     `;
 
     const result = await this.pool!.query(sql, [schema, table]);
@@ -202,6 +215,7 @@ export class PostgresWriter implements IDbWriter {
       numericScale: r.numeric_scale,
       columnDefault: r.column_default,
       ordinalPosition: r.ordinal_position,
+      isPrimaryKey: r.is_primary_key === true,
     }));
 
     return {

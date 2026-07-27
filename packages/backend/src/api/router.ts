@@ -18,14 +18,14 @@ import crawlStudioRoutes from './crawl-studio.routes';
 import authRoutes from './auth.routes';
 import usersRoutes from './users.routes';
 import auditRoutes from './audit.routes';
-import clientsRoutes from './clients.routes';
+import clientAppsRoutes from './clients.routes';
 
 const apiRouter = Router();
 
 apiRouter.use('/auth', authRoutes); // public: login / refresh; /me needs a token
 apiRouter.use('/users', usersRoutes);
 apiRouter.use('/audit', auditRoutes);
-apiRouter.use('/clients', clientsRoutes);
+apiRouter.use('/client-apps', clientAppsRoutes); // OAuth API-consumer registry (cli_…)
 apiRouter.use('/connectors', connectorsRoutes);
 apiRouter.use('/crawl-studio', crawlStudioRoutes);
 apiRouter.use('/entities', entitiesRoutes);

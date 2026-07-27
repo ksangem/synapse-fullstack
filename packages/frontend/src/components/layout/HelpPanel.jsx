@@ -1,185 +1,172 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { helpArticles, helpCategories, searchArticles } from '../../data/helpContent';
+import HelpDocModal from '../help/HelpDocModal';
+import Icon from '../ui/Icon';
 
-const helpArticles = [
-  {
-    category: 'Getting Started',
-    articles: [
-      { title: 'Creating Your First Connector', desc: 'Step-by-step guide to building integrations' },
-      { title: 'Understanding the Dashboard', desc: 'Monitor your integration health at a glance' },
-      { title: 'Quick Start: Connection Wizard', desc: 'Use the wizard to set up connections fast' },
-    ],
-  },
-  {
-    category: 'Administration',
-    articles: [
-      { title: 'User Roles & Permissions', desc: 'Configure team access and security settings' },
-      { title: 'Managing Credentials', desc: 'Securely store and rotate API keys and tokens' },
-      { title: 'Audit Log Reference', desc: 'Track all changes and actions in the platform' },
-    ],
-  },
-  {
-    category: 'Troubleshooting',
-    articles: [
-      { title: 'Common Error Codes', desc: 'Diagnose and resolve integration failures' },
-      { title: 'Performance Tuning', desc: 'Optimize throughput and reduce latency' },
-      { title: 'Retry & Dead Letter Queues', desc: 'Handle failed messages gracefully' },
-    ],
-  },
-];
-
-const botWelcome = "Hi! I'm Synapse AI Assistant. How can I help you today?";
-const suggestions = [
-  'How do I create a connector?',
-  'What do error codes mean?',
-  'How to set up alerts?',
-];
-
-const aiResponses = [
-  "That's a great question! You can create a connector by navigating to the Connector Studio page and clicking \"New Connector\". From there, select the connector type and configure the authentication settings.",
-  "Error codes in Synapse follow a standard pattern. 4xx codes indicate client-side issues (authentication, permissions), while 5xx codes indicate server-side problems. Check the Alerts page for detailed error descriptions.",
-  "To set up alerts, go to the Alerts page and click \"Create Alert Rule\". You can configure thresholds for latency, error rates, and throughput. Notifications can be sent via email, Slack, or webhook.",
-  "I can help with that! Please check the relevant documentation section in the Articles tab for detailed guides, or ask me a more specific question.",
-];
+// Group the flat registry into { category, articles[] } in category order.
+function groupByCategory(articles) {
+  return helpCategories
+    .map((category) => ({
+      category,
+      articles: articles.filter((a) => a.category === category),
+    }))
+    .filter((cat) => cat.articles.length > 0);
+}
 
 export default function HelpPanel({ isOpen, onClose }) {
   const [activeTab, setActiveTab] = useState('articles');
   const [articleSearch, setArticleSearch] = useState('');
-  const [messages, setMessages] = useState([
-    { role: 'bot', text: botWelcome },
-  ]);
-  const [chatInput, setChatInput] = useState('');
-  const responseIndexRef = useRef(0);
+  const [askQuery, setAskQuery] = useState('');
+  const [openSlug, setOpenSlug] = useState(null); // which doc the modal shows
 
-  function sendAIChat(text) {
-    if (!text.trim()) return;
-    const userMsg = { role: 'user', text: text.trim() };
-    setMessages((prev) => [...prev, userMsg]);
-    setChatInput('');
-    setTimeout(() => {
-      const response = aiResponses[responseIndexRef.current % aiResponses.length];
-      responseIndexRef.current += 1;
-      setMessages((prev) => [...prev, { role: 'bot', text: response }]);
-    }, 800);
-  }
-
-  function handleChatKeyDown(e) {
-    if (e.key === 'Enter') {
-      sendAIChat(chatInput);
-    }
-  }
-
-  // Close the panel on Escape while it's open.
+  // Close the panel on Escape while it's open — but only when the doc modal
+  // isn't up (the modal has its own Escape handler that stops propagation).
   useEffect(() => {
     if (!isOpen) return undefined;
-    function handleKey(e) { if (e.key === 'Escape') onClose(); }
+    function handleKey(e) {
+      if (e.key === 'Escape' && !openSlug) onClose();
+    }
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, openSlug]);
 
-  const filteredArticles = helpArticles.map((cat) => ({
-    ...cat,
-    articles: cat.articles.filter(
-      (a) =>
-        a.title.toLowerCase().includes(articleSearch.toLowerCase()) ||
-        a.desc.toLowerCase().includes(articleSearch.toLowerCase())
-    ),
-  })).filter((cat) => cat.articles.length > 0);
+  // Filter the article list by the drawer search box.
+  const grouped = useMemo(() => {
+    const q = articleSearch.trim().toLowerCase();
+    const filtered = !q
+      ? helpArticles
+      : helpArticles.filter(
+          (a) =>
+            a.title.toLowerCase().includes(q) ||
+            a.desc.toLowerCase().includes(q) ||
+            (a.keywords || '').toLowerCase().includes(q)
+        );
+    return groupByCategory(filtered);
+  }, [articleSearch]);
+
+  const askResults = useMemo(() => searchArticles(askQuery), [askQuery]);
+
+  // Following an internal app link from a doc should dismiss the whole overlay.
+  function handleDocNavigate() {
+    setOpenSlug(null);
+    onClose();
+  }
 
   return (
-    <div
-      className={`help-panel${isOpen ? ' open' : ''}`}
-      role="dialog"
-      aria-modal="false"
-      aria-label="Help Center"
-      aria-hidden={!isOpen}
-    >
-      <div className="help-panel-header">
-        <span style={{ fontWeight: 700, fontSize: '.95rem' }}>Help Center</span>
-        <button className="dp-close" onClick={onClose} aria-label="Close help" title="Close">&times;</button>
-      </div>
-
-      <div className="help-tabs">
-        <button
-          className={`help-tab-btn${activeTab === 'articles' ? ' active' : ''}`}
-          onClick={() => setActiveTab('articles')}
-        >
-          Articles
-        </button>
-        <button
-          className={`help-tab-btn${activeTab === 'ai' ? ' active' : ''}`}
-          onClick={() => setActiveTab('ai')}
-        >
-          AI Assistant
-        </button>
-      </div>
-
-      {activeTab === 'articles' && (
-        <div className="help-panel-body">
-          <div style={{ marginBottom: '12px' }}>
-            <input
-              type="text"
-              placeholder="Search articles..."
-              aria-label="Search help articles"
-              value={articleSearch}
-              onChange={(e) => setArticleSearch(e.target.value)}
-              style={{ width: '100%' }}
-            />
-          </div>
-          {filteredArticles.map((cat) => (
-            <div key={cat.category} style={{ marginBottom: '16px' }}>
-              <div style={{ fontSize: '.72rem', textTransform: 'uppercase', letterSpacing: '.06em', color: 'var(--text-dim)', fontWeight: 700, marginBottom: '6px' }}>
-                {cat.category}
-              </div>
-              {cat.articles.map((article) => (
-                <div key={article.title} className="help-article">
-                  <div className="help-title">{article.title}</div>
-                  <div className="help-desc">{article.desc}</div>
-                </div>
-              ))}
-            </div>
-          ))}
+    <>
+      <div
+        className={`help-panel${isOpen ? ' open' : ''}`}
+        role="dialog"
+        aria-modal="false"
+        aria-label="Help Center"
+        aria-hidden={!isOpen}
+      >
+        <div className="help-panel-header">
+          <span style={{ fontWeight: 'var(--fw-bold)', fontSize: 'var(--fs-md)' }}>Help Center</span>
+          <button className="dp-close" onClick={onClose} aria-label="Close help" title="Close"><Icon name="close" size={16} /></button>
         </div>
-      )}
 
-      {activeTab === 'ai' && (
-        <div className="ai-chat-container">
-          <div className="ai-chat-messages">
-            {messages.map((msg, i) => (
-              <div key={i} className={`ai-chat-msg ${msg.role}`}>
-                <div className="ai-msg-bubble">
-                  {msg.text}
-                  {i === 0 && msg.role === 'bot' && (
-                    <div style={{ marginTop: '10px' }}>
-                      {suggestions.map((s) => (
-                        <button
-                          key={s}
-                          type="button"
-                          className="ai-chip"
-                          onClick={() => sendAIChat(s)}
-                        >
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+        <div className="help-tabs">
+          <button
+            className={`help-tab-btn${activeTab === 'articles' ? ' active' : ''}`}
+            onClick={() => setActiveTab('articles')}
+          >
+            Articles
+          </button>
+          <button
+            className={`help-tab-btn${activeTab === 'ask' ? ' active' : ''}`}
+            onClick={() => setActiveTab('ask')}
+          >
+            Ask
+          </button>
+        </div>
+
+        {activeTab === 'articles' && (
+          <div className="help-panel-body">
+            <div style={{ marginBottom: '12px' }}>
+              <input
+                type="text"
+                placeholder="Search articles..."
+                aria-label="Search help articles"
+                value={articleSearch}
+                onChange={(e) => setArticleSearch(e.target.value)}
+                style={{ width: '100%' }}
+              />
+            </div>
+            {grouped.length === 0 && (
+              <div className="help-empty">No articles match &ldquo;{articleSearch}&rdquo;.</div>
+            )}
+            {grouped.map((cat) => (
+              <div key={cat.category} style={{ marginBottom: '16px' }}>
+                <div className="help-cat-label">{cat.category}</div>
+                {cat.articles.map((article) => (
+                  <button
+                    key={article.slug}
+                    type="button"
+                    className="help-article"
+                    onClick={() => setOpenSlug(article.slug)}
+                  >
+                    <div className="help-title">{article.title}</div>
+                    <div className="help-desc">{article.desc}</div>
+                  </button>
+                ))}
               </div>
             ))}
           </div>
-          <div className="ai-chat-input-area">
-            <input
-              type="text"
-              placeholder="Ask anything..."
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              onKeyDown={handleChatKeyDown}
-            />
-            <button className="btn btn-primary btn-sm" onClick={() => sendAIChat(chatInput)}>
-              Send
-            </button>
+        )}
+
+        {activeTab === 'ask' && (
+          <div className="help-panel-body">
+            <div className="help-ask-intro">
+              Ask a question and we&apos;ll point you to the right docs.
+            </div>
+            <div style={{ margin: '10px 0 14px' }}>
+              <input
+                type="text"
+                placeholder="e.g. how do I replay a failed message?"
+                aria-label="Ask a question"
+                value={askQuery}
+                onChange={(e) => setAskQuery(e.target.value)}
+                autoFocus
+                style={{ width: '100%' }}
+              />
+            </div>
+            {askQuery.trim() === '' && (
+              <div className="help-ask-suggestions">
+                {['Create a connector', 'What error codes mean', 'Set up alerts', 'Replay the dead letter queue'].map((s) => (
+                  <button key={s} type="button" className="ai-chip" onClick={() => setAskQuery(s)}>
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+            {askQuery.trim() !== '' && askResults.length === 0 && (
+              <div className="help-empty">
+                No matching docs. Try different words, or browse the Articles tab.
+              </div>
+            )}
+            {askResults.map((article) => (
+              <button
+                key={article.slug}
+                type="button"
+                className="help-article help-ask-result"
+                onClick={() => setOpenSlug(article.slug)}
+              >
+                <div className="help-ask-result-cat">{article.category}</div>
+                <div className="help-title">{article.title}</div>
+                <div className="help-desc">{article.desc}</div>
+              </button>
+            ))}
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+
+      <HelpDocModal
+        slug={openSlug}
+        onClose={() => setOpenSlug(null)}
+        onOpenDoc={(slug) => setOpenSlug(slug)}
+        onNavigate={handleDocNavigate}
+      />
+    </>
   );
 }

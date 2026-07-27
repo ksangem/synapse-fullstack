@@ -1,6 +1,5 @@
-import { createContext, useState, useCallback } from 'react';
-
-export const DetailPaneContext = createContext();
+import { useState, useCallback } from 'react';
+import { DetailPaneContext } from '../hooks/useDetailPane';
 
 export function DetailPaneProvider({ children }) {
   const [pane, setPane] = useState({

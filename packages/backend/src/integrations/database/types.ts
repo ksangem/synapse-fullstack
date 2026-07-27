@@ -23,6 +23,12 @@ export interface DbColumnSpec {
   numericScale: number | null;
   columnDefault: string | null;
   ordinalPosition: number;
+  /**
+   * Part of the table's PRIMARY KEY. Optional so existing introspection consumers are
+   * unaffected; DB-as-a-source uses it to order + resume a keyset-paged read instead of
+   * guessing at a column called "id".
+   */
+  isPrimaryKey?: boolean;
 }
 
 export interface DbTableSchema {

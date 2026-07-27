@@ -45,12 +45,17 @@ export class SharePointRuntime implements IConnectorRuntime {
   readonly capabilities: RuntimeCapabilities = CAPABILITIES.sharepoint;
 
   private creds(c: Creds) {
-    // Azure creds may come from the request OR fall back to .env (like the hub/sharepoint routes).
-    const tenantId = (c.tenantId as string) || config.AZURE_TENANT_ID;
-    const clientId = (c.clientId as string) || config.AZURE_CLIENT_ID;
-    const clientSecret = (c.clientSecret as string) || config.AZURE_CLIENT_SECRET;
+    // The app-level .env Azure app is used ONLY when the caller explicitly opts in
+    // (`useEnvApp`), matching how the BUS resolves SharePoint creds (spCredsOf in
+    // hub/register-connectors.ts). It used to be an unconditional fallback here, so a
+    // connection with missing/revoked creds could PASS its design-time test under the
+    // server's identity and then behave differently — or fail — on the actual run.
+    const useEnv = String(c.useEnvApp ?? '') === 'true';
+    const tenantId = (c.tenantId as string) || (useEnv ? config.AZURE_TENANT_ID : undefined);
+    const clientId = (c.clientId as string) || (useEnv ? config.AZURE_CLIENT_ID : undefined);
+    const clientSecret = (c.clientSecret as string) || (useEnv ? config.AZURE_CLIENT_SECRET : undefined);
     if (!c.siteUrl || !tenantId || !clientId || !clientSecret) {
-      throw new Error('Missing SharePoint creds (siteUrl + tenantId/clientId/clientSecret in fields or .env)');
+      throw new Error('Missing SharePoint creds — this connection needs its own siteUrl + tenantId/clientId/clientSecret (tick "use the server Azure app" only if you intend to share the app-level identity).');
     }
     return { siteUrl: c.siteUrl as string, tenantId, clientId, clientSecret };
   }

@@ -50,6 +50,36 @@ export function relativeTime(iso) {
   return `${days} day${days > 1 ? 's' : ''} ago`;
 }
 
+// Minimal 5-field cron next-run calculator (min hour dom month dow). Supports *, */n,
+// lists (a,b), ranges (a-b) and range-steps (a-b/n). Returns the next ISO timestamp, or
+// null if the cron is invalid / nothing matches within the search window (60 days).
+export function nextRunFromCron(cron) {
+  if (!cron || typeof cron !== 'string') return null;
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return null;
+  const [minF, hourF, domF, monF, dowF] = parts;
+  const match = (field, value) => field.split(',').some((token) => {
+    if (token === '*') return true;
+    let m;
+    if ((m = token.match(/^\*\/(\d+)$/))) return value % Number(m[1]) === 0;
+    if ((m = token.match(/^(\d+)-(\d+)\/(\d+)$/))) return value >= +m[1] && value <= +m[2] && (value - +m[1]) % +m[3] === 0;
+    if ((m = token.match(/^(\d+)-(\d+)$/))) return value >= +m[1] && value <= +m[2];
+    return Number(token) === value;
+  });
+  const d = new Date();
+  d.setSeconds(0, 0);
+  d.setMinutes(d.getMinutes() + 1);
+  for (let i = 0; i < 60 * 24 * 60; i++) {
+    const dow = d.getDay(); // 0=Sun; cron also allows 7 for Sun
+    if (match(minF, d.getMinutes()) && match(hourF, d.getHours()) && match(domF, d.getDate())
+      && match(monF, d.getMonth() + 1) && (match(dowF, dow) || (dow === 0 && match(dowF, 7)))) {
+      return d.toISOString();
+    }
+    d.setMinutes(d.getMinutes() + 1);
+  }
+  return null;
+}
+
 // Most-recent push timestamp for an integration, falling back to sync/update time.
 function lastRunIso(integ) {
   const pushes = integ.recentPushes || [];
@@ -72,6 +102,32 @@ export function mapToCard(integ) {
   const lastIso = lastRunIso(integ);
   const lastRun = relativeTime(lastIso);
 
+  // ── Run health (NOT the same as config status) ──
+  // `integ.status` is the configured state — every integration in a healthy org reads
+  // 'active', so it cannot tell you whether the thing actually works. `integ.lastRun`
+  // carries the real outcome; a card showing a green "Active" badge for an integration
+  // whose last run errored is the bug this replaces.
+  const lastRunAt = integ.lastRun?.at || null;
+  const lastRunStatus = integ.lastRun?.status || null;
+  const health = integ.status === 'error' || lastRunStatus === 'error'
+    ? 'failing'
+    : !lastRunAt
+      ? 'never'
+      : 'ok';
+
+  // Where the data lands, with the label that makes the value legible ("C2" alone
+  // is meaningless; "Project C2" is not).
+  const scope = fm.projectKey ? { label: 'Project', value: fm.projectKey }
+    : fm.listName ? { label: 'List', value: fm.listName }
+      : fm.pgTable ? { label: 'Table', value: fm.pgTable }
+        : null;
+
+  const mappingCount = Array.isArray(fm.mappings) ? fm.mappings.length : 0;
+  // Real 7-day daily series from the API (the old sparkline plotted per-push record
+  // counts — a ragged 0-5 point series that was usually all zeros and drew nothing).
+  const volume7d = Array.isArray(integ.volume7d) ? integ.volume7d : [];
+  const records7d = volume7d.reduce((s, d) => s + (Number(d.count) || 0), 0);
+
   return {
     id: integ.integrationId,
     name: integ.name,
@@ -80,6 +136,14 @@ export function mapToCard(integ) {
     srcIcon: systemIcon(src),
     destIcon: systemIcon(dest),
     route: `${src} → ${dest}`,
+    kind: integ.kind || null,
+    health,
+    lastRunAt,
+    lastRunStatus,
+    scope,
+    mappingCount,
+    volume7d,
+    records7d,
     dept: fm.projectKey || fm.listName || '—',
     status: color,
     msgs: totalRecords,
@@ -119,6 +183,5 @@ export function computeKpis(cards) {
     recordsSynced,
     pushOk: ok, pushPartial: partial, pushFailed: failed,
     successRate,
-    alerts: errored + paused,
   };
 }

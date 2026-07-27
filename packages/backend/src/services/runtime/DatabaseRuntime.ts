@@ -22,6 +22,47 @@ function writerFor(engine: DbEngine) {
   return engine === 'sqlserver' ? new SqlServerWriter() : engine === 'mysql' ? new MySqlWriter() : new PostgresWriter();
 }
 
+/**
+ * Per-engine identifier/literal quoting for the source read. Identifiers come from schema
+ * introspection or the operator's table pick, but they are still interpolated into SQL, so
+ * every one is quoted AND its terminator escaped by doubling — a table or column named
+ * `foo"bar` can't break out. Literals are single-quoted with '' escaping.
+ */
+function quoter(engine: DbEngine, schema: string, database: string) {
+  if (engine === 'mysql') {
+    const id = (s: string) => `\`${String(s).replace(/`/g, '``')}\``;
+    return { col: id, table: (t: string) => `${id(database)}.${id(t)}`, lit: sqlLiteral };
+  }
+  if (engine === 'sqlserver') {
+    const id = (s: string) => `[${String(s).replace(/]/g, ']]')}]`;
+    return { col: id, table: (t: string) => `${id(schema)}.${id(t)}`, lit: sqlLiteral };
+  }
+  const id = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
+  return { col: id, table: (t: string) => `${id(schema)}.${id(t)}`, lit: sqlLiteral };
+}
+
+/** Ceiling for a table we can't page (no PK, no cursorColumn) — the historical read cap. */
+const NO_KEY_CAP = 5000;
+
+function sqlLiteral(v: string): string {
+  return `'${String(v).replace(/'/g, "''")}'`;
+}
+
+/** Run a SELECT through whichever pool the engine's writer holds. */
+async function runSelect(writer: unknown, engine: DbEngine, sql: string): Promise<Record<string, unknown>[]> {
+  const pool = (writer as { pool: unknown }).pool;
+  if (engine === 'postgres') {
+    const r = await (pool as { query: (q: string) => Promise<{ rows: Record<string, unknown>[] }> }).query(sql);
+    return r.rows;
+  }
+  if (engine === 'mysql') {
+    const [rows] = await (pool as { query: (q: string) => Promise<[Record<string, unknown>[]]> }).query(sql);
+    return rows;
+  }
+  const result = await (pool as { request: () => { query: (q: string) => Promise<{ recordset: Record<string, unknown>[] }> } }).request().query(sql);
+  return result.recordset;
+}
+
 function mapDbType(dataType: string): string {
   const t = (dataType || '').toLowerCase();
   if (/int|numeric|decimal|real|double|float|money/.test(t)) return 'number';
@@ -81,30 +122,72 @@ export class DatabaseRuntime implements IConnectorRuntime {
     }
   }
 
-  // Read rows from a source table (DB-as-source). Engine-specific SELECT via the
-  // writer's underlying pool. Capped for safety.
-  async fetch(creds: Creds, entityKey: string, ctx: RuntimeContext): Promise<FetchResult> {
+  /**
+   * Read rows from a source table (DB-as-source), one PAGE at a time.
+   *
+   * Ordering + paging key: `creds.cursorColumn` if the operator set one, else the table's
+   * real primary key (introspected), else — when neither exists — a single unordered capped
+   * page (and we say so via `truncated`, instead of silently returning the first N rows).
+   *
+   * `opts.cursor` is the last value we emitted for that column, so a re-run resumes with
+   * `WHERE col > cursor` rather than re-reading the table. That makes the read incremental
+   * for append-only/updated_at-style tables and keeps memory flat for large ones.
+   */
+  async fetch(creds: Creds, entityKey: string, ctx: RuntimeContext, opts?: Record<string, unknown>): Promise<FetchResult> {
     const engine = await this.engine(ctx);
     const c = this.conn(engine, creds);
     const table = entityKey || creds.table;
     if (!table) throw new Error('No source table — set the table name in the source credentials');
-    const LIMIT = 5000;
+
+    const pageSize = Math.min(Number(opts?.limit) || Number(creds.pageSize) || 1000, 5000);
+    const cursor = opts?.cursor == null ? undefined : String(opts.cursor);
+
     const writer = writerFor(engine);
     await writer.connect({ engine, host: c.host, port: c.port, database: c.database, username: c.username, password: c.password });
     try {
-      const pool = (writer as unknown as { pool: unknown }).pool;
-      let records: Record<string, unknown>[] = [];
-      if (engine === 'postgres') {
-        const r = await (pool as { query: (q: string) => Promise<{ rows: Record<string, unknown>[] }> }).query(`SELECT * FROM "${c.schema}"."${table}" LIMIT ${LIMIT}`);
-        records = r.rows;
-      } else if (engine === 'mysql') {
-        const [rows] = await (pool as { query: (q: string) => Promise<[Record<string, unknown>[]]> }).query(`SELECT * FROM \`${c.database}\`.\`${table}\` LIMIT ${LIMIT}`);
-        records = rows;
-      } else {
-        const result = await (pool as { request: () => { query: (q: string) => Promise<{ recordset: Record<string, unknown>[] }> } }).request().query(`SELECT TOP ${LIMIT} * FROM [${c.schema}].[${table}]`);
-        records = result.recordset;
+      // The column we order + resume by. Operator override first, then the real PK.
+      let keyCol = creds.cursorColumn || creds.keyColumn || '';
+      if (!keyCol) {
+        try {
+          const schema = await new DbSchemaIntrospector(writer).getTableSchema(c.schema, table);
+          keyCol = schema.columns.find((col) => col.isPrimaryKey)?.columnName ?? '';
+        } catch { keyCol = ''; } // introspection unavailable — fall through to the capped read
       }
-      return { records, totalCount: records.length };
+
+      const q = quoter(engine, c.schema, c.database);
+      const target = q.table(table);
+      let sql: string;
+      if (keyCol) {
+        const col = q.col(keyCol);
+        const where = cursor === undefined ? '' : ` WHERE ${col} > ${q.lit(cursor)}`;
+        sql = engine === 'sqlserver'
+          ? `SELECT TOP ${pageSize} * FROM ${target}${where} ORDER BY ${col} ASC`
+          : `SELECT * FROM ${target}${where} ORDER BY ${col} ASC LIMIT ${pageSize}`;
+      } else {
+        // No key column to page by (no PK and no override). We can't resume safely — OFFSET
+        // without a stable ORDER BY can repeat or skip rows — so take ONE read capped at the
+        // long-standing 5000 ceiling (never smaller than before, so this is not a
+        // regression) and report `truncated` if we filled it, instead of silently
+        // pretending the table ended there.
+        sql = engine === 'sqlserver'
+          ? `SELECT TOP ${NO_KEY_CAP} * FROM ${target}`
+          : `SELECT * FROM ${target} LIMIT ${NO_KEY_CAP}`;
+      }
+
+      const records = await runSelect(writer, engine, sql);
+
+      // A full page means there is probably more. With a key column we hand back a resume
+      // token; without one we can only report that the read was capped.
+      const limitUsed = keyCol ? pageSize : NO_KEY_CAP;
+      const full = records.length >= limitUsed;
+      const lastVal = keyCol && records.length ? records[records.length - 1][keyCol] : undefined;
+      return {
+        records,
+        totalCount: records.length,
+        keyField: keyCol || undefined,
+        nextCursor: full && lastVal != null ? String(lastVal) : undefined,
+        truncated: full && !keyCol,
+      };
     } finally {
       try { await writer.disconnect(); } catch { /* ignore */ }
     }

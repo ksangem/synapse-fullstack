@@ -13,7 +13,7 @@
  */
 
 import { db } from '../db/client';
-import { redisConnection } from '../queues';
+import { getRedisConnection } from '../queues';
 import { IntegrationBus } from './integration-bus';
 import { RouterService } from './router-service';
 import { TransformPipeline } from './transform-pipeline';
@@ -41,7 +41,7 @@ let runtime: HubRuntime | null = null;
 export async function initHub(): Promise<HubRuntime> {
   if (runtime) return runtime;
 
-  const connection = redisConnection;
+  const connection = getRedisConnection();
   await ensureHubIntegration();
 
   const inbox = new InboxRepository(db);
@@ -52,7 +52,9 @@ export async function initHub(): Promise<HubRuntime> {
 
   // Publish side + sorting half (both connector-agnostic).
   const bus = new IntegrationBus(inbox);
-  const router = new RouterService(hubService.registry, inbox, outbox);
+  // deadLetter is passed so the router can shelve messages that match no subscription
+  // (e.g. an inbound webhook with no live integration) instead of silently dropping them.
+  const router = new RouterService(hubService.registry, inbox, outbox, deadLetter);
   // Let DLQ replay re-run the same transform the live dispatch path applies.
   hubService.setPipeline(pipeline);
 
@@ -106,6 +108,15 @@ export async function initHub(): Promise<HubRuntime> {
     await registerCredentialExpiryScan();
   } catch (err) {
     console.error('[Hub] credential expiry scan wiring failed:', (err as Error).message);
+  }
+
+  // Alert dispatcher — standalone scanner raising run-failure / DLQ-depth / SLA alerts.
+  try {
+    const { startAlertDispatcherWorker, registerAlertDispatcherScan } = await import('../workers/alertDispatcherWorker');
+    workers.push(startAlertDispatcherWorker());
+    await registerAlertDispatcherScan();
+  } catch (err) {
+    console.error('[Hub] alert dispatcher wiring failed:', (err as Error).message);
   }
 
   // Watchdog (#4): guarantees every run terminates — no push can spin forever.

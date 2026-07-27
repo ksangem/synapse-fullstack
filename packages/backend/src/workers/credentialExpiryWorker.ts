@@ -9,7 +9,7 @@ import { Worker } from 'bullmq';
 import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '../db/client';
 import { credentials, alerts } from '../db/schema';
-import { credentialRotatorQueue, redisConnection } from '../queues';
+import { getCredentialRotatorQueue, getRedisConnection } from '../queues';
 
 const QUEUE = 'credential-rotator';
 const SCAN_JOB = 'scan-expiry';
@@ -61,14 +61,14 @@ export function startCredentialExpiryWorker(): Worker {
     const raised = await scanExpiringCredentials();
     console.log(`[CredentialExpiry] scan complete — ${raised} new alert(s)`);
     return { raised };
-  }, { connection: redisConnection });
+  }, { connection: getRedisConnection() });
   worker.on('failed', (_job, err) => console.error('[CredentialExpiry] job failed:', err?.message));
   return worker;
 }
 
 /** Register the daily repeatable scan (08:00). Idempotent. */
 export async function registerCredentialExpiryScan(): Promise<void> {
-  await credentialRotatorQueue.upsertJobScheduler(
+  await getCredentialRotatorQueue().upsertJobScheduler(
     'credential-expiry-scan',
     { pattern: '0 8 * * *' },
     { name: SCAN_JOB, data: {} },

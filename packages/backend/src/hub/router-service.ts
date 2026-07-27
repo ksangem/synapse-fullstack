@@ -21,7 +21,8 @@ import type { MessageEnvelope } from './interfaces';
 import type { SubscriptionRegistry } from './subscription-registry';
 import type { InboxRepository } from './inbox-repository';
 import type { OutboxRepository } from './outbox-repository';
-import { hubDispatchQueue } from '../queues';
+import type { DeadLetterRepository } from './dead-letter-repository';
+import { getHubDispatchQueue } from '../queues';
 import { recordOut } from './run-recorder';
 
 /** Payload of a `hub-dispatch` job — everything the dispatch worker needs. */
@@ -33,13 +34,19 @@ export interface DispatchJobData {
 }
 
 export class RouterService {
-  // The shared `hub-dispatch` producer queue (declared in queues/index.ts).
-  private readonly dispatchQueue = hubDispatchQueue;
+  // The shared `hub-dispatch` producer queue (declared in queues/index.ts). Resolved on
+  // ACCESS, not at construction, so routing an envelope that matches no subscription never
+  // opens a Redis connection.
+  private get dispatchQueue() { return getHubDispatchQueue(); }
 
   constructor(
     private readonly registry: SubscriptionRegistry,
     private readonly inboxRepo: InboxRepository,
     private readonly outboxRepo: OutboxRepository,
+    // Optional: shelves messages that match NO subscription so inbound data (webhooks,
+    // a source whose subscription isn't loaded yet) is never silently dropped. Omitted
+    // in unit tests that only assert routing counts.
+    private readonly deadLetterRepo?: DeadLetterRepository,
   ) {}
 
   /**
@@ -53,6 +60,7 @@ export class RouterService {
     await this.inboxRepo.markProcessing(orgId, messageId);
 
     const subs = this.registry.findForEnvelope(envelope);
+    const matched = subs.length;
     let dispatched = 0;
 
     for (const sub of subs) {
@@ -88,6 +96,27 @@ export class RouterService {
     if (dispatched === 0) {
       const runId = envelope.headers?.runId;
       if (runId) await recordOut(runId, 'skipped', envelope.checksum);
+
+      // Distinguish the two zero-dispatch causes. `matched === 0` = the message is
+      // genuinely UNROUTABLE (no subscription for its topic) — dangerous, because it
+      // was accepted onto the bus and would otherwise vanish (the webhook-with-no-
+      // subscription case). Make it loud AND shelve it in the DLQ for visibility/
+      // recovery. `matched > 0` = every match was a suppressed duplicate — correct
+      // idempotent behaviour, stays quiet.
+      if (matched === 0) {
+        console.warn(
+          `[HubRouter] UNROUTED message topic="${envelope.topic}" msgId=${messageId} org=${orgId} — ` +
+            `no live subscription matched; shelved to DLQ (not delivered).`,
+        );
+        try {
+          await this.deadLetterRepo?.insertUnrouted(
+            envelope,
+            `No live subscription matched topic "${envelope.topic}". The message was accepted but has no destination — add/activate an integration for this source, then replay.`,
+          );
+        } catch (err) {
+          console.error(`[HubRouter] failed to shelve unrouted message ${messageId}:`, (err as Error).message);
+        }
+      }
     }
 
     // Inbox = "routed" checkpoint: once fan-out is enqueued the envelope's intake

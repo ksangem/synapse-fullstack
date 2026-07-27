@@ -119,14 +119,15 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
     capabilities: baseCaps('both', { pushIsAsync: true }),
   },
   {
-    key: 'fileshare', label: 'File Share / Storage', icon: '\u{1F4C2}', runtimeKind: 'fileshare', defaultRole: 'both', real: true, status: 'partial',
-    statusNote: 'SFTP file listing works. S3, Azure Blob and Google Drive need their SDKs; content parsing is a follow-up.',
+    key: 'fileshare', label: 'File Share / Storage', icon: '\u{1F4C2}', runtimeKind: 'fileshare', defaultRole: 'source', real: true, status: 'ga',
+    statusNote: 'Reads CSV/TSV/JSON/Excel files into rows (→ a Database table or SharePoint list) over SFTP, Local FS, SharePoint document libraries, AWS S3, Azure Blob and Google Drive.',
     authMethods: ['oauth2_client', 'awsKeys', 'sshKey', 'serviceAccount'],
     entityModel: 'sample',
     configFields: [
       { key: 'provider', label: 'Storage Provider', type: 'select', required: true, options: ['SharePoint', 'AWS S3', 'Azure Blob', 'Google Drive', 'SFTP', 'Local FS'] },
       { key: 'bucket', label: 'Bucket / Container', type: 'text', showWhen: { field: 'provider', in: ['AWS S3', 'Azure Blob'] } },
       { key: 'region', label: 'Region', type: 'text', showWhen: { field: 'provider', in: ['AWS S3'] } },
+      { key: 'folderId', label: 'Drive Folder ID', type: 'text', showWhen: { field: 'provider', in: ['Google Drive'] } },
       { key: 'keyPrefix', label: 'Key Prefix (path filter)', type: 'text' },
       { key: 'sftpHost', label: 'SFTP Host', type: 'text', showWhen: { field: 'provider', in: ['SFTP'] } },
       { key: 'remotePath', label: 'Remote Path', type: 'text', showWhen: { field: 'provider', in: ['SFTP', 'Local FS'] } },
@@ -135,8 +136,11 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
       { key: 'pollInterval', label: 'Polling Interval (minutes)', type: 'number' },
       { key: 'archiveOnIngest', label: 'Archive on Ingest', type: 'checkbox' },
     ],
-    capabilities: baseCaps('both', { lifecycle: 'long-running', canTestAtDesignTime: false }),
-    note: 'SFTP supported (list files); S3/Azure/Drive need their SDK. Content parsing via the Flat File parser is the follow-up.',
+    // canTestAtDesignTime:false — like Database, File Share connects with the Operator's
+    // per-connection credentials in the Wizard, so there's nothing to test (or gate publish
+    // on) at design time. The real Test Connection happens in the Wizard.
+    capabilities: baseCaps('source', { lifecycle: 'long-running', canTestAtDesignTime: false }),
+    note: 'Source-only: reads tabular files into rows via the shared StorageProvider (SFTP / Local FS / SharePoint files / S3 / Azure Blob / Google Drive) + file codec (CSV/TSV/JSON/Excel).',
   },
   {
     key: 'saas', label: 'SaaS Application', icon: '☁', runtimeKind: 'rest', defaultRole: 'both', real: true, status: 'ga',
@@ -190,14 +194,16 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
     note: 'Inverted (inbound) — POST events to /api/ingest/<connectorId>; they land in the hub inbox and are drained on fetch.',
   },
   {
-    key: 'scrape', label: 'Web Scraping', icon: '\u{1F577}', runtimeKind: 'scrape', defaultRole: 'source', real: true, status: 'partial',
-    statusNote: 'Playwright record-and-replay crawler works. Apify Cloud and some 2FA login flows are still maturing.',
+    key: 'scrape', label: 'Web Scraping', icon: '\u{1F577}', runtimeKind: 'scrape', defaultRole: 'source', real: true, status: 'ga',
+    statusNote: 'Record a login (username/password, 2FA session, or none), walk the site highlighting values → labeled entities. Operators pick entities and bring their own auth; delivered through the bus.',
     authMethods: ['browserLogin', 'apifyToken', 'none'],
     entityModel: 'sample',
     configFields: [
-      // Minimal registration — just the starting URL. The Crawl Recorder (Operation
-      // step) captures login, navigation and fields, so nothing else is needed here.
-      { key: 'targetUrls', label: 'Base / login URL', type: 'text', required: true, help: 'Just the starting URL (e.g. https://nalashaa.atlassian.net). Use the Crawl Recorder in the Operation step to record login, navigation and fields.' },
+      // Redesign: pick the login method + browser up front; the Crawl Recorder (Operation
+      // step) then records login, per-page navigation and the highlighted fields → entities.
+      { key: 'targetUrls', label: 'Base / login URL', type: 'text', required: true, help: 'The starting URL (e.g. https://portal.example.com). The Recorder captures login, navigation and fields.' },
+      { key: 'loginMethod', label: 'Login Method', type: 'select', required: true, options: ['No Auth', 'Username & Password', 'Recorded Session (2FA)'], help: 'No Auth: public site. Username & Password: mark the login fields; each operator enters their own creds. Recorded Session: each operator logs in once (handles 2FA) and their session is saved.' },
+      { key: 'browserEngine', label: 'Browser', type: 'select', options: ['Chromium', 'Firefox', 'WebKit'], help: 'Engine the crawl runs in (recording preview is always Chromium).' },
       { key: 'advanced', label: 'Advanced — configure the crawl by hand (skip the recorder)', type: 'checkbox' },
       // ── Everything below is hidden unless "Advanced" is ticked ──
       { key: 'engine', label: 'Scraping Engine', type: 'select', options: ['Playwright Self-hosted', 'Apify Cloud', 'Both (fallback)'], showWhen: { field: 'advanced', in: [true] } },
@@ -242,8 +248,11 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
       { key: 'userAgent', label: 'User Agent', type: 'text', showWhen: { field: 'advanced', in: [true] } },
       { key: 'schedule', label: 'Schedule (cron)', type: 'text', showWhen: { field: 'advanced', in: [true] } },
     ],
-    capabilities: baseCaps('source', { lifecycle: 'long-running' }),
-    note: 'Record-and-replay crawler: use the Crawl Recorder (Operation step) to capture login + navigation + fields. Advanced mode exposes manual selectors/pagination.',
+    // canTestAtDesignTime:false — validation is the Crawl Recorder's per-entity Test
+    // (which uses the live logged-in browser); a Stage-5 runtime test can't log in for the
+    // session (2FA) method, so publish isn't gated on a design-time test.
+    capabilities: baseCaps('source', { lifecycle: 'long-running', canTestAtDesignTime: false }),
+    note: 'Record-and-replay crawler: choose a login method + browser, then use the Crawl Recorder (Operation step) to record login, per-page navigation, and highlighted fields → entities.',
   },
   {
     key: 'graphql', label: 'GraphQL API', icon: '\u{25C8}', runtimeKind: 'graphql', defaultRole: 'both', real: true, status: 'partial',

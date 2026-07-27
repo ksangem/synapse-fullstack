@@ -3,7 +3,41 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { runtimeClient } from '../../services/runtimeClient';
 import JoinsPanel from '../mapping/JoinsPanel';
-import { toSqlDate, PAIR_COLORS } from '../mapping/mappingUtils';
+import PresetConfigFields from '../mapping/PresetConfigFields';
+import SessionRecorder from './SessionRecorder';
+import Button from '../ui/Button';
+import Card from '../ui/Card';
+import {
+  PAIR_COLORS, PRESET_GROUPS, PRESET_TRANSFORMS, PRESET_OUTPUT_TYPE,
+  computeMappedValue, defaultPresetConfig, presetConfigSpec, presetIssue, sampleFor,
+} from '../mapping/mappingUtils';
+import { clickable } from '../../utils/clickable';
+
+
+/* Wizard system picker card.
+
+   The previous markup was a `<div onClick>`: not focusable, not reachable by
+   keyboard, and it signalled selection with `borderWidth: 2` — which reflows the
+   card by a pixel and nudges every neighbour in the grid. `blocked` (a connector
+   kind the bus cannot run) was expressed only as inline opacity, so it still read
+   as clickable. Both are now states the shared card owns. */
+function SystemCard({ label, icon, selected, blocked, onSelect }) {
+  return (
+    <Card
+      interactive
+      className="ucard--pick"
+      selected={selected}
+      disabled={!!blocked}
+      onOpen={() => { if (!blocked) onSelect(); }}
+      ariaLabel={blocked ? `${label} — ${blocked}` : label}
+      tooltip={blocked || label}
+    >
+      <div className="ucard-pick-icon" aria-hidden="true"><ConnIcon icon={icon} size={26} /></div>
+      <div className="ucard-pick-label">{label}</div>
+      {blocked && <div className="ucard-pick-note">not on bus</div>}
+    </Card>
+  );
+}
 
 /* ─── Static Data ──────────────────────────────────────��── */
 const stepLabels = ['Select Systems', 'Credentials', 'Entities', 'Mapping', 'Fetch & Review', 'Push & Sync'];
@@ -24,36 +58,11 @@ function ConnIcon({ icon, size = 26 }) {
    (`/api/connectors`) into component state — see the connector-metadata effect
    inside WizardPage. `isDbDest` / `getFields` / `dbCfg` are registry-driven. */
 
-const PRESET_TRANSFORMS = [
-  // Text (single source)
-  { value: 'dateFormat', label: 'Date Format (YYYY-MM-DD)', desc: 'Extracts date portion' },
-  { value: 'toDate', label: 'Year/Partial → Date (YYYY-MM-DD)', desc: 'Year "2026" → 2026-01-01; junk → empty. For SQL date columns.' },
-  { value: 'uppercase', label: 'Uppercase', desc: 'Converts text to UPPER CASE' },
-  { value: 'lowercase', label: 'Lowercase', desc: 'Converts text to lower case' },
-  { value: 'trim', label: 'Trim Whitespace', desc: 'Removes leading/trailing spaces' },
-  { value: 'joinArray', label: 'Join Array \u2192 String', desc: 'Joins array items with comma' },
-  { value: 'extractNumber', label: 'Extract Number', desc: 'Extracts first number from text' },
-  // Type casts (single source)
-  { value: 'toInt', label: 'Cast \u2192 Integer', desc: 'Parse the value as a whole number' },
-  { value: 'toFloat', label: 'Cast \u2192 Decimal', desc: 'Parse the value as a decimal number' },
-  { value: 'toText', label: 'Cast \u2192 Text', desc: 'Convert the value to a string' },
-  { value: 'boolean', label: 'Cast \u2192 Boolean', desc: 'Truthy check \u2192 true / false' },
-  // Aggregations (across ALL selected source fields, coerced to numbers)
-  { value: 'sum', label: '\u03a3 Sum (all sources)', desc: 'Add all selected sources as numbers' },
-  { value: 'avg', label: 'Average / Mean (all sources)', desc: 'Mean of the selected number sources' },
-  { value: 'min', label: 'Min (all sources)', desc: 'Smallest of the source values' },
-  { value: 'max', label: 'Max (all sources)', desc: 'Largest of the source values' },
-  { value: 'count', label: 'Count (non-empty sources)', desc: 'How many sources have a value' },
-  { value: 'concat', label: 'Concatenate (all sources)', desc: 'Join all sources with a space' },
-];
+/* PRESET_TRANSFORMS / PRESET_OUTPUT_TYPE / computeMappedValue now live in
+   ../mapping/mappingUtils — the single source of truth shared with the Mapping
+   Canvas, and kept in parity with the backend's MappingEngine (which is what
+   actually runs the mappings: the Wizard pushes a recipe, not the data). */
 
-// Output type each preset produces \u2014 used to auto-type a new destination column.
-const PRESET_OUTPUT_TYPE = {
-  toInt: 'number', toFloat: 'number', extractNumber: 'number',
-  sum: 'number', avg: 'number', min: 'number', max: 'number', count: 'number',
-  boolean: 'boolean', dateFormat: 'datetime',
-  toText: 'string', uppercase: 'string', lowercase: 'string', trim: 'string', joinArray: 'string', concat: 'string',
-};
 function inferMappingOutputType(m) {
   if (m.transform === 'PRESET' && PRESET_OUTPUT_TYPE[m.preset]) return PRESET_OUTPUT_TYPE[m.preset];
   if (m.transform === 'DIRECT') return m.srcTypes?.[0] || 'string';
@@ -165,9 +174,6 @@ function autoMapFields(srcFields, destFields) {
   return mappings;
 }
 
-// toSqlDate is imported from ../mapping/mappingUtils (single source). runPresetTransform +
-// evaluateExpression were dead here (computeMappedValue handles presets/expressions inline).
-
 /**
  * Auto-generate a JS expression based on source fields and destination type.
  * Handles nested objects (assignee.displayName), arrays (labels), type coercion, etc.
@@ -249,84 +255,13 @@ function PasswordField({ value, onChange, placeholder, label }) {
   const togglePw = () => { setShowPw(true); setTimeout(() => setShowPw(false), 3000); };
   return (
     <div className="form-group">
-      <label>{label}</label>
+      <label htmlFor="wizardpage-field">{label}</label>
       <div className="password-wrap">
-        <input type={showPw ? 'text' : 'password'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
+        <input id="wizardpage-field" type={showPw ? 'text' : 'password'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
         <button className="eye-btn" type="button" onClick={togglePw}>&#128065;</button>
       </div>
     </div>
   );
-}
-
-// Resolve a (possibly nested / SharePoint `.fields`) source value from a record.
-function getNestedValue(obj, path) {
-  if (!obj || !path) return '';
-  const parts = String(path).split('.');
-  let val = obj;
-  for (const p of parts) {
-    if (val == null) return '';
-    if (p === 'fields' || p === 'key' || p === 'id') val = val[p];
-    else val = val.fields?.[p] ?? val[p];
-  }
-  return val;
-}
-
-// Compute a mapping's output value for ONE record, applying the transform
-// (DIRECT / preset / multi-source EXPRESSION). Shared by the Step-5 preview AND the push,
-// so what you preview is exactly what gets written. Returns the raw value (numbers stay numbers).
-function computeMappedValue(m, record) {
-  const srcVal = (m.sources || []).map((s) => {
-    const raw = getNestedValue(record, s);
-    if (raw && typeof raw === 'object') {
-      if (raw.name) return raw.name;
-      if (raw.displayName) return raw.displayName;
-      if (Array.isArray(raw)) return raw.map((v) => (typeof v === 'object' ? (v.name || JSON.stringify(v)) : v)).join(', ');
-      return JSON.stringify(raw);
-    }
-    return raw ?? '';
-  });
-  if (!m.transform || m.transform === 'DIRECT') return srcVal[0] ?? '';
-  const nums = srcVal.map((v) => Number(v)).filter((n) => !Number.isNaN(n));
-  switch (m.preset) {
-    // text
-    case 'dateFormat': return String(srcVal[0] ?? '').substring(0, 10);
-    case 'toDate': return toSqlDate(srcVal[0]);
-    case 'uppercase': return String(srcVal[0] ?? '').toUpperCase();
-    case 'lowercase': return String(srcVal[0] ?? '').toLowerCase();
-    case 'trim': return String(srcVal[0] ?? '').trim();
-    case 'joinArray': return Array.isArray(srcVal[0]) ? srcVal[0].join(', ') : String(srcVal[0] ?? '');
-    case 'extractNumber': { const n = String(srcVal[0] ?? '').match(/[\d.]+/); return n ? Number(n[0]) : 0; }
-    // type casts
-    case 'toInt': return parseInt(srcVal[0], 10) || 0;
-    case 'toFloat': return Number(srcVal[0]) || 0;
-    case 'toText': return String(srcVal[0] ?? '');
-    case 'boolean': return !!srcVal[0] && srcVal[0] !== 'false' && srcVal[0] !== '0';
-    // aggregations (across all sources)
-    case 'sum': return nums.reduce((a, b) => a + b, 0);
-    case 'avg': return nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
-    case 'min': return nums.length ? Math.min(...nums) : 0;
-    case 'max': return nums.length ? Math.max(...nums) : 0;
-    case 'count': return srcVal.filter((v) => v !== null && v !== undefined && v !== '').length;
-    case 'concat': return srcVal.map((v) => v ?? '').join(' ');
-    default: break;
-  }
-  if (m.transform === 'EXPRESSION' && m.expression) {
-    const source = {};
-    (m.sources || []).forEach((s, i) => {
-      source[s] = srcVal[i]; // flat key: source['@join.alias.col']
-      // Also expose a nested view so source['@join']['alias']['col'] resolves — matches the
-      // backend and the way dotted source paths are auto-generated as nested chains.
-      if (String(s).includes('.')) {
-        const parts = String(s).split('.'); let cur = source;
-        for (let k = 0; k < parts.length - 1; k++) { const p = parts[k]; if (typeof cur[p] !== 'object' || cur[p] === null) cur[p] = {}; cur = cur[p]; }
-        cur[parts[parts.length - 1]] = srcVal[i];
-      }
-    });
-    // eslint-disable-next-line no-new-func
-    const fn = new Function('source', m.expression);
-    return fn(source);
-  }
-  return srcVal.join(', ');
 }
 
 function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey, onSetKey, onUpdate, onRemove, expanded, onToggle, targets = [] }) {
@@ -353,7 +288,7 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
   };
   const srcDisplay = mapping.sources.join(' + ');
   const destDisplay = mapping.destinations.join(' + ');
-  const compatible = mapping.sources.every((s, i) => {
+  const compatible = mapping.sources.every((s) => {
     const sf = srcFields.find(f => f.name === s);
     const df = destFields.find(f => f.name === mapping.destinations[0]);
     return typesCompatible(sf?.type, df?.type);
@@ -368,16 +303,9 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
     : mapping.transform === 'PRESET' ? 'transform'
     : 'expression';
 
-  // Preview
-  const sampleSource = {};
-  for (const s of mapping.sources) {
-    const sf = srcFields.find(f => f.name === s);
-    if (sf?.type === 'array') sampleSource[s] = ['item1', 'item2'];
-    else if (sf?.type === 'number') sampleSource[s] = 42;
-    else if (sf?.type === 'boolean') sampleSource[s] = true;
-    else if (sf?.type === 'datetime') sampleSource[s] = '2025-06-15T10:30:00.000Z';
-    else sampleSource[s] = `Sample ${s}`;
-  }
+  // Preview — the sample is preset-aware (see sampleFor), so e.g. parseDate previews
+  // against a date in its configured format rather than a generic "Sample x" string.
+  const sampleSource = sampleFor(mapping.sources, srcFields, mapping);
 
   let previewOutput = '';
   let previewError = '';
@@ -386,10 +314,14 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
   } catch (e) {
     previewError = e.message;
   }
+  // Advisory: wrong source count / missing required option — a misconfigured preset
+  // otherwise just writes empty values with no explanation.
+  const configIssue = presetIssue(mapping);
 
   return (
     <div className={`mapping-row${expanded ? ' expanded' : ''}${hasMismatch ? ' has-warning' : ''}`}>
-      <div className="mapping-row-header" onClick={onToggle}>
+      <div className="mapping-row-header" {...clickable(onToggle, { label: `${expanded ? 'Collapse' : 'Expand'} mapping ${srcDisplay} to ${destDisplay}` })}
+        aria-expanded={expanded}>
         <button
           type="button"
           className="map-key-star"
@@ -399,7 +331,7 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
           onClick={(e) => { e.stopPropagation(); onSetKey(); }}
           style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px',
-            fontSize: '1.1rem', lineHeight: 1, color: isKey ? '#f59e0b' : 'var(--text-dim)',
+            fontSize: 'var(--fs-lg)', lineHeight: 1, color: isKey ? '#f59e0b' : 'var(--text-dim)',
             opacity: isKey ? 1 : 0.55,
           }}
         >{isKey ? '★' : '☆'}</button>
@@ -409,7 +341,7 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
         <span className="map-dest" title={destDisplay}>{destDisplay}</span>
         <span className={`map-badge ${badgeClass}`}>{hasMismatch ? '\u26A0 Type' : transformLabel}</span>
         <span className="map-actions">
-          <button title="Remove" onClick={e => { e.stopPropagation(); onRemove(); }}>&times;</button>
+          <button className="btn btn-ghost btn-xs" title="Remove" aria-label="Remove mapping" onClick={e => { e.stopPropagation(); onRemove(); }}>&times;</button>
         </span>
       </div>
       {expanded && (
@@ -422,7 +354,7 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
                   <span key={i} className="multi-field-chip">
                     {s}
                     {mapping.sources.length > 1 && (
-                      <button onClick={() => {
+                      <button className="multi-field-remove" onClick={() => {
                         const next = { ...mapping, sources: mapping.sources.filter((_, j) => j !== i), srcTypes: mapping.srcTypes.filter((_, j) => j !== i) };
                         onUpdate(next);
                       }}>&times;</button>
@@ -463,13 +395,13 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
               </select>
             </div>
             <div className="editor-field">
-              <label>Destination Column(s){targets.length > 1 ? ' → target' : ''}</label>
+              <label htmlFor="wizardpage-destination-column-s">Destination Column(s){targets.length > 1 ? ' → target' : ''}</label>
               <div className="multi-field-list">
                 {mapping.destinations.map((d, i) => (
                   <span key={i} className="multi-field-chip" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                     {d}
                     {targets.length > 1 && (
-                      <select
+                      <select id="wizardpage-destination-column-s"
                         value={(mapping.routes?.find((r) => r.column === d)?.targetId) || 'primary'}
                         onClick={(e) => e.stopPropagation()}
                         onChange={(e) => {
@@ -478,13 +410,13 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
                           onUpdate({ ...mapping, routes: [...others, { targetId, column: d }] });
                         }}
                         title="Which destination target this column is written to"
-                        style={{ fontSize: '.68rem', padding: '0 2px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg-card)', maxWidth: 110 }}
+                        style={{ fontSize: 'var(--fs-xs)', padding: '0 2px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg-card)', maxWidth: 110 }}
                       >
                         {targets.map((t) => <option key={t.targetId} value={t.targetId}>{t.label}</option>)}
                       </select>
                     )}
                     {mapping.destinations.length > 1 && (
-                      <button onClick={() => {
+                      <button className="multi-field-remove" onClick={() => {
                         const next = { ...mapping, destinations: mapping.destinations.filter((_, j) => j !== i), destTypes: mapping.destTypes.filter((_, j) => j !== i) };
                         onUpdate(next);
                       }}>&times;</button>
@@ -533,11 +465,11 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
                     onChange={(e) => setNewColName(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addNewDestColumn(newColName); } }}
                     placeholder="+ New column…"
-                    style={{ flex: 1, minWidth: 0, padding: '5px 8px', borderRadius: 6, border: '1px dashed var(--border)', fontSize: '.82rem' }}
+                    style={{ flex: 1, minWidth: 0, padding: '5px 8px', borderRadius: 'var(--radius)', border: '1px dashed var(--border)', fontSize: 'var(--fs-sm)' }}
                   />
                   <select value={newColType || inferMappingOutputType(mapping)} onChange={(e) => setNewColType(e.target.value)}
                     title="Column type (defaults to the transform's output type)"
-                    style={{ padding: '5px 6px', borderRadius: 6, border: '1px solid var(--border)', fontSize: '.78rem' }}>
+                    style={{ padding: '5px 6px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', fontSize: 'var(--fs-sm)' }}>
                     <option value="string">Text</option>
                     <option value="number">Number</option>
                     <option value="boolean">Boolean</option>
@@ -557,7 +489,10 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
                 Direct Copy
               </button>
               <button className={`transform-mode-btn${mapping.transform === 'PRESET' ? ' active' : ''}`}
-                onClick={() => onUpdate({ ...mapping, transform: 'PRESET', preset: mapping.preset || 'joinArray' })}>
+                onClick={() => {
+                  const preset = mapping.preset || 'joinArray';
+                  onUpdate({ ...mapping, transform: 'PRESET', preset, presetConfig: defaultPresetConfig(preset, mapping.presetConfig) });
+                }}>
                 Preset
               </button>
               <button className={`transform-mode-btn${mapping.transform === 'EXPRESSION' ? ' active' : ''}`}
@@ -567,12 +502,36 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
             </div>
 
             {mapping.transform === 'PRESET' && (
-              <select value={mapping.preset || ''} onChange={e => onUpdate({ ...mapping, preset: e.target.value })}
-                style={{ width: '100%', marginBottom: 8 }}>
-                {PRESET_TRANSFORMS.map(p => (
-                  <option key={p.value} value={p.value}>{p.label} &mdash; {p.desc}</option>
-                ))}
-              </select>
+              <>
+                <select
+                  value={mapping.preset || ''}
+                  // Switching preset re-seeds the new preset's default options and drops the old
+                  // preset's — stale keys would otherwise ride along into presetConfig.
+                  onChange={e => onUpdate({ ...mapping, preset: e.target.value, presetConfig: defaultPresetConfig(e.target.value) })}
+                  style={{ width: '100%', marginBottom: 8 }}>
+                  {Object.entries(PRESET_GROUPS).map(([group, presets]) => (
+                    <optgroup key={group} label={group}>
+                      {presets.map(p => (
+                        <option key={p.value} value={p.value}>{p.label} &mdash; {p.desc}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+
+                {presetConfigSpec(mapping.preset) && (
+                  <PresetConfigFields
+                    preset={mapping.preset}
+                    config={mapping.presetConfig}
+                    onChange={(presetConfig) => onUpdate({ ...mapping, presetConfig })}
+                  />
+                )}
+
+                {configIssue && (
+                  <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--warning-on)', marginBottom: 8 }}>
+                    &#9888; {configIssue}
+                  </div>
+                )}
+              </>
             )}
 
             {mapping.transform === 'EXPRESSION' && (
@@ -604,6 +563,10 @@ function MappingRow({ mapping, index, srcFields, destFields, allowNewDest, isKey
 /* ─── Main Wizard ───────────────────────────────────────── */
 export default function WizardPage() {
   const [wizardStep, setWizardStep] = useState(1);
+  /* Which way the user is moving through the wizard. The step content enters from
+     the side it came from, so Back reads as retreating rather than as another
+     forward move. `stepKey` re-mounts the container so the animation re-triggers. */
+  const [stepDir, setStepDir] = useState('fwd');
   // True once the saved session (if any) has been applied — gates the persist effect so
   // the initial empty render never overwrites a snapshot before it's restored.
   const [hydrated, setHydrated] = useState(false);
@@ -616,6 +579,13 @@ export default function WizardPage() {
   const [sourceCards, setSourceCards] = useState([]); // [{ icon, label, connectorId }]
   const [destCards, setDestCards] = useState([]);
   const [connectorMeta, setConnectorMeta] = useState({}); // label → { connectorId, latestVersionId, credFields, runtimeConfig, entityDescriptions }
+
+  // Which runtimeKinds the BUS can actually run. A connector can be authored, tested and
+  // fetched (client-side) for a kind that has NO bus source/destination factory — the whole
+  // wizard then succeeds until Push, which 400s with "can't be run on the bus". We gate the
+  // pickers on this instead. Starts `enforced:false` so nothing is blocked until the real
+  // answer arrives (and stays unblocked if the hub is off / the call fails).
+  const [runnableKinds, setRunnableKinds] = useState({ sources: [], destinations: [], enforced: false });
 
   // Saved connections (loaded on mount)
   const [savedConnections, setSavedConnections] = useState([]);
@@ -729,6 +699,9 @@ export default function WizardPage() {
   // Multi-entity group: tag several saved connections (entities) with a shared groupId so they
   // can be run together via "Run all in group" (POST /run-group). Empty ⇒ ungrouped.
   const [groupId, setGroupId] = useState('');
+  // Run order inside the group (parents before children). Kept as a STRING so the
+  // number input can be cleared; coerced once on save.
+  const [groupOrder, setGroupOrder] = useState('');
   const [groupRunStatus, setGroupRunStatus] = useState('idle'); // idle | running | done | error
   const [groupRunResult, setGroupRunResult] = useState(null);
   // Credentials list for the cross-server target picker (loaded on mount).
@@ -789,6 +762,24 @@ export default function WizardPage() {
   // Source side runs through the generic runtime path (REST-style) for both REST-family and DB sources.
   const isRuntimeSource = (label) => isRest(label) || isDbSource(label);
   const isFlatFile = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'flatfile';
+  const isScrape = (label) => connectorMeta[label]?.runtimeConfig?.runtimeKind === 'scrape';
+  const scrapeLoginMethod = (label) => {
+    const v = String(connectorMeta[label]?.runtimeConfig?.categoryConfig?.loginMethod ?? '').toLowerCase();
+    if (v.includes('password')) return 'password';
+    if (v.includes('session') || v.includes('record') || v.includes('2fa')) return 'session';
+    return 'none';
+  };
+  // Can the bus actually RUN this connector on this side? Returns '' when it can, or the
+  // reason why not. Fails OPEN: unknown kind, meta not loaded yet, or enforcement off ⇒ ''.
+  const notRunnable = (label, side) => {
+    if (!runnableKinds.enforced) return '';
+    const kind = connectorMeta[label]?.runtimeConfig?.runtimeKind;
+    if (!kind) return '';
+    const list = side === 'source' ? runnableKinds.sources : runnableKinds.destinations;
+    if (list.includes(kind)) return '';
+    return `"${label}" (${kind}) can't run as a ${side} on the integration bus yet — you could configure it, but the push would fail. Pick another ${side}.`;
+  };
+
   const connectorIdOf = (label) => connectorMeta[label]?.connectorId;
   const versionIdOf = (label) => connectorMeta[label]?.latestVersionId;
   // Resolve a destination connector id → its label + runtime kind (for the cross-server picker).
@@ -855,6 +846,17 @@ export default function WizardPage() {
         }];
       }));
       setConnectorMeta(Object.fromEntries(metas));
+    })();
+  }, []);
+
+  // ─── Which kinds the bus can run (gates the Step 1 pickers) ──
+  useEffect(() => {
+    (async () => {
+      const r = await api.getRunnableKinds();
+      const d = r.ok && r.data?.success ? r.data.data : null;
+      // Only enforce when the backend positively reports both lists — any failure leaves the
+      // pickers fully open (previous behaviour).
+      if (d?.enforced) setRunnableKinds({ sources: d.sources || [], destinations: d.destinations || [], enforced: true });
     })();
   }, []);
 
@@ -968,6 +970,7 @@ export default function WizardPage() {
 
     // Restore the entity group tag.
     setGroupId(fm.groupId || '');
+    setGroupOrder(fm.groupOrder != null ? String(fm.groupOrder) : '');
 
     // Restore cross-entity joins.
     setJoins(Array.isArray(fm.joins) ? fm.joins : []);
@@ -1018,11 +1021,35 @@ export default function WizardPage() {
     setDeleteStatus('idle');
 
     // Move to step 2
+    setStepDir('fwd');
     setWizardStep(2);
   };
 
   // ─── Navigation ──────────────────────────────────────────
-  const goBack = () => setWizardStep(prev => Math.max(1, prev - 1));
+  const goBack = () => { setStepDir('back'); setWizardStep(prev => Math.max(1, prev - 1)); };
+  /* Why Next is disabled, in words — mirrors the old boolean exactly, but the
+     bar can now say what is missing instead of showing a dead button. */
+  const nextBlocked = (() => {
+    if (wizardStep === 1 && !selectedSource && !selectedDest) return 'Pick a source and a destination';
+    if (wizardStep === 1 && !selectedSource) return 'Pick a source system';
+    if (wizardStep === 1 && !selectedDest) return 'Pick a destination system';
+    if (wizardStep === 2 && srcTestStatus !== 'connected' && destTestStatus !== 'connected') return 'Test both connections';
+    if (wizardStep === 2 && srcTestStatus !== 'connected') return 'Test the source connection';
+    if (wizardStep === 2 && destTestStatus !== 'connected') return 'Test the destination connection';
+    if (wizardStep === 3 && !selectedEntity) return 'Choose an entity';
+    if (wizardStep === 3 && isSpSource(selectedDest) && !destCreds.listName) return 'Name the destination list';
+    // goNext() also refuses step 3 -> 4 for a DB destination with no table
+    // chosen. That condition was missing here, so Next rendered ENABLED and
+    // then silently did nothing — the dead button this hint exists to prevent.
+    if (wizardStep === 3 && isDbDest(selectedDest)
+      && !(createNewTable ? newTableName : selectedPgTable) && !destCreds.table) {
+      return createNewTable ? 'Name the new table' : 'Pick a destination table';
+    }
+    if (wizardStep === 5 && fetchStatus !== 'done') return 'Fetch a preview first';
+    if (wizardStep === 6 && (pushStatus === 'pushing' || pushStatus === 'polling')) return 'Push in progress\u2026';
+    return null;
+  })();
+
   const goNext = () => {
     if (wizardStep === 1 && (!selectedSource || !selectedDest)) return;
     if (wizardStep === 2 && (srcTestStatus !== 'connected' || destTestStatus !== 'connected')) return;
@@ -1037,15 +1064,46 @@ export default function WizardPage() {
     }
     if (wizardStep === 5 && fetchStatus !== 'done') return; // must fetch before push
     if (wizardStep === 6) { handlePush(); return; } // Step 6 button triggers push
+    setStepDir('fwd');
     setWizardStep(prev => Math.min(6, prev + 1));
   };
 
   // ─── Step 5: Fetch source data ─────────────────────────
+  // PREFERRED PATH: ask the SERVER to read + map exactly as Push will (preview-integration
+  // runs the same source factory, the same entity resolution and the same MappingEngine).
+  // The client-side branches below read through a DIFFERENT path — that divergence is what
+  // let "preview shows 10 rows / push writes 1 empty row" happen twice. They now serve only
+  // as a fallback when the recipe can't be previewed server-side (not saveable yet, hub off,
+  // or the endpoint errors), so behaviour is never worse than before.
+  const PREVIEW_LIMIT = 50;
+  const tryServerPreview = async () => {
+    try {
+      const id = await handleSaveConnection(); // persists the recipe; returns integrationId
+      if (!id) return false;
+      const res = await api.previewIntegration(id, PREVIEW_LIMIT);
+      if (!res.ok || !res.data?.success) return false;
+      const sample = res.data.data?.sample || [];
+      if (!sample.length) return false; // fall back rather than show an empty preview
+      setFetchResult({
+        runId: `preview-${id}`,
+        tickets: sample.map((s) => s.raw),
+        totalCount: sample.length,
+        // Marks this as the authoritative server read, and carries the server's OWN mapped
+        // rows so Step 5 reviews what will actually be written — not a client re-computation.
+        serverPreview: true,
+        previewLimit: PREVIEW_LIMIT,
+        mappedSample: sample.map((s) => s.mapped),
+      });
+      return true;
+    } catch { return false; }
+  };
+
   const handleFetchData = async () => {
     setFetchStatus('fetching');
     setFetchError('');
     setFetchResult(null);
     try {
+      if (await tryServerPreview()) { setFetchStatus('done'); return; }
       if (selectedSource === 'Jira') {
         const { endpointUrl, email, apiToken } = srcCreds;
         const result = await api.fetchJiraIssues({
@@ -1085,7 +1143,7 @@ export default function WizardPage() {
           setFetchStatus('done');
         } else { setFetchError(result.data?.error || 'Fetch failed'); setFetchStatus('error'); }
       }
-    } catch (err) {
+    } catch {
       setFetchError('Network error during fetch');
       setFetchStatus('error');
     }
@@ -1131,57 +1189,13 @@ export default function WizardPage() {
 
   const handlePush = async () => {
     // Convergence (Phase 2): EVERY transform — DIRECT, PRESET, and custom-JS EXPRESSION
-    // (run in the backend quickjs sandbox) — maps server-side. The Wizard always persists
-    // the recipe and triggers run-integration; the dataset never crosses HTTP, so payload
-    // size is irrelevant. The legacy client push handlers below
-    // (handleSpDestPush / handleRestToDbPush / handleRestPush / handlePushToSharePoint /
-    // mapRecordsToDest / deliverViaBus) are now unused — retained for reference, removable.
+    // (run in the backend quickjs sandbox) — maps server-side. The Wizard persists the
+    // recipe and triggers run-integration; the dataset never crosses HTTP, so payload size
+    // is irrelevant. This is the ONLY push path — the pre-bus client-side handlers that used
+    // to sit here (deliverViaBus / mapRecordsToDest / handleSpDestPush / handleRestPush /
+    // handleRestToDbPush / handlePushTo*) were deleted: they were unreachable, and keeping a
+    // second write path one call away from the live one invited a bus bypass.
     await pushServerSide();
-  };
-
-  // ─── The single write path: publish already-mapped rows onto the Integration Bus ───
-  // Every push handler funnels through here. The Wizard still fetches + transforms
-  // CLIENT-side (presets/expressions/aggregations, previewed in Step 5); we hand the
-  // finished destination rows to the bus, which owns delivery (idempotency, retry,
-  // DLQ, run audit) to a generic database/sharepoint destination. Returns 202 + a
-  // runId we poll for delivery counts.
-  const deliverViaBus = async ({ destination, records, naturalKeyColumn, destTable, extra = {} }) => {
-    pushStoppedRef.current = false; setStopping(false);
-    setPushStatus('pushing'); setPushError(''); setPushResult(null); setPushProgress(null);
-    try {
-      if (!records.length || !records.some((r) => r && Object.keys(r).length)) {
-        setPushError('Nothing to push — 0 mapped rows (or no mapping produced a value). Re-fetch in Step 5 and check your mappings.');
-        setPushStatus('error');
-        return;
-      }
-      const res = await api.publishRecords({
-        destination, records,
-        naturalKeyColumn: naturalKeyColumn || undefined,
-        destTable, event: 'created',
-      });
-      if (!res.ok || !res.data?.success) {
-        // Distinguish unreachable (status 0), too-large (413), and a real bus rejection.
-        setPushError(
-          res.status === 0
-            ? 'Cannot reach the server — the backend may be restarting. Wait a moment and try again.'
-            : res.status === 413
-              ? 'This dataset is too large for one request. Narrow the date range (or push in smaller batches) and try again.'
-              : (res.data?.error || 'Failed to publish to the bus'),
-        );
-        setPushStatus('error');
-        return;
-      }
-      const { runId, published, duplicate } = res.data.data;
-      if (published === 0) {
-        // Whole batch was an unchanged duplicate (idempotent re-run) — nothing to deliver.
-        setPushResult({ pushRunId: runId, total: 0, status: 'success', created: 0, updated: 0, skipped: duplicate, failed: 0, ...extra });
-        setPushStatus('done');
-        return;
-      }
-      setPushResult({ pushRunId: runId, total: published, status: 'running', skipped: duplicate, ...extra });
-      setPushStatus('polling');
-      pollRunStatus(runId, { skipped: duplicate, ...extra });
-    } catch { setPushError('Network error during push'); setPushStatus('error'); }
   };
 
   // Poll /api/hub/run-status until every published record reaches a terminal delivery
@@ -1237,102 +1251,6 @@ export default function WizardPage() {
     setStopping(false);
   };
 
-  // Generic "write mapped records into a SharePoint list" push (SP→SP, CSV→SP, REST→SP).
-  // ensure-list creates the list if it doesn't exist and adds any mapped columns that
-  // are missing; the rows are then delivered through the bus to the SharePoint dest.
-  const handleSpDestPush = async () => {
-    if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
-    const records = mapRecordsToDest();
-    if (!records.some((r) => r && Object.keys(r).length)) {
-      setPushError('Nothing to push — the source returned 0 rows (or no mapping produced a value). Re-fetch in Step 5 and check your mappings.');
-      setPushStatus('error');
-      return;
-    }
-    setPushStatus('pushing'); setPushError('');
-    const cols = mappings.flatMap((m) => (m.destinations || []).map((d, j) => ({ name: d, type: (m.destTypes || [])[j] || 'text' }))).filter((c) => c.name);
-    const ens = await api.call('/api/sharepoint/ensure-list', {
-      siteUrl: destCreds.siteUrl, siteId: destConnectionData?.siteId, listName: destCreds.listName,
-      columns: cols, tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret,
-    });
-    if (!ens.ok || !ens.data?.success) { setPushError(ens.data?.error || 'Failed to create/prepare the destination list'); setPushStatus('error'); return; }
-    // SharePoint items dedup by a key column; fall back to 'Title' when no ★ key is set.
-    const spKey = effectiveKey || 'Title';
-    await deliverViaBus({
-      destination: {
-        kind: 'sharepoint',
-        config: { siteUrl: destCreds.siteUrl, listName: destCreds.listName, keyColumn: spKey },
-        creds: { tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret },
-      },
-      records,
-      naturalKeyColumn: spKey,
-      extra: { listCreated: ens.data.data.created, addedColumns: ens.data.data.addedColumns, listUrl: ens.data.data.webUrl },
-    });
-  };
-
-  // Map the fetched source records to destination shape, APPLYING each mapping's
-  // transform (DIRECT / preset / multi-source aggregation expression) — same logic
-  // as the Step-5 preview. Handles multi-destination expressions (object result).
-  const mapRecordsToDest = () => (fetchResult?.tickets || []).map((rec) => {
-    const out = {};
-    for (const m of mappings) {
-      const dests = m.destinations || [];
-      if (!dests.length || !(m.sources || []).length) continue;
-      let val;
-      try { val = computeMappedValue(m, rec); } catch { val = ''; }
-      if (dests.length > 1 && val && typeof val === 'object' && !Array.isArray(val)) {
-        for (const d of dests) out[d] = val[d];
-      } else {
-        out[dests[0]] = val;
-      }
-    }
-    return out;
-  });
-
-  const handleRestPush = async () => {
-    if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
-    const destMeta = connectorMeta[selectedDest];
-    const entity = (destMeta?.entities || [])[0]?.key;
-    const records = mapRecordsToDest();
-    await deliverViaBus({
-      destination: {
-        kind: 'rest',
-        config: { destEntity: entity, entity },
-        creds: destCreds,
-      },
-      records,
-      naturalKeyColumn: matchKey === '__append__' ? '' : (effectiveKey || undefined),
-    });
-  };
-
-  const handleRestToDbPush = async () => {
-    if (!fetchResult?.tickets?.length) { setPushError('No data fetched. Go back and fetch first.'); return; }
-    const cfg = dbCfg(selectedDest);
-    // Conn values may live on the saved/tested connection (SharePoint→DB) or
-    // directly on the destination creds (REST→DB).
-    const dbc = destConnectionData || destCreds;
-    // Apply transforms client-side, then deliver the computed rows through the bus.
-    const records = mapRecordsToDest();
-    const table = destCreds.table || 'rest_data';
-    const naturalKey = matchKey === '__append__' ? '' : (effectiveKey || undefined);
-    await deliverViaBus({
-      destination: {
-        kind: 'database',
-        config: {
-          destType: cfg.engine, engine: cfg.engine,
-          pgHost: dbc.host, pgPort: Number(dbc.port) || cfg.defaultPort,
-          pgDatabase: dbc.database,
-          pgSchema: cfg.hasSchema ? (dbc.schema || cfg.defaultSchema) : undefined,
-          pgTable: table,
-          naturalKeyColumn: naturalKey,
-        },
-        creds: { username: dbc.username, password: dbc.password },
-      },
-      records,
-      naturalKeyColumn: naturalKey,
-      destTable: table,
-    });
-  };
-
   const handleQuickView = async () => {
     setQuickViewLoading(true);
     setQuickViewError('');
@@ -1360,56 +1278,6 @@ export default function WizardPage() {
     } finally {
       setQuickViewLoading(false);
     }
-  };
-
-  // SharePoint-source → DB now flows through the same transform-aware path as every
-  // other record source (handleRestToDbPush), so mapping presets AND aggregations
-  // (sum/avg/min/max/count) are applied to the written rows. The old SP→DB endpoints
-  // (api.pushToPg/pushToMysql/pushToMssql) re-read the list server-side and did a raw
-  // column copy, which silently dropped every transform. The Step-5 fetch already
-  // pages the full list, so routing through the records writer loses no data.
-  const handlePushToPg = () => handleRestToDbPush();
-
-  const handlePushToMysql = () => handleRestToDbPush();
-
-  const handlePushToMssql = () => handleRestToDbPush();
-
-  // Jira → SharePoint. The fetched Jira issues are mapped CLIENT-side (Step 4/5,
-  // honouring the operator's custom field mappings), the list is ensured, then the
-  // mapped SP rows are delivered through the bus — same single path as every other
-  // push. Dedup/upsert is by the ★ key column (default 'Title').
-  const handlePushToSharePoint = async () => {
-    if (!fetchResult?.tickets?.length) { setPushError('No Jira data fetched. Go back and fetch first.'); return; }
-    const records = mapRecordsToDest();
-    if (!records.some((r) => r && Object.keys(r).length)) {
-      setPushError('No mapped rows — map the Jira fields to SharePoint columns in Step 4, then re-check the Step 5 preview.');
-      setPushStatus('error');
-      return;
-    }
-    setPushStatus('pushing'); setPushError('');
-    const { siteUrl, listName } = destCreds;
-    const cols = mappings.flatMap((m) => (m.destinations || []).map((d, j) => ({ name: d, type: (m.destTypes || [])[j] || 'text' }))).filter((c) => c.name);
-    // Ensure the list (and mapped columns) exist before delivering rows into it.
-    const ens = await api.call('/api/sharepoint/ensure-list', {
-      siteUrl, siteId: destConnectionData?.siteId, listName, columns: cols,
-      tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret,
-    });
-    if ((!ens.ok || !ens.data?.success) && spDestCreateNew) {
-      setPushError(ens.data?.error || 'Failed to create the destination list');
-      setPushStatus('error');
-      return;
-    }
-    const spKey = effectiveKey || 'Title';
-    await deliverViaBus({
-      destination: {
-        kind: 'sharepoint',
-        config: { siteUrl, listName, keyColumn: spKey },
-        creds: { tenantId: destCreds.tenantId, clientId: destCreds.clientId, clientSecret: destCreds.clientSecret },
-      },
-      records,
-      naturalKeyColumn: spKey,
-      extra: { listUrl: ens.ok && ens.data?.success ? ens.data.data.webUrl : null },
-    });
   };
 
   /** Map SP field type string to PG column type for wizard mappings */
@@ -1479,8 +1347,12 @@ export default function WizardPage() {
       } else if (isRuntimeSource(selectedSource)) {
         const meta = connectorMeta[selectedSource];
         const result = await runtimeClient.test(meta.connectorId, meta.latestVersionId, srcCreds);
-        if (result.ok && result.data?.success) {
-          const d = result.data.data || {};
+        const srcProbe = result.data?.data || {};
+        // data.ok is the CONNECTION result; data.success only means the request
+        // was handled. Checking the envelope alone reported "Connected" for a
+        // connector that had plainly failed to connect.
+        if (result.ok && result.data?.success && srcProbe.ok !== false) {
+          const d = srcProbe;
           setSrcTestStatus('connected');
           setSrcTestMsg(`Connected${d.status ? ` (HTTP ${d.status})` : ''}${d.sampleCount != null ? ` — ${d.sampleCount} sample records` : ''}`);
           setSrcConnectionData(d);
@@ -1522,8 +1394,9 @@ export default function WizardPage() {
       } else if (isRest(selectedDest)) {
         const meta = connectorMeta[selectedDest];
         const result = await runtimeClient.test(meta.connectorId, meta.latestVersionId, destCreds);
-        if (result.ok && result.data?.success) {
-          const d = result.data.data || {};
+        const destProbe = result.data?.data || {};
+        if (result.ok && result.data?.success && destProbe.ok !== false) {
+          const d = destProbe;
           setDestTestStatus('connected');
           setDestTestMsg(`Connected${d.status ? ` (HTTP ${d.status})` : ''}`);
           setDestConnectionData({ ...destCreds });
@@ -1572,7 +1445,9 @@ export default function WizardPage() {
       const primaryKey = matchKey === '__append__' ? '' : (effectiveKey || '');
       const hasFanout = extraTargets.some((t) => (t.table || '').trim());
       let fanoutTargets;
-      let mappingsOut = mappings.map(({ routes, ...rest }) => rest); // strip stale routes
+      // `routes` is destructured purely to DROP it from each mapping (stale fan-out routing).
+      // eslint-disable-next-line no-unused-vars
+      let mappingsOut = mappings.map(({ routes, ...rest }) => rest);
       if (hasFanout) {
         const dbDest = isDbDest(selectedDest);
         const primaryConfig = dbDest
@@ -1632,6 +1507,14 @@ export default function WizardPage() {
         }))
         .filter((j) => j.alias && j.entity?.ref && j.entity?.keyColumn && j.on?.localField && (j.pull.length || j.aggregate.length));
 
+      // Read-side credential bag: every srcCreds value as a string, minus uploaded file
+      // content (that's a payload, not a secret, and would bloat the credential row).
+      const sourceCredsOut = Object.fromEntries(
+        Object.entries(srcCreds)
+          .filter(([k, v]) => k !== 'fileContent' && v != null && v !== '' && typeof v !== 'object')
+          .map(([k, v]) => [k, String(v)]),
+      );
+
       const body = {
         // Re-saves update the SAME connection instead of creating duplicates as the
         // list/table/mappings change through the wizard.
@@ -1655,6 +1538,10 @@ export default function WizardPage() {
         // backend resolves a blank name and fails with "List '' not found on this site".
         sourceListId: isSpSource(selectedSource) ? (selectedEntity || undefined) : undefined,
         sourceListName: isSpSource(selectedSource) ? (entities.find((e) => e.id === selectedEntity)?.name || undefined) : undefined,
+        // Runtime/scrape SOURCE entity (the picked entity key) so a server-side run crawls the
+        // RIGHT entity. Without it the scrape/runtime factory defaults to 'page' and returns a
+        // single empty record — the Fetch preview works only because the client passes the entity directly.
+        sourceEntity: isRuntimeSource(selectedSource) ? (selectedEntity || undefined) : undefined,
         // SharePoint Azure creds — stored encrypted with the connection (no env fallback)
         tenantId: srcCreds.tenantId || undefined,
         clientId: srcCreds.clientId || undefined,
@@ -1678,18 +1565,27 @@ export default function WizardPage() {
         // browser ever shipping the dataset.
         mappings: mappingsOut,
         naturalKeyColumn: matchKey === '__append__' ? '' : (effectiveKey || undefined),
-        dateFrom: dateStart || undefined,
-        dateTo: dateEnd || undefined,
+        // Jira-only: the saved recipe shouldn't claim a read window for sources that ignore it.
+        dateFrom: selectedSource === 'Jira' ? (dateStart || undefined) : undefined,
+        dateTo: selectedSource === 'Jira' ? (dateEnd || undefined) : undefined,
         // Fan-out targets — only present when the user added extra destinations.
         ...(hasFanout ? { targets: fanoutTargets } : {}),
         // Entity group tag — only present when the user grouped this connection.
         ...(groupId ? { groupId } : {}),
+        // Load order within that group — only sent when the user set one.
+        ...(groupId && groupOrder !== '' && Number.isFinite(Number(groupOrder)) ? { groupOrder: Number(groupOrder) } : {}),
         // Cross-entity joins — only present when the user configured at least one complete join.
         ...(joinsOut.length ? { joins: joinsOut } : {}),
         // Field-level encryption — the backend generates/wraps the key; we send only
         // the toggle + which destination columns to encrypt. Sent unconditionally so
         // turning it OFF clears any prior config server-side.
         encryption: { enabled: encryptionEnabled, fields: encryptionEnabled ? encryptFields : [] },
+        // Generic READ-side credentials for runtime sources (DB host/user/password, SOAP
+        // endpoint, IMAP login…). One opaque bag — the backend encrypts it as `srcCredId`
+        // and the runtime picks out the keys it needs, so no per-connector fields are added
+        // here. Without this a server-side run builds the source with empty creds and can't
+        // connect. `fileContent` is excluded: an uploaded file is data, not a credential.
+        ...(isRuntimeSource(selectedSource) ? { sourceCreds: sourceCredsOut } : {}),
       };
       const res = await api.saveConnection(body);
       if (res.ok && res.data?.success) {
@@ -1844,13 +1740,14 @@ export default function WizardPage() {
       if (s.newTableName) setNewTableName(s.newTableName);
       if (Array.isArray(s.extraTargets)) setExtraTargets(s.extraTargets);
       if (s.groupId) setGroupId(s.groupId);
+      if (s.groupOrder) setGroupOrder(s.groupOrder);
       if (s.activeIntegrationId) setActiveIntegrationId(s.activeIntegrationId);
       // Push progress — so a return mid-push shows where it's at.
       if (s.pushResult) setPushResult(s.pushResult);
       if (s.pushError) setPushError(s.pushError);
       if (s.pushProgress) setPushProgress(s.pushProgress);
       if (s.pushStatus) setPushStatus(s.pushStatus);
-      if (s.wizardStep) setWizardStep(s.wizardStep);
+      if (s.wizardStep) { setStepDir('fwd'); setWizardStep(s.wizardStep); }
       // If a push was still in flight when we left, re-attach to its progress poll so it
       // resumes updating instead of sitting frozen.
       if (s.pushStatus === 'polling' && s.pushResult?.pushRunId) {
@@ -1858,7 +1755,7 @@ export default function WizardPage() {
       }
     } catch { /* ignore a corrupt snapshot */ }
     setHydrated(true);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // Continuously persist the wizard session so navigating away / refreshing can resume it.
   // Gated on `hydrated` so the initial empty render never clobbers a saved snapshot before
@@ -1871,7 +1768,7 @@ export default function WizardPage() {
         srcCreds, destCreds, srcConnectionData, destConnectionData,
         srcTestStatus, destTestStatus, srcFields, destFields, mappings, joins,
         fetchResult, fetchStatus, matchKey, connectionName, dateStart, dateEnd,
-        selectedPgTable, createNewTable, newTableName, extraTargets, groupId, activeIntegrationId,
+        selectedPgTable, createNewTable, newTableName, extraTargets, groupId, groupOrder, activeIntegrationId,
         pushStatus, pushResult, pushError, pushProgress,
       }));
     } catch { /* sessionStorage full / serialization issue — non-fatal */ }
@@ -1881,7 +1778,7 @@ export default function WizardPage() {
     srcCreds, destCreds, srcConnectionData, destConnectionData,
     srcTestStatus, destTestStatus, srcFields, destFields, mappings, joins,
     fetchResult, fetchStatus, matchKey, connectionName, dateStart, dateEnd,
-    selectedPgTable, createNewTable, newTableName, extraTargets, groupId, activeIntegrationId,
+    selectedPgTable, createNewTable, newTableName, extraTargets, groupId, groupOrder, activeIntegrationId,
     pushStatus, pushResult, pushError, pushProgress,
   ]);
 
@@ -1905,6 +1802,7 @@ export default function WizardPage() {
     setGroupId(''); setGroupRunStatus('idle'); setGroupRunResult(null);
     setEncryptionEnabled(false); setEncryptFields([]); setRevealedKey(null); setRevealMsg('');
     setPushStatus('idle'); setPushResult(null); setPushError(''); setPushProgress(null);
+    setStepDir('back');
     setWizardStep(1);
   };
 
@@ -2028,8 +1926,9 @@ export default function WizardPage() {
             id: t.name, name: t.name, fieldCount: t.columnCount ?? null, available: true,
           }));
           setEntities(tables);
-          setProjects([{ key: 'db', name: `${selectedSource} (${dbConn.database})` }]);
-          setSelectedProject('db');
+          // Same as the runtime branch below: a DB source has no Jira "project" — the
+          // picked TABLE is the scope. (This used to display as `Source: db`.)
+          setProjects([]);
           if (srcCreds.table) { const m = tables.find((t) => t.name === srcCreds.table); if (m) setSelectedEntity(m.id); }
         }
         setEntitiesLoading(false);
@@ -2041,27 +1940,37 @@ export default function WizardPage() {
       const meta = connectorMeta[selectedSource];
       const applyEnts = (ents) => {
         setEntities(ents);
-        setProjects([{ key: 'api', name: selectedSource }]);
-        setSelectedProject('api');
+        // `selectedProject` is the JIRA project key — runtime connectors have no such scope.
+        // It used to be faked as 'api' here, which then surfaced as `Source: api` in Steps 5/6
+        // and was persisted as a junk `projectKey`. The ENTITY is the scope for these sources.
+        setProjects([]);
         const def = ents.find((e) => e.defaultOn) || ents[0];
         if (def) setSelectedEntity(def.id);
       };
       const staticEnts = (meta?.entities || []).map((e) => ({
         id: e.key, name: e.name, fieldCount: (e.fields || []).length, available: true, defaultOn: e.defaultOn,
       }));
-      if (staticEnts.length) {
+      // Scrape connectors define their REAL entities in the crawl recipe
+      // (categoryConfig.entities), surfaced only via discoverEntities. Their design-time
+      // entity list is a single "Scraped Page" placeholder that would otherwise shadow the
+      // author's recorded entities — so for scrape we always ask the runtime, and fall back
+      // to the placeholder only if discovery returns nothing.
+      const preferDiscover = isScrape(selectedSource);
+      if (staticEnts.length && !preferDiscover) {
         applyEnts(staticEnts);
       } else {
         setEntitiesLoading(true);
         runtimeClient.discoverEntities(meta?.connectorId, meta?.latestVersionId, srcCreds)
           .then((res) => {
             const disc = (res.ok && res.data?.success ? res.data.data : []) || [];
-            applyEnts(disc.map((e) => ({ id: e.key, name: e.name, fieldCount: e.fieldCount ?? 0, available: true, defaultOn: true })));
+            const mapped = disc.map((e) => ({ id: e.key, name: e.name, fieldCount: e.fieldCount ?? 0, available: true, defaultOn: true }));
+            applyEnts(mapped.length ? mapped : staticEnts);
           })
-          .catch(() => { /* leave empty; user sees "no entities" */ })
+          .catch(() => { if (staticEnts.length) applyEnts(staticEnts); /* else: user sees "no entities" */ })
           .finally(() => setEntitiesLoading(false));
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires on step-3 entry; source kind/creds are read at trigger time and must NOT re-run this discovery on their change
   }, [wizardStep]);
 
   useEffect(() => {
@@ -2079,6 +1988,7 @@ export default function WizardPage() {
       setEntitiesLoading(false);
     };
     loadEntities();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loads Jira entities on project select; creds/source read at call time, deliberately not reactive deps
   }, [wizardStep, selectedProject]);
 
   // ─── Step 3: Load destination SharePoint lists (any source → SP) ──
@@ -2340,6 +2250,7 @@ export default function WizardPage() {
       setFieldsLoading(false);
     };
     loadFields();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loads mapping fields on entering step 4; source/dest config read at trigger time, deliberately not reactive deps
   }, [wizardStep]);
 
   // ─── Identity / match key ───────────────────────────────
@@ -2446,6 +2357,7 @@ export default function WizardPage() {
     });
     const cols = res.ok && res.data?.success && res.data.data?.exists ? (res.data.data.columns || []) : [];
     return cols.map((c) => c.name || c.columnName).filter(Boolean);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reads dest config at call time; the listed deps cover identity, extra ones would needlessly churn the memo
   }, [selectedDest, destConnectionData, destCreds, connectorMeta]);
 
   // Generic, side-aware discovery for the Joins panel (works for any adapter).
@@ -2480,6 +2392,7 @@ export default function WizardPage() {
       if (res.ok && res.data?.success) return (res.data.data || []).map((f) => f.name).filter(Boolean);
     }
     return [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pure in-scope helpers (isSpSource/isRuntimeSource) omitted deliberately; they change identity each render and would defeat the memo
   }, [pgTables, entities, selectedEntity, srcFields, selectedSource, connectorMeta, srcCreds, srcConnectionData, loadDestColumns]);
 
   // Generic "where does the value live?" options — reflect THIS connection's actual connectors so
@@ -2532,14 +2445,22 @@ export default function WizardPage() {
     return [...mappedDestNames].filter(name => name && !existing.has(name));
   }, [mappedDestNames, destFields]);
 
+  // What the source actually reads, for the Step 5/6 summaries. Jira scopes by PROJECT;
+  // every other source scopes by the picked entity (SP list / DB table / scrape entity).
+  const sourceScopeLabel = useMemo(() => {
+    const entityLabel = entities.find((e) => e.id === selectedEntity)?.name || selectedEntity || '';
+    if (selectedSource === 'Jira') return [selectedProject, entityLabel].filter(Boolean).join(' / ');
+    return entityLabel;
+  }, [selectedSource, selectedProject, selectedEntity, entities]);
+
   // Validation
   const requiredUnmapped = useMemo(() =>
     destFields.filter(f => f.required && !mappedDestNames.has(f.name)),
   [destFields, mappedDestNames]);
 
   const statusStyle = (status) => {
-    if (status === 'connected') return { color: 'var(--success)', borderColor: 'var(--success)' };
-    if (status === 'error') return { color: 'var(--error)', borderColor: 'var(--error)' };
+    if (status === 'connected') return { color: 'var(--success-on)', borderColor: 'var(--success)' };
+    if (status === 'error') return { color: 'var(--error-on)', borderColor: 'var(--error)' };
     return undefined;
   };
   const statusLabel = (status) => {
@@ -2555,8 +2476,8 @@ export default function WizardPage() {
         <PasswordField key={f.key} label={f.label} value={creds[f.key] || ''} onChange={(val) => onChange(f.key, val)} placeholder={f.placeholder} />
       ) : (
         <div className="form-group" key={f.key}>
-          <label>{f.label}</label>
-          <input type="text" value={creds[f.key] || ''} onChange={(e) => onChange(f.key, e.target.value)} placeholder={f.placeholder} />
+          <label htmlFor="wizardpage-field-2">{f.label}</label>
+          <input id="wizardpage-field-2" type="text" value={creds[f.key] || ''} onChange={(e) => onChange(f.key, e.target.value)} placeholder={f.placeholder} />
         </div>
       )
     );
@@ -2565,63 +2486,53 @@ export default function WizardPage() {
     <div className="page active">
       <div className="page-header">
         <div>
-          <div className="page-title">Connection Wizard</div>
-          <div className="page-subtitle">Build a new integration in 6 steps</div>
+          <h1 className="page-title">Connection Wizard</h1>
+          {/* The subtitle carries the route once it is known — the pipeline being
+              built is more useful context than a restatement of the step count. */}
+          <div className="page-subtitle">
+            {selectedSource && selectedDest
+              ? <>Building <strong>{selectedSource}</strong> &rarr; <strong>{selectedDest}</strong></>
+              : 'Connect a source system to a destination in six steps'}
+          </div>
         </div>
+        <button className="btn btn-outline btn-sm" onClick={startOver}
+          title="Clear this wizard session and start a new connection">Start over</button>
       </div>
 
-      {/* Stepper */}
-      <div className="stepper" style={{ flexShrink: 0 }}>
+      {/* Progress rail — completed steps are navigable, upcoming ones are not. */}
+      <ol className="wiz-rail">
         {stepLabels.map((label, i) => {
-          const stepNum = i + 1;
-          let cls = 'step';
-          if (stepNum === wizardStep) cls += ' active';
-          if (stepNum < wizardStep) cls += ' completed';
+          const n = i + 1;
+          const state = n === wizardStep ? 'is-current' : n < wizardStep ? 'is-done' : 'is-todo';
+          const done = n < wizardStep;
+          const Tag = done ? 'button' : 'li';
           return (
-            <div key={stepNum} className={cls}>
-              {stepNum > 1 && <div className="step-line"></div>}
-              <div className="step-circle">
-                {stepNum}
-                <div className="step-label">{label}</div>
-              </div>
-            </div>
+            <Tag
+              key={n}
+              {...(done
+                ? { type: 'button', onClick: () => { setStepDir('back'); setWizardStep(n); },
+                    'aria-label': `Go back to step ${n}: ${label}` }
+                : {})}
+              className={`wiz-step ${state}`}
+              aria-current={n === wizardStep ? 'step' : undefined}
+            >
+              <span className="wiz-step-token" aria-hidden="true">{done ? '✓' : n}</span>
+              <span className="wiz-step-text">
+                <span className="wiz-step-n">Step {n}</span>
+                <span className="wiz-step-label">{label}</span>
+              </span>
+            </Tag>
           );
         })}
-      </div>
+      </ol>
 
-      {/* Navigation — always visible below stepper */}
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8,
-        padding: '10px 16px', marginTop: 20, flexShrink: 0,
-      }}>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-outline" onClick={goBack} disabled={wizardStep === 1}>&larr; Back</button>
-          <button className="btn btn-outline" onClick={startOver}
-            title="Clear this wizard session and start a new connection"
-            style={{ color: 'var(--text-dim)' }}>Start over</button>
-        </div>
-        <div style={{ fontSize: '.82rem', color: 'var(--text-dim)' }}>
-          Step {wizardStep} of 6: <strong>{stepLabels[wizardStep - 1]}</strong>
-        </div>
-        <button className="btn btn-primary" onClick={goNext}
-          disabled={
-            (wizardStep === 1 && (!selectedSource || !selectedDest)) ||
-            (wizardStep === 2 && (srcTestStatus !== 'connected' || destTestStatus !== 'connected')) ||
-            (wizardStep === 3 && !selectedEntity) ||
-            (wizardStep === 3 && isSpSource(selectedDest) && !destCreds.listName) ||
-            (wizardStep === 5 && fetchStatus !== 'done') ||
-            (wizardStep === 6 && (pushStatus === 'pushing' || pushStatus === 'polling'))
-          }>
-          {wizardStep === 5 && fetchStatus !== 'done' ? 'Fetch First' :
-           wizardStep === 6 ? (pushStatus === 'idle' ? `\u25B6 Push to ${selectedDest || 'Destination'}` : pushStatus === 'done' ? 'Done' : 'Pushing...') :
-           'Next \u2192'}
-        </button>
-      </div>
-
-      <div className="page-body" style={{ display: 'flex', flexDirection: 'column' }}>
+      <div className="page-body fit" style={{ display: 'flex', flexDirection: 'column' }}>
       {/* Wizard content */}
-      <div className="wizard-content" style={{ marginTop: 16, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div
+        key={wizardStep}
+        className={`wizard-content${stepDir === 'back' ? ' is-back' : ''}`}
+        style={{ marginTop: 12, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}
+      >
 
         {/* ── Step 1: Select Systems ── */}
         {wizardStep === 1 && (
@@ -2630,11 +2541,11 @@ export default function WizardPage() {
             {savedConnections.length > 0 && (
               <div className="card" style={{ marginBottom: 20, padding: 16, flexShrink: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                  <span style={{ fontSize: '1.1rem' }}>&#128279;</span>
-                  <span style={{ fontWeight: 700, fontSize: '.95rem' }}>My Connections</span>
-                  <span className="badge badge-success" style={{ fontSize: '.7rem' }}>{savedConnections.length} saved</span>
-                  <input value={connSearch} onChange={(e) => setConnSearch(e.target.value)} placeholder="Search connections..."
-                    style={{ marginLeft: 'auto', maxWidth: 240, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.82rem' }} />
+                  <span style={{ fontSize: 'var(--fs-lg)' }}>&#128279;</span>
+                  <span style={{ fontWeight: 'var(--fw-bold)', fontSize: 'var(--fs-md)' }}>My Connections</span>
+                  <span className="badge badge-success" style={{ fontSize: 'var(--fs-xs)' }}>{savedConnections.length} saved</span>
+                  <input value={connSearch} onChange={(e) => setConnSearch(e.target.value)} aria-label="Search saved connections" placeholder="Search connections..."
+                    style={{ marginLeft: 'auto', maxWidth: 240, padding: '6px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: 'var(--fs-sm)' }} />
                 </div>
                 <div style={{ display: 'flex', alignItems: 'stretch', gap: 6 }}>
                   <button
@@ -2645,6 +2556,7 @@ export default function WizardPage() {
                     disabled={!connScroll.left}
                     onClick={() => scrollConnStrip(-1)}
                   >&#8249;</button>
+                  <div className="conn-strip-wrap">
                   <div ref={connStripRef} className="conn-strip" onScroll={updateConnScroll} style={{ display: 'flex', gap: 10, overflowX: 'auto', paddingBottom: 2, flex: 1 }}>
                   {savedConnections.filter((intg) => {
                     const q = connSearch.trim().toLowerCase();
@@ -2653,33 +2565,36 @@ export default function WizardPage() {
                     return [intg.name, fm.sourceType, fm.destType, fm.projectKey, fm.listName, fm.siteUrl, fm.endpointUrl].filter(Boolean).join(' ').toLowerCase().includes(q);
                   }).map((intg) => {
                     const fm = intg.fieldMappings || {};
+                    // Force-deleting a connector UNLINKS the connections that used it
+                    // (sourceConnectorId → null, see ConnectorAuthoringService.deleteConnector).
+                    // Such a connection looks perfectly normal here but fails preflight with
+                    // "No source connector is configured" only when you finally hit Push.
+                    const orphaned = !intg.sourceConnectorId;
                     return (
-                      <div
+                      <button
                         key={intg.integrationId}
-                        className="card"
+                        type="button"
+                        className={`conn-card${orphaned ? ' is-orphaned' : ''}`}
                         data-conn-card
-                        style={{
-                          padding: '12px 14px', cursor: 'pointer', transition: 'all .15s',
-                          border: '1px solid var(--border)', borderRadius: 8, flex: '0 0 240px',
-                        }}
+                        title={orphaned ? 'This connection’s source connector was deleted — re-pick a source in Step 1 to repair it.' : undefined}
                         onClick={() => applySavedConnection(intg)}
-                        onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--primary)'; e.currentTarget.style.background = 'var(--primary-dim)'; }}
-                        onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.background = ''; }}
                       >
-                        <div style={{ fontWeight: 600, fontSize: '.88rem', marginBottom: 4 }}>{intg.name}</div>
-                        <div style={{ fontSize: '.72rem', color: 'var(--text-secondary)', marginBottom: 4 }}>
+                        <span className="conn-name">{intg.name}</span>
+                        {orphaned && (
+                          <span className="conn-warn">&#9888; source connector deleted</span>
+                        )}
+                        <span className="conn-route">
                           {fm.sourceType || 'Jira'} <span style={{ color: 'var(--text-dim)' }}>&rarr;</span> {fm.destType || 'SharePoint'}
-                        </div>
-                        <div style={{ fontSize: '.72rem', color: 'var(--text-dim)' }}>
-                          {fm.projectKey && <span className="badge badge-primary" style={{ marginRight: 4, fontSize: '.62rem' }}>{fm.projectKey}</span>}
+                        </span>
+                        <span className="conn-meta">
+                          {fm.projectKey && <span className="badge badge-primary" style={{ marginRight: 4 }}>{fm.projectKey}</span>}
                           {fm.listName && <span>{fm.listName}</span>}
-                        </div>
-                        <div style={{ fontSize: '.7rem', color: 'var(--text-dim)', marginTop: 4 }}>
-                          {hostnameOf(fm.siteUrl || fm.endpointUrl)}
-                        </div>
-                      </div>
+                        </span>
+                        <span className="conn-meta">{hostnameOf(fm.siteUrl || fm.endpointUrl)}</span>
+                      </button>
                     );
                   })}
+                  </div>
                   </div>
                   <button
                     type="button"
@@ -2690,56 +2605,81 @@ export default function WizardPage() {
                     onClick={() => scrollConnStrip(1)}
                   >&#8250;</button>
                 </div>
-                <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', marginTop: 8 }}>
+                <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginTop: 8 }}>
                   Click a saved connection to auto-fill credentials and skip to Step 2. You can still change the project.
                 </div>
               </div>
             )}
             {savedLoading && (
-              <div style={{ marginBottom: 16, fontSize: '.82rem', color: 'var(--text-dim)' }}>Loading saved connections...</div>
+              <div style={{ marginBottom: 16, fontSize: 'var(--fs-sm)', color: 'var(--text-dim)' }}>Loading saved connections...</div>
             )}
 
-            <div className="grid-2" style={{ gap: 24, flex: 1, minHeight: 240, gridTemplateRows: 'minmax(0, 1fr)' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.95rem', flexShrink: 0 }}>&#9664; Source System</div>
-                <input value={srcSysSearch} onChange={(e) => setSrcSysSearch(e.target.value)} placeholder="Search source systems..."
-                  style={{ width: '100%', marginBottom: 10, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.82rem', flexShrink: 0 }} />
-                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-                    {sourceCards.filter((c) => c.label.toLowerCase().includes(srcSysSearch.trim().toLowerCase())).map((c, i) => (
-                      <div key={i} className="card connector-card"
-                        style={{ padding: 14, borderColor: selectedSource === c.label ? 'var(--primary)' : undefined, borderWidth: selectedSource === c.label ? 2 : undefined }}
-                        onClick={() => handleSourceSelect(c.label)}>
-                        <div className="conn-icon"><ConnIcon icon={c.icon} size={26} /></div>
-                        <div className="conn-label" style={{ fontSize: '.78rem' }}>{c.label}</div>
-                      </div>
-                    ))}
+            <div className="wiz-flow">
+              <div className="wiz-flow-col">
+                <div className="wiz-col-head">
+                  <span className="wiz-col-eyebrow">Source</span>
+                  <span className={`wiz-col-value${selectedSource ? '' : ' is-empty'}`}>
+                    {selectedSource || 'Not selected'}
+                  </span>
+                </div>
+                <div className="wiz-col-search">
+                  <input value={srcSysSearch} onChange={(e) => setSrcSysSearch(e.target.value)}
+                    aria-label="Search source systems" placeholder="Search source systems…" />
+                </div>
+                <div className="wiz-picker-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(88px, 1fr))', gap: 10 }}>
+                    {sourceCards.filter((c) => c.label.toLowerCase().includes(srcSysSearch.trim().toLowerCase())).map((c, i) => {
+                      const blocked = notRunnable(c.label, 'source');
+                      return (
+                      <SystemCard
+                        key={i}
+                        label={c.label}
+                        icon={c.icon}
+                        selected={selectedSource === c.label}
+                        blocked={blocked}
+                        onSelect={() => handleSourceSelect(c.label)}
+                      />
+                      );
+                    })}
                   </div>
                 </div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.95rem', flexShrink: 0 }}>Destination System &#9654;</div>
-                <input value={destSysSearch} onChange={(e) => setDestSysSearch(e.target.value)} placeholder="Search destination systems..."
-                  style={{ width: '100%', marginBottom: 10, padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.82rem', flexShrink: 0 }} />
-                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-                    {destCards.filter((c) => c.label.toLowerCase().includes(destSysSearch.trim().toLowerCase())).map((c, i) => (
-                      <div key={i} className="card connector-card"
-                        style={{ padding: 14, borderColor: selectedDest === c.label ? 'var(--primary)' : undefined, borderWidth: selectedDest === c.label ? 2 : undefined }}
-                        onClick={() => handleDestSelect(c.label)}>
-                        <div className="conn-icon"><ConnIcon icon={c.icon} size={26} /></div>
-                        <div className="conn-label" style={{ fontSize: '.78rem' }}>{c.label}</div>
-                      </div>
-                    ))}
+              {/* The direction of flow, stated once, between the two ends. */}
+              <div className="wiz-flow-arrow" aria-hidden="true">
+                <span className="wiz-flow-arrow-line" />
+                <span className="wiz-flow-arrow-mark">&rarr;</span>
+                <span className="wiz-flow-arrow-line" />
+              </div>
+              <div className="wiz-flow-col">
+                <div className="wiz-col-head">
+                  <span className="wiz-col-eyebrow">Destination</span>
+                  <span className={`wiz-col-value${selectedDest ? '' : ' is-empty'}`}>
+                    {selectedDest || 'Not selected'}
+                  </span>
+                </div>
+                <div className="wiz-col-search">
+                  <input value={destSysSearch} onChange={(e) => setDestSysSearch(e.target.value)}
+                    aria-label="Search destination systems" placeholder="Search destination systems…" />
+                </div>
+                <div className="wiz-picker-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(88px, 1fr))', gap: 10 }}>
+                    {destCards.filter((c) => c.label.toLowerCase().includes(destSysSearch.trim().toLowerCase())).map((c, i) => {
+                      const blocked = notRunnable(c.label, 'destination');
+                      return (
+                      <SystemCard
+                        key={i}
+                        label={c.label}
+                        icon={c.icon}
+                        selected={selectedDest === c.label}
+                        blocked={blocked}
+                        onSelect={() => handleDestSelect(c.label)}
+                      />
+                      );
+                    })}
                   </div>
                 </div>
               </div>
             </div>
-            {(!selectedSource || !selectedDest) && (
-              <div style={{ color: 'var(--text-dim)', fontSize: '.85rem', marginTop: 16, textAlign: 'center' }}>
-                Select both a source and destination system to continue
-              </div>
-            )}
           </div>
         )}
 
@@ -2747,46 +2687,54 @@ export default function WizardPage() {
         {wizardStep === 2 && (
           <div className="wizard-step active">
             <div className="card" style={{ marginBottom: 16, padding: '12px 16px' }}>
-              <label style={{ fontWeight: 600, fontSize: '.85rem' }}>Connection name</label>
-              <input
+              <label style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-base)' }} htmlFor="wizardpage-connection-name">Connection name</label>
+              <input id="wizardpage-connection-name"
                 value={connectionName}
                 onChange={(e) => setConnectionName(e.target.value)}
                 placeholder={selectedSource && selectedDest ? `${selectedSource} → ${selectedDest}` : 'Name this integration'}
-                style={{ width: '100%', marginTop: 6, padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: '.9rem' }}
+                style={{ width: '100%', marginTop: 6, padding: '8px 12px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text)', fontSize: 'var(--fs-md)' }}
               />
-              <div style={{ fontSize: '.74rem', color: 'var(--text-dim)', marginTop: 4 }}>One name for this source → destination pipeline.</div>
+              <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginTop: 4 }}>One name for this source → destination pipeline.</div>
             </div>
             <div className="grid-2" style={{ gap: 24 }}>
               <div className="card">
-                <div style={{ fontWeight: 600, marginBottom: 12 }}>Source Credentials ({selectedSource})</div>
+                <div style={{ fontWeight: 'var(--fw-semibold)', marginBottom: 12 }}>Source Credentials ({selectedSource})</div>
                 {renderCredFields(getFields(selectedSource), srcCreds, handleSrcCredChange)}
                 {isFlatFile(selectedSource) && (
                   <div className="form-group" style={{ marginTop: 8 }}>
-                    <label>Upload file (CSV / TSV / JSON / XLSX)</label>
-                    <input type="file" accept=".csv,.tsv,.json,.xlsx,.xls" onChange={(e) => handleFileUpload(e.target.files?.[0])} />
-                    {srcCreds.fileContent && <div style={{ fontSize: '.72rem', color: 'var(--success)', marginTop: 4 }}>✓ File loaded ({srcCreds.fileFormat})</div>}
+                    <label htmlFor="wizardpage-upload-file-csv-tsv-json-xlsx">Upload file (CSV / TSV / JSON / XLSX)</label>
+                    <input id="wizardpage-upload-file-csv-tsv-json-xlsx" type="file" accept=".csv,.tsv,.json,.xlsx,.xls" onChange={(e) => handleFileUpload(e.target.files?.[0])} />
+                    {srcCreds.fileContent && <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--success-on)', marginTop: 4 }}>✓ File loaded ({srcCreds.fileFormat})</div>}
                   </div>
                 )}
+                {/* Web Scraping, "Recorded Session" method: the operator logs in once here and
+                    we store THEIR session on this connection (2FA-safe, multi-tenant). */}
+                {isScrape(selectedSource) && scrapeLoginMethod(selectedSource) === 'session' && (
+                  <SessionRecorder
+                    startUrl={srcCreds.targetUrls || connectorMeta[selectedSource]?.runtimeConfig?.categoryConfig?.targetUrls}
+                    onCapture={(enc) => handleSrcCredChange('sessionState', enc)}
+                  />
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
-                  <button className="btn btn-outline btn-sm" onClick={testSourceConnection} disabled={srcTestStatus === 'testing'} style={statusStyle(srcTestStatus)}>
+                  <Button className="btn btn-outline btn-sm" onClick={testSourceConnection} loading={srcTestStatus === 'testing'} loadingLabel="Testing" style={statusStyle(srcTestStatus)}>
                     {statusLabel(srcTestStatus)}
-                  </button>
-                  {srcTestMsg && <span style={{ fontSize: '.8rem', color: srcTestStatus === 'connected' ? 'var(--success)' : 'var(--error)', flex: 1 }}>{srcTestMsg}</span>}
+                  </Button>
+                  {srcTestMsg && <span style={{ fontSize: 'var(--fs-sm)', color: srcTestStatus === 'connected' ? 'var(--success)' : 'var(--error)', flex: 1 }}>{srcTestMsg}</span>}
                 </div>
               </div>
               <div className="card">
-                <div style={{ fontWeight: 600, marginBottom: 12 }}>Destination Credentials ({selectedDest})</div>
+                <div style={{ fontWeight: 'var(--fw-semibold)', marginBottom: 12 }}>Destination Credentials ({selectedDest})</div>
                 {renderCredFields(getFields(selectedDest), destCreds, handleDestCredChange)}
                 {isSpSource(selectedDest) && (
-                  <div style={{ fontSize: '.76rem', color: 'var(--text-dim)', margin: '6px 0' }}>
+                  <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', margin: '6px 0' }}>
                     You'll pick (or create) the destination list in the next step.
                   </div>
                 )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 4 }}>
-                  <button className="btn btn-outline btn-sm" onClick={testDestConnection} disabled={destTestStatus === 'testing'} style={statusStyle(destTestStatus)}>
+                  <Button className="btn btn-outline btn-sm" onClick={testDestConnection} loading={destTestStatus === 'testing'} loadingLabel="Testing" style={statusStyle(destTestStatus)}>
                     {statusLabel(destTestStatus)}
-                  </button>
-                  {destTestMsg && <span style={{ fontSize: '.8rem', color: destTestStatus === 'connected' ? 'var(--success)' : 'var(--error)', flex: 1 }}>{destTestMsg}</span>}
+                  </Button>
+                  {destTestMsg && <span style={{ fontSize: 'var(--fs-sm)', color: destTestStatus === 'connected' ? 'var(--success)' : 'var(--error)', flex: 1 }}>{destTestMsg}</span>}
                 </div>
               </div>
             </div>
@@ -2795,14 +2743,15 @@ export default function WizardPage() {
             <div className="card" style={{ marginTop: 16, padding: '12px 20px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 {/* Save button */}
-                <button
+                <Button
                   className="btn btn-primary btn-sm"
                   onClick={handleSaveConnection}
-                  disabled={saveStatus === 'saving' || srcTestStatus !== 'connected' || destTestStatus !== 'connected'}
-                  style={{ minWidth: 140 }}
+                  loading={saveStatus === 'saving'}
+                  loadingLabel="Saving"
+                  disabled={srcTestStatus !== 'connected' || destTestStatus !== 'connected'}
                 >
-                  {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved' : 'Save Connection'}
-                </button>
+                  {saveStatus === 'saved' ? 'Saved' : 'Save Connection'}
+                </Button>
 
                 {/* Save as new copy (Clone) — only when an existing connection is loaded */}
                 {activeIntegrationId && (
@@ -2840,21 +2789,21 @@ export default function WizardPage() {
                 {/* Status message */}
                 {saveMsg && (
                   <span style={{
-                    fontSize: '.8rem', flex: 1,
+                    fontSize: 'var(--fs-sm)', flex: 1,
                     color: saveStatus === 'saved' || deleteStatus === 'deleted' ? 'var(--success)' : 'var(--error)',
                   }}>
                     {saveMsg}
                   </span>
                 )}
               </div>
-              <div style={{ fontSize: '.75rem', color: 'var(--text-dim)', marginTop: 6 }}>
+              <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginTop: 6 }}>
                 Save stores source and destination connection details. Same source URL will update the existing connection.
                 {activeIntegrationId && ' "Save as New Copy" forks this into an independent connection (shares the same vault credentials) and leaves the original unchanged.'}
               </div>
             </div>
 
             {(srcTestStatus !== 'connected' || destTestStatus !== 'connected') && (
-              <div style={{ color: 'var(--text-dim)', fontSize: '.85rem', marginTop: 16, textAlign: 'center' }}>
+              <div style={{ color: 'var(--text-dim)', fontSize: 'var(--fs-base)', marginTop: 16, textAlign: 'center' }}>
                 Both connections must be tested successfully before proceeding
               </div>
             )}
@@ -2864,31 +2813,49 @@ export default function WizardPage() {
         {/* ── Step 3: Source Entity + Destination Table ── */}
         {wizardStep === 3 && (
           <div className="wizard-step active">
-            <div className="entity-header-bar">
-              <div>
-                <div style={{ fontWeight: 600, fontSize: '1rem', marginBottom: 4 }}>
-                  {isSpSource(selectedSource) ? 'Select Source List & Destination Table' : 'Choose what to sync'}
+            <div className="wiz-section">
+              <div className="wiz-section-main">
+                <div className="wiz-section-eyebrow">Step 3</div>
+                <div className="wiz-section-title">
+                  {isSpSource(selectedSource) ? 'Select source list & destination table' : 'Choose what to sync'}
                 </div>
-                <div className="conn-summary">
-                  <strong>{selectedSource}</strong> ({srcCreds.siteUrl || srcCreds.endpointUrl})
-                  &nbsp;&rarr;&nbsp;
-                  <strong>{selectedDest}</strong> ({destCreds.database || destCreds.listName || ''})
+                <div className="wiz-section-sub">
+                  Pick the entity to read and the table it lands in.
                 </div>
+              </div>
+              {/* The endpoint/database is omitted when unknown rather than
+                  printed as empty parentheses, which is what "PostgreSQL ()" was. */}
+              <div className="wiz-section-aside">
+                <span className="wiz-route">
+                  <span className="wiz-route-end">
+                    <span className="wiz-route-name">{selectedSource}</span>
+                    {(srcCreds.siteUrl || srcCreds.endpointUrl || srcCreds.database) && (
+                      <span className="wiz-route-sub">{srcCreds.siteUrl || srcCreds.endpointUrl || srcCreds.database}</span>
+                    )}
+                  </span>
+                  <span className="wiz-route-arrow">&rarr;</span>
+                  <span className="wiz-route-end">
+                    <span className="wiz-route-name">{selectedDest}</span>
+                    {(destCreds.database || destCreds.listName) && (
+                      <span className="wiz-route-sub">{destCreds.database || destCreds.listName}</span>
+                    )}
+                  </span>
+                </span>
               </div>
             </div>
 
             {/* Jira project selector (unchanged) */}
             {selectedSource === 'Jira' && projects.length > 1 && (
               <div className="form-group" style={{ maxWidth: 400, marginBottom: 16 }}>
-                <label>Select Project</label>
-                <select value={selectedProject} onChange={e => setSelectedProject(e.target.value)}>
+                <label htmlFor="wizardpage-select-project">Select Project</label>
+                <select id="wizardpage-select-project" value={selectedProject} onChange={e => setSelectedProject(e.target.value)}>
                   <option value="">Choose a project...</option>
                   {projects.map(p => <option key={p.key} value={p.key}>{p.key} &mdash; {p.name}</option>)}
                 </select>
               </div>
             )}
             {selectedSource === 'Jira' && projects.length === 1 && (
-              <div style={{ marginBottom: 12, fontSize: '.85rem', color: 'var(--text-secondary)' }}>
+              <div style={{ marginBottom: 12, fontSize: 'var(--fs-base)', color: 'var(--text-secondary)' }}>
                 Project: <strong style={{ color: 'var(--text)' }}>{projects[0].key} &mdash; {projects[0].name}</strong>
               </div>
             )}
@@ -2903,7 +2870,7 @@ export default function WizardPage() {
 
                 {/* ── LEFT: Source list/entity picker ── */}
                 <div className="card" style={{ padding: 16 }}>
-                  <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 10 }}>
+                  <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-md)', marginBottom: 10 }}>
                     {isSpSource(selectedSource) ? `SharePoint Lists (${entities.length})` : `${selectedSource} Entities`}
                   </div>
 
@@ -2913,11 +2880,11 @@ export default function WizardPage() {
                     placeholder={`Search ${isSpSource(selectedSource) ? 'lists' : 'entities'}...`}
                     value={entitySearch}
                     onChange={e => setEntitySearch(e.target.value)}
-                    style={{ width: '100%', padding: '7px 12px', borderRadius: 6, border: '1px solid var(--border)', marginBottom: 10, fontSize: '.85rem' }}
+                    style={{ width: '100%', padding: '7px 12px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', marginBottom: 10, fontSize: 'var(--fs-base)' }}
                   />
 
                   {/* Scrollable list */}
-                  <div style={{ maxHeight: 380, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+                  <div style={{ maxHeight: 380, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
                     {entities
                       .filter(ent => !entitySearch || ent.name.toLowerCase().includes(entitySearch.toLowerCase()))
                       .map(ent => (
@@ -2935,25 +2902,27 @@ export default function WizardPage() {
                           }}
                         >
                           <div>
-                            <div style={{ fontWeight: selectedEntity === ent.id ? 700 : 500, fontSize: '.88rem' }}>{ent.name}</div>
-                            <div style={{ fontSize: '.72rem', color: 'var(--text-dim)' }}>
+                            <div style={{ fontWeight: selectedEntity === ent.id ? 700 : 500, fontSize: 'var(--fs-base)' }}>{ent.name}</div>
+                            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>
                               {connectorMeta[selectedSource]?.entityDescriptions?.[ent.id] || (isSpSource(selectedSource) ? 'SharePoint List' : '')}
                             </div>
                           </div>
                           <div style={{ display: 'flex', gap: 6 }}>
-                            {ent.fieldCount && <span className="badge badge-neutral" style={{ fontSize: '.68rem' }}>{ent.fieldCount} cols</span>}
-                            {selectedEntity === ent.id && <span style={{ color: 'var(--primary)', fontWeight: 700 }}>&#10003;</span>}
+                            {ent.fieldCount && <span className="badge badge-neutral" style={{ fontSize: 'var(--fs-xs)' }}>{ent.fieldCount} cols</span>}
+                            {selectedEntity === ent.id && <span style={{ color: 'var(--primary)', fontWeight: 'var(--fw-bold)' }}>&#10003;</span>}
                           </div>
                         </div>
                       ))}
                     {entities.filter(ent => !entitySearch || ent.name.toLowerCase().includes(entitySearch.toLowerCase())).length === 0 && (
-                      <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)', fontSize: '.85rem' }}>
-                        No matches for "{entitySearch}"
+                      <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--fs-base)' }}>
+                        {entitySearch
+                          ? <>No entity matches &ldquo;{entitySearch}&rdquo;</>
+                          : 'No entities found. Check the source credentials in Step 2 — a database with no name set returns nothing.'}
                       </div>
                     )}
                   </div>
                   {selectedEntity && (
-                    <div style={{ marginTop: 8, fontSize: '.78rem', color: 'var(--success)', fontWeight: 600 }}>
+                    <div style={{ marginTop: 8, fontSize: 'var(--fs-sm)', color: 'var(--success-on)', fontWeight: 'var(--fw-semibold)' }}>
                       &#10003; Selected: {entities.find(e => e.id === selectedEntity)?.name}
                     </div>
                   )}
@@ -2962,7 +2931,7 @@ export default function WizardPage() {
                 {/* ── RIGHT: Destination table picker (PostgreSQL / MySQL) ── */}
                 {(isDbDest(selectedDest)) && (
                   <div className="card" style={{ padding: 16 }}>
-                    <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 10 }}>
+                    <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-md)', marginBottom: 10 }}>
                       {selectedDest} Destination Table
                     </div>
 
@@ -2989,7 +2958,7 @@ export default function WizardPage() {
                         {pgTablesLoading ? (
                           <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)' }}>Loading tables...</div>
                         ) : (
-                          <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+                          <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
                             {pgTables.map(t => (
                               <div
                                 key={t.name}
@@ -3004,30 +2973,30 @@ export default function WizardPage() {
                                 }}
                               >
                                 <div>
-                                  <div style={{ fontWeight: selectedPgTable === t.name ? 700 : 500, fontSize: '.88rem', fontFamily: 'monospace' }}>{t.name}</div>
+                                  <div style={{ fontWeight: selectedPgTable === t.name ? 700 : 500, fontSize: 'var(--fs-base)', fontFamily: 'var(--font-mono)' }}>{t.name}</div>
                                 </div>
                                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                                  <span className="badge badge-neutral" style={{ fontSize: '.68rem' }}>{t.columnCount} cols</span>
-                                  {selectedPgTable === t.name && <span style={{ color: 'var(--primary)', fontWeight: 700 }}>&#10003;</span>}
+                                  <span className="badge badge-neutral" style={{ fontSize: 'var(--fs-xs)' }}>{t.columnCount} cols</span>
+                                  {selectedPgTable === t.name && <span style={{ color: 'var(--primary)', fontWeight: 'var(--fw-bold)' }}>&#10003;</span>}
                                 </div>
                               </div>
                             ))}
                             {pgTables.length === 0 && (
-                              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)', fontSize: '.85rem' }}>
+                              <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--fs-base)' }}>
                                 No tables found in schema "{destCreds.schema || 'public'}"
                               </div>
                             )}
                           </div>
                         )}
                         {selectedPgTable && (
-                          <div style={{ marginTop: 8, fontSize: '.78rem', color: 'var(--success)', fontWeight: 600 }}>
+                          <div style={{ marginTop: 8, fontSize: 'var(--fs-sm)', color: 'var(--success-on)', fontWeight: 'var(--fw-semibold)' }}>
                             &#10003; Target: {destCreds.schema || 'public'}.{selectedPgTable}
                           </div>
                         )}
                       </>
                     ) : (
                       <div>
-                        <div style={{ marginBottom: 8, fontSize: '.82rem', color: 'var(--text-secondary)' }}>
+                        <div style={{ marginBottom: 8, fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)' }}>
                           Enter a name for the new table. It will be auto-created with columns derived from the source.
                         </div>
                         <input
@@ -3035,17 +3004,17 @@ export default function WizardPage() {
                           placeholder="e.g. sp_invoice"
                           value={newTableName}
                           onChange={e => setNewTableName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_'))}
-                          style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', fontFamily: 'monospace', fontSize: '.9rem' }}
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-md)' }}
                         />
                         {newTableName && (
-                          <div style={{ marginTop: 8, fontSize: '.78rem', color: 'var(--info)' }}>
+                          <div style={{ marginTop: 8, fontSize: 'var(--fs-sm)', color: 'var(--info-on)' }}>
                             Will create: <strong>{destCreds.schema || 'public'}.{newTableName}</strong> with columns from the selected source list
                           </div>
                         )}
                       </div>
                     )}
 
-                    <div style={{ marginTop: 14, padding: '8px 12px', background: 'var(--info-dim)', border: '1px solid var(--info)', borderRadius: 6, fontSize: '.75rem', color: 'var(--info)' }}>
+                    <div style={{ marginTop: 14, padding: '8px 12px', background: 'var(--info-dim)', border: '1px solid var(--info)', borderRadius: 'var(--radius)', fontSize: 'var(--fs-xs)', color: 'var(--info-on)' }}>
                       <strong>Smart Sync:</strong> Only changed columns are updated. If 100 rows are pushed and only 2 rows have changes in specific columns, only those 2 columns on those 2 rows are updated.
                     </div>
                   </div>
@@ -3054,7 +3023,7 @@ export default function WizardPage() {
                 {/* ── RIGHT: Destination list picker (SharePoint) ── */}
                 {isSpSource(selectedDest) && (
                   <div className="card" style={{ padding: 16 }}>
-                    <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 10 }}>SharePoint Destination List</div>
+                    <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-md)', marginBottom: 10 }}>SharePoint Destination List</div>
                     <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
                       <button className={`btn btn-sm ${!spDestCreateNew ? 'btn-primary' : ''}`}
                         style={spDestCreateNew ? { background: 'var(--bg-main)', border: '1px solid var(--border)' } : {}}
@@ -3071,31 +3040,31 @@ export default function WizardPage() {
                       spDestListsLoading ? (
                         <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)' }}>Loading lists...</div>
                       ) : (
-                        <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+                        <div style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius)' }}>
                           {spDestLists.map((l) => (
                             <div key={l.id}
                               onClick={() => { updateDestCred('listName', l.name); setDestConnectionData((d) => ({ ...(d || {}), listId: l.id })); }}
                               style={{ padding: '10px 14px', cursor: 'pointer', background: (destCreds.listName === l.name) ? 'var(--primary-dim)' : 'transparent', borderBottom: '1px solid var(--border)', borderLeft: (destCreds.listName === l.name) ? '3px solid var(--primary)' : '3px solid transparent', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <div style={{ fontWeight: destCreds.listName === l.name ? 700 : 500, fontSize: '.88rem' }}>{l.name}</div>
-                              {destCreds.listName === l.name && <span style={{ color: 'var(--primary)', fontWeight: 700 }}>&#10003;</span>}
+                              <div style={{ fontWeight: destCreds.listName === l.name ? 700 : 500, fontSize: 'var(--fs-base)' }}>{l.name}</div>
+                              {destCreds.listName === l.name && <span style={{ color: 'var(--primary)', fontWeight: 'var(--fw-bold)' }}>&#10003;</span>}
                             </div>
                           ))}
-                          {spDestLists.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)', fontSize: '.85rem' }}>No lists found on this site</div>}
+                          {spDestLists.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--fs-base)' }}>No lists found on this site</div>}
                         </div>
                       )
                     ) : (
                       <div>
-                        <div style={{ marginBottom: 8, fontSize: '.82rem', color: 'var(--text-secondary)' }}>
+                        <div style={{ marginBottom: 8, fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)' }}>
                           Enter a name for the new list. It will be auto-created with columns from your field mappings.
                         </div>
                         <input type="text" placeholder="e.g. Synced Products" value={spNewListName}
                           onChange={(e) => { setSpNewListName(e.target.value); updateDestCred('listName', e.target.value); }}
-                          style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid var(--border)', fontSize: '.9rem' }} />
-                        {spNewListName && <div style={{ marginTop: 8, fontSize: '.78rem', color: 'var(--info)' }}>Will create list <strong>{spNewListName}</strong> with columns from the selected source.</div>}
+                          style={{ width: '100%', padding: '8px 12px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', fontSize: 'var(--fs-md)' }} />
+                        {spNewListName && <div style={{ marginTop: 8, fontSize: 'var(--fs-sm)', color: 'var(--info-on)' }}>Will create list <strong>{spNewListName}</strong> with columns from the selected source.</div>}
                       </div>
                     )}
                     {destCreds.listName && (
-                      <div style={{ marginTop: 8, fontSize: '.78rem', color: 'var(--success)', fontWeight: 600 }}>
+                      <div style={{ marginTop: 8, fontSize: 'var(--fs-sm)', color: 'var(--success-on)', fontWeight: 'var(--fw-semibold)' }}>
                         &#10003; Destination: {destCreds.listName}{spDestCreateNew ? ' (new)' : ''}
                       </div>
                     )}
@@ -3107,29 +3076,31 @@ export default function WizardPage() {
             {/* ── Additional destination targets (fan-out) ── */}
             {(isDbDest(selectedDest) || isSpSource(selectedDest)) && (
               <div className="card" style={{ padding: 16, marginTop: 16 }}>
-                <div onClick={() => setTargetsPanelOpen((o) => !o)} style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <div style={{ fontWeight: 600, fontSize: '.9rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div {...clickable(() => setTargetsPanelOpen((o) => !o), { label: `${targetsPanelOpen ? 'Collapse' : 'Expand'} additional destination targets` })}
+                  aria-expanded={targetsPanelOpen}
+                  style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-md)', display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ color: 'var(--text-dim)' }}>{targetsPanelOpen ? '▾' : '▸'}</span>
                     Additional destination targets (fan-out)
-                    {extraTargets.length > 0 && <span className="badge badge-neutral" style={{ fontSize: '.68rem' }}>{extraTargets.length}</span>}
+                    {extraTargets.length > 0 && <span className="badge badge-neutral" style={{ fontSize: 'var(--fs-xs)' }}>{extraTargets.length}</span>}
                   </div>
-                  <span style={{ fontSize: '.74rem', color: 'var(--text-dim)' }}>
+                  <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>
                     Write each record to more than one {isDbDest(selectedDest) ? 'table' : 'list'} — split columns per target in the Mapping step
                   </span>
                 </div>
                 {targetsPanelOpen && (
                   <div style={{ marginTop: 12 }}>
-                    <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginBottom: 10 }}>
+                    <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)', marginBottom: 10 }}>
                       By default extra targets reuse the <strong>primary {selectedDest} connection &amp; credentials</strong> (same server, another {isDbDest(selectedDest) ? 'table' : 'list'}); choose which columns go to each via the per-column selector in the Mapping step. Use <strong>Different server</strong> to fan out to another server/connector. For a target <strong>shared across entities</strong>, give it the same name &amp; natural key so rows merge.
                     </div>
                     {extraTargets.map((t, i) => {
                       // Field set depends on the target's connector kind: its own (cross-server) or the primary's.
                       const xIsDb = t.connectorId ? connectorKindById(t.connectorId) === 'database' : isDbDest(selectedDest);
-                      const fld = { padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', fontSize: '.82rem', minWidth: 0 };
+                      const fld = { padding: '6px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', fontSize: 'var(--fs-sm)', minWidth: 0 };
                       return (
-                      <div key={t.targetId} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 8, marginBottom: 8 }}>
+                      <div key={t.targetId} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: 8, marginBottom: 8 }}>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <span className="badge badge-neutral" style={{ fontSize: '.68rem' }}>{i + 2}</span>
+                          <span className="badge badge-neutral" style={{ fontSize: 'var(--fs-xs)' }}>{i + 2}</span>
                           <input
                             placeholder={xIsDb ? 'table name' : 'list name'}
                             value={t.table}
@@ -3147,7 +3118,7 @@ export default function WizardPage() {
                             title="Send this target to a different server / connector with its own credentials">
                             {t.advancedOpen ? 'Same server' : 'Different server'}
                           </button>
-                          <button className="btn btn-sm" style={{ color: 'var(--error)', border: '1px solid var(--error)', background: 'transparent' }} onClick={() => removeExtraTarget(i)}>Remove</button>
+                          <button className="btn btn-sm" style={{ color: 'var(--error-on)', border: '1px solid var(--error)', background: 'transparent' }} onClick={() => removeExtraTarget(i)}>Remove</button>
                         </div>
                         {t.advancedOpen && (
                           <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed var(--border)', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -3169,7 +3140,7 @@ export default function WizardPage() {
                             ) : (
                               <input placeholder="site URL" value={t.siteUrl} onChange={(e) => updateExtraTarget(i, { siteUrl: e.target.value })} style={{ ...fld, flex: '1 1 240px' }} />
                             )}
-                            <span style={{ fontSize: '.72rem', color: 'var(--text-dim)', flexBasis: '100%' }}>Leave the connector blank to reuse the primary server. Pick a connector + credential (and connection details) to fan out to a different server.</span>
+                            <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', flexBasis: '100%' }}>Leave the connector blank to reuse the primary server. Pick a connector + credential (and connection details) to fan out to a different server.</span>
                           </div>
                         )}
                       </div>
@@ -3186,8 +3157,8 @@ export default function WizardPage() {
             {/* ── Entity group (multi-entity "Run all") ── */}
             {selectedDest && (
               <div className="card" style={{ padding: 16, marginTop: 16 }}>
-                <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 6 }}>Entity group (optional)</div>
-                <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginBottom: 10 }}>
+                <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-md)', marginBottom: 6 }}>Entity group (optional)</div>
+                <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)', marginBottom: 10 }}>
                   Tag this connection with a group id so several entities (separate saved connections) can be run together in one click. Paste an existing id to join a group, or generate a new one. Connections sharing a group can be triggered with <strong>“Run all in group”</strong> on the Push step.
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -3195,18 +3166,37 @@ export default function WizardPage() {
                     placeholder="group id (e.g. grp_ab12) — leave blank for ungrouped"
                     value={groupId}
                     onChange={(e) => setGroupId(e.target.value.trim())}
-                    style={{ flex: '1 1 240px', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', fontFamily: 'monospace', fontSize: '.84rem' }}
+                    style={{ flex: '1 1 240px', padding: '6px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-base)' }}
                   />
                   <button className="btn btn-outline btn-sm" onClick={() => setGroupId(`grp_${Date.now().toString(36)}`)}>Generate</button>
-                  {groupId && <button className="btn btn-sm" style={{ color: 'var(--error)', border: '1px solid var(--error)', background: 'transparent' }} onClick={() => setGroupId('')}>Clear</button>}
+                  {groupId && <button className="btn btn-sm" style={{ color: 'var(--error-on)', border: '1px solid var(--error)', background: 'transparent' }} onClick={() => setGroupId('')}>Clear</button>}
                 </div>
-                {groupId && <div style={{ marginTop: 6, fontSize: '.74rem', color: 'var(--success)' }}>Grouped as <strong>{groupId}</strong>. Save this connection (and tag others with the same id), then use “Run all in group” on the Push step.</div>}
+                {/* Load order — parents must load before the children that reference
+                    them, otherwise every child row fails its foreign key. */}
+                {groupId && (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+                    <label htmlFor="wizard-group-order" style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)' }}>Load order</label>
+                    <input
+                      id="wizard-group-order"
+                      type="number"
+                      min="1"
+                      placeholder="—"
+                      value={groupOrder}
+                      onChange={(e) => setGroupOrder(e.target.value)}
+                      style={{ width: 90, padding: '6px 10px', borderRadius: 'var(--radius)', border: '1px solid var(--border)', fontSize: 'var(--fs-base)' }}
+                    />
+                    <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>
+                      Lower runs first. Give the <strong>parent</strong> table 1 and anything with a foreign key into it 2. Blank runs last.
+                    </span>
+                  </div>
+                )}
+                {groupId && <div style={{ marginTop: 6, fontSize: 'var(--fs-xs)', color: 'var(--success-on)' }}>Grouped as <strong>{groupId}</strong>. Save this connection (and tag others with the same id), then use “Run all in group” on the Push step.</div>}
               </div>
             )}
 
             {/* Validation messages */}
             {!selectedEntity && entities.length > 0 && (
-              <div style={{ color: 'var(--text-dim)', fontSize: '.85rem', marginTop: 16, textAlign: 'center' }}>
+              <div style={{ color: 'var(--text-dim)', fontSize: 'var(--fs-base)', marginTop: 16, textAlign: 'center' }}>
                 {(isDbDest(selectedDest))
                   ? 'Select a source list and destination table to continue'
                   : 'Select an entity to continue'}
@@ -3235,54 +3225,57 @@ export default function WizardPage() {
                     </button>
                     <button className="btn btn-outline btn-sm" onClick={openInCanvas} title="Open these fields + mappings in the full Mapping Canvas (AI auto-map, transforms)">&#10138; Edit in Mapping Canvas</button>
                   </div>
-                  <div className="mapper-stats">
-                    <strong>{mappings.length}</strong> mapped &nbsp;|&nbsp;
+                  {/* "SP columns" was hardcoded — it read "4 SP columns unmapped"
+                      with a PostgreSQL destination. It names the real destination now. */}
+                  <div className="mapper-stats wiz-tallies">
+                    <span className="wiz-tally"><b>{mappings.length}</b> mapped</span>
                     {requiredUnmapped.length > 0
-                      ? <span style={{ color: 'var(--error)' }}>{requiredUnmapped.length} required unmapped</span>
-                      : <span style={{ color: 'var(--success)' }}>All required columns mapped</span>
-                    }
-                    &nbsp;|&nbsp; {destFields.length - mappedDestNames.size} SP columns unmapped
+                      ? <span className="wiz-tally wiz-tally--bad"><b>{requiredUnmapped.length}</b> required unmapped</span>
+                      : <span className="wiz-tally wiz-tally--ok">All required columns mapped</span>}
+                    <span className="wiz-tally">
+                      <b>{destFields.length - mappedDestNames.size}</b> {selectedDest} column{destFields.length - mappedDestNames.size === 1 ? '' : 's'} unmapped
+                    </span>
                   </div>
                 </div>
 
                 {mappings.length > 0 && (
-                  <div style={{ margin: '8px 0', padding: '8px 12px', background: 'var(--bg-main)', borderRadius: 6, fontSize: '.78rem', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', color: 'var(--text-dim)' }}>
-                    <span style={{ color: '#f59e0b', fontSize: '1rem' }}>★</span>
+                  <div className="wiz-note" style={{ margin: '8px 0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ color: 'var(--warning)', fontSize: 'var(--fs-md)' }}>★</span>
                     {effectiveKey
-                      ? <span>Identity key: <code style={{ background: 'var(--bg-card)', padding: '1px 5px', borderRadius: 3 }}>{effectiveKey}</code> — records are deduped &amp; upserted by this column. Click the ★ on any mapping row to change it.</span>
+                      ? <span>Identity key: <code style={{ background: 'var(--bg-card)', padding: '1px 5px', borderRadius: 'var(--radius-sm)' }}>{effectiveKey}</code> — records are deduped &amp; upserted by this column. Click the ★ on any mapping row to change it.</span>
                       : <span>No identity key set — every row is inserted as new. Click the ☆ on a mapping row to dedupe/upsert by that column.</span>}
                   </div>
                 )}
 
                 {isDbDest(selectedDest) && (
-                  <div style={{ margin: '8px 0', padding: '10px 12px', background: 'var(--bg-main)', borderRadius: 6, fontSize: '.8rem', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 600 }}>Match records by:</span>
+                  <div className="wiz-note" style={{ margin: '8px 0', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 'var(--fw-semibold)' }}>Match records by:</span>
                     <select value={matchKey === '__append__' ? '__append__' : effectiveKey} onChange={(e) => setMatchKey(e.target.value)} style={{ minWidth: 220 }}>
                       <option value="__append__">Append every row (no matching — each row is new)</option>
                       {mappings.flatMap((m) => m.destinations || []).filter((d, i, a) => d && a.indexOf(d) === i).map((d) => (
                         <option key={d} value={d}>Match by “{d}” (update if exists, else insert)</option>
                       ))}
                     </select>
-                    <span style={{ color: 'var(--text-dim)', fontSize: '.74rem' }}>
+                    <span style={{ color: 'var(--text-dim)', fontSize: 'var(--fs-xs)' }}>
                       New tables get an auto-increment <code>id</code> primary key automatically.
                     </span>
                   </div>
                 )}
 
                 {mappings.length > 0 && (
-                  <div style={{ margin: '8px 0', padding: '10px 12px', background: 'var(--bg-main)', borderRadius: 6, fontSize: '.8rem' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, cursor: 'pointer' }}>
+                  <div className="wiz-note" style={{ margin: '8px 0' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 'var(--fw-semibold)', cursor: 'pointer' }}>
                       <input type="checkbox" checked={encryptionEnabled} onChange={(e) => setEncryptionEnabled(e.target.checked)} />
                       <span>&#128274; Encrypt sensitive columns before writing to the destination (AES-256-GCM)</span>
                     </label>
                     {encryptionEnabled && (
                       <div style={{ marginTop: 10 }}>
-                        <div style={{ color: 'var(--text-dim)', fontSize: '.74rem', marginBottom: 6 }}>
+                        <div style={{ color: 'var(--text-dim)', fontSize: 'var(--fs-xs)', marginBottom: 6 }}>
                           Choose which destination columns to encrypt. Values are written as ciphertext (<code>synz:v1:gcm:…</code>); the owning application decrypts them with this connection&rsquo;s key. The identity-key column can&rsquo;t be encrypted (it must stay usable for matching).
                         </div>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                           {mappings.flatMap((m) => m.destinations || []).filter((d, i, a) => d && a.indexOf(d) === i && d !== effectiveKey).map((col) => (
-                            <label key={col} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 6, cursor: 'pointer', background: encryptFields.includes(col) ? 'var(--primary-dim)' : 'transparent' }}>
+                            <label key={col} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', border: '1px solid var(--border)', borderRadius: 'var(--radius)', cursor: 'pointer', background: encryptFields.includes(col) ? 'var(--primary-dim)' : 'transparent' }}>
                               <input
                                 type="checkbox"
                                 checked={encryptFields.includes(col)}
@@ -3303,13 +3296,13 @@ export default function WizardPage() {
                                 else { setRevealMsg(res.data?.error || 'Save the connection (with encryption on) first, then reveal.'); }
                               }}
                             >Reveal decryption key</button>
-                            {revealMsg && <span style={{ color: 'var(--text-dim)', fontSize: '.74rem' }}>{revealMsg}</span>}
+                            {revealMsg && <span style={{ color: 'var(--text-dim)', fontSize: 'var(--fs-xs)' }}>{revealMsg}</span>}
                             {revealedKey && (
-                              <code style={{ background: 'var(--bg-card)', padding: '4px 8px', borderRadius: 4, wordBreak: 'break-all', fontSize: '.72rem' }}>{revealedKey}</code>
+                              <code style={{ background: 'var(--bg-card)', padding: '4px 8px', borderRadius: 'var(--radius-sm)', wordBreak: 'break-all', fontSize: 'var(--fs-xs)' }}>{revealedKey}</code>
                             )}
                           </div>
                         ) : (
-                          <div style={{ marginTop: 8, color: 'var(--text-dim)', fontSize: '.72rem' }}>Save the connection to generate the key — a &ldquo;Reveal decryption key&rdquo; button will appear here.</div>
+                          <div style={{ marginTop: 8, color: 'var(--text-dim)', fontSize: 'var(--fs-xs)' }}>Save the connection to generate the key — a &ldquo;Reveal decryption key&rdquo; button will appear here.</div>
                         )}
                       </div>
                     )}
@@ -3340,7 +3333,7 @@ export default function WizardPage() {
                           <span className="field-type-tag">{f.type}</span>
                         </div>
                       ))}
-                      {filteredSrc.length === 0 && <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: '.82rem' }}>No fields match</div>}
+                      {filteredSrc.length === 0 && <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: 'var(--fs-sm)' }}>No fields match</div>}
                     </div>
                   </div>
 
@@ -3352,8 +3345,8 @@ export default function WizardPage() {
                     </div>
                     <div className="mapping-rows">
                       {mappings.length === 0 && (
-                        <div style={{ padding: 30, textAlign: 'center', color: 'var(--text-dim)', fontSize: '.85rem' }}>
-                          <div style={{ fontSize: '2rem', marginBottom: 8 }}>&#8621;</div>
+                        <div style={{ padding: 30, textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--fs-base)' }}>
+                          <div style={{ fontSize: 'var(--fs-2xl)', marginBottom: 8 }}>&#8621;</div>
                           Click <strong>Auto-Map</strong> to match fields automatically,<br />or add mappings manually below.
                         </div>
                       )}
@@ -3386,7 +3379,7 @@ export default function WizardPage() {
                   <div className="mapper-col">
                     <div className="mapper-col-header">
                       <span className="col-title">
-                        <span style={{ color: 'var(--success)' }}>{selectedDest}</span> Columns
+                        <span style={{ color: 'var(--success-on)' }}>{selectedDest}</span> Columns
                       </span>
                       <span className="col-count">{destFields.length}</span>
                     </div>
@@ -3404,7 +3397,7 @@ export default function WizardPage() {
                           {f.required && <span className="field-required">*</span>}
                         </div>
                       ))}
-                      {filteredDest.length === 0 && <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: '.82rem' }}>No columns match</div>}
+                      {filteredDest.length === 0 && <div style={{ padding: 12, color: 'var(--text-dim)', fontSize: 'var(--fs-sm)' }}>No columns match</div>}
                     </div>
                   </div>
                 </div>
@@ -3430,39 +3423,63 @@ export default function WizardPage() {
         {/* ── Step 5: Fetch & Review ── */}
         {wizardStep === 5 && (
           <div className="wizard-step active">
-            <div style={{ fontWeight: 600, marginBottom: 16, fontSize: '1rem' }}>Fetch {selectedSource} Data</div>
+            <div className="wiz-section">
+              <div className="wiz-section-main">
+                <div className="wiz-section-eyebrow">Step 5</div>
+                <div className="wiz-section-title">Fetch &amp; review</div>
+                <div className="wiz-section-sub">
+                  Reads real records and shows them mapped. Nothing is written until Step 6.
+                </div>
+              </div>
+            </div>
 
             <div className="grid-2" style={{ gap: 24 }}>
               {/* Left: Config */}
               <div className="card" style={{ padding: 20 }}>
-                <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.9rem' }}>Fetch Configuration</div>
-                <div className="form-group">
-                  <label>Project</label>
-                  <input type="text" value={selectedProject} readOnly style={{ background: 'var(--bg-main)' }} />
+                <div className="wiz-card-title">Fetch Configuration</div>
+                {/* "Project" is a Jira-only scope. Other sources are scoped by the entity
+                    field below, so showing an empty (or fake) Project box only confused. */}
+                {/* Facts, not fields: these were readOnly <input>s, which look editable
+                    and invite a click that does nothing. */}
+                <div className="wiz-facts">
+                  <div className="wiz-fact">
+                    <span className="wiz-fact-label">{selectedSource === 'Jira' ? 'Project' : 'Source'}</span>
+                    <span className="wiz-fact-value">
+                      {(selectedSource === 'Jira' ? selectedProject : selectedSource) || '—'}
+                    </span>
+                  </div>
+                  <div className="wiz-fact">
+                    <span className="wiz-fact-label">{isSpSource(selectedSource) ? 'List' : 'Entity'}</span>
+                    <span className="wiz-fact-value">
+                      {(isSpSource(selectedSource)
+                        ? (entities.find(e => e.id === selectedEntity)?.name || selectedEntity)
+                        : selectedEntity) || '—'}
+                    </span>
+                  </div>
                 </div>
-                <div className="form-group">
-                  <label>{isSpSource(selectedSource) ? 'List' : 'Entity'}</label>
-                  <input type="text" value={isSpSource(selectedSource) ? (entities.find(e => e.id === selectedEntity)?.name || selectedEntity) : (selectedEntity || '')} readOnly style={{ background: 'var(--bg-main)' }} />
-                </div>
-                {selectedSource !== 'SharePoint' && (
+                {/* Date window is a JIRA-only filter (it becomes `updated >= / <=` in the JQL).
+                    No other source honors it — scrape/REST/DB/file-share fetches ignore
+                    dateFrom/dateTo entirely — so showing it there promised a filter that
+                    silently did nothing. */}
+                {selectedSource === 'Jira' && (
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                     <div className="form-group">
-                      <label>Date Start</label>
-                      <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} />
+                      <label htmlFor="wizardpage-date-start">Date Start</label>
+                      <input id="wizardpage-date-start" type="date" value={dateStart} onChange={e => setDateStart(e.target.value)} />
                     </div>
                     <div className="form-group">
-                      <label>Date End</label>
-                      <input type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} />
+                      <label htmlFor="wizardpage-date-end">Date End</label>
+                      <input id="wizardpage-date-end" type="date" value={dateEnd} onChange={e => setDateEnd(e.target.value)} />
                     </div>
                   </div>
                 )}
                 {isSpSource(selectedSource) && (
-                  <div style={{ padding: '8px 12px', background: 'var(--info-dim)', border: '1px solid var(--info)', borderRadius: 6, fontSize: '.78rem', color: 'var(--info)', marginBottom: 8 }}>
+                  <div className="wiz-note wiz-note--info" style={{ marginBottom: 8 }}>
                     All items from the SharePoint list will be fetched (delta query).
                   </div>
                 )}
                 <div className="form-group" style={{ marginTop: 4 }}>
-                  <label style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>
+                  <label style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)' }}>
                     {mappings.length} field mappings configured &middot; {selectedSource} &rarr; {destCreds.table || destCreds.listName || selectedDest}
                   </label>
                 </div>
@@ -3475,7 +3492,7 @@ export default function WizardPage() {
                   {fetchStatus === 'fetching' ? 'Fetching...' : fetchStatus === 'done' ? 'Re-fetch' : `Fetch ${selectedSource} Data`}
                 </button>
                 {fetchError && (
-                  <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--error-dim)', border: '1px solid var(--error)', borderRadius: 6, fontSize: '.82rem', color: 'var(--error)' }}>
+                  <div className="wiz-note wiz-note--error" style={{ marginTop: 10 }}>
                     {fetchError}
                   </div>
                 )}
@@ -3483,54 +3500,67 @@ export default function WizardPage() {
 
               {/* Right: Results */}
               <div className="card" style={{ padding: 20 }}>
-                <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.9rem' }}>Fetch Results</div>
+                <div className="wiz-card-title">Fetch Results</div>
                 {fetchStatus === 'idle' && (
-                  <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-dim)' }}>
-                    <div style={{ fontSize: '2rem', marginBottom: 8 }}>&#128269;</div>
-                    <div style={{ fontSize: '.88rem' }}>Configure date range and click Fetch to pull Jira issues.</div>
+                  <div className="wiz-empty">
+                    <div className="wiz-empty-icon">&#128269;</div>
+                    <div className="wiz-empty-title">{selectedSource === 'Jira'
+                      ? 'Configure the date range and click Fetch to pull Jira issues.'
+                      : `Click Fetch to read ${sourceScopeLabel || 'the selected entity'} from ${selectedSource}.`}</div>
                   </div>
                 )}
                 {fetchStatus === 'fetching' && (
-                  <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-dim)' }}>
-                    <div style={{ fontSize: '2rem', marginBottom: 8, animation: 'spin 1.5s linear infinite', display: 'inline-block' }}>&#9696;</div>
-                    <div style={{ fontSize: '.88rem', marginTop: 8 }}>Pulling issues from {selectedProject}...</div>
+                  <div className="wiz-empty">
+                    <div className="wiz-empty-icon is-spinning">&#9696;</div>
+                    <div className="wiz-empty-title" style={{ marginTop: 8 }}>{selectedSource === 'Jira'
+                      ? `Pulling issues from ${selectedProject}...`
+                      : `Reading ${sourceScopeLabel || 'records'} from ${selectedSource}...`}</div>
                   </div>
                 )}
                 {fetchStatus === 'done' && fetchResult && (
                   <div>
-                    <div style={{ padding: '10px 14px', background: 'var(--success-dim)', border: '1px solid var(--success)', borderRadius: 8, marginBottom: 12 }}>
-                      <div style={{ fontWeight: 700, color: 'var(--success)', fontSize: '.88rem' }}>
-                        &#9989; Fetched {fetchResult.totalCount} {isSpSource(selectedSource) ? 'items' : selectedSource === 'Jira' ? 'issues' : 'records'}
+                    <div className="wiz-note wiz-note--success" style={{ marginBottom: 12 }}>
+                      <div style={{ fontWeight: 'var(--fw-bold)', color: 'var(--success-on)', fontSize: 'var(--fs-base)' }}>
+                        &#9989; {fetchResult.serverPreview
+                          ? `Previewed ${fetchResult.totalCount}${fetchResult.totalCount >= fetchResult.previewLimit ? '+' : ''} ${isSpSource(selectedSource) ? 'items' : selectedSource === 'Jira' ? 'issues' : 'records'}`
+                          : `Fetched ${fetchResult.totalCount} ${isSpSource(selectedSource) ? 'items' : selectedSource === 'Jira' ? 'issues' : 'records'}`}
                       </div>
-                      <div style={{ fontSize: '.78rem', color: 'var(--text-secondary)', marginTop: 2 }}>
-                        Run ID: <span style={{ fontFamily: 'monospace' }}>{fetchResult.runId}</span>
+                      {/* Say WHICH path produced this. Server preview = the same read + mapping
+                          the push performs, so what you review is what gets written. */}
+                      <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-secondary)', marginTop: 3 }}>
+                        {fetchResult.serverPreview
+                          ? `Read server-side through the same source + mapping the push uses${fetchResult.totalCount >= fetchResult.previewLimit ? ` — showing the first ${fetchResult.previewLimit}; the push reads them all.` : '.'}`
+                          : 'Read in the browser (server preview unavailable) — the push re-reads server-side.'}
+                      </div>
+                      <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)', marginTop: 2 }}>
+                        Run ID: <span style={{ fontFamily: 'var(--font-mono)' }}>{fetchResult.runId}</span>
                       </div>
                     </div>
-                    <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginBottom: 6, fontWeight: 600 }}>
+                    <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)', marginBottom: 6, fontWeight: 'var(--fw-semibold)' }}>
                       Preview (first {Math.min(5, fetchResult.tickets.length)} of {fetchResult.totalCount})
                     </div>
-                    <div style={{ maxHeight: 220, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 6 }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.78rem' }}>
+                    <div className="wiz-table-wrap" style={{ maxHeight: 220 }}>
+                      <table className="wiz-data-table">
                         <thead>
-                          <tr style={{ background: 'var(--bg-main)' }}>
+                          <tr>
                             {isSpSource(selectedSource) ? (
                               <>
-                                <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Item ID</th>
+                                <th scope="col">Item ID</th>
                                 {srcFields.slice(0, 3).map(f => (
-                                  <th key={f.name} style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>{f.displayName || f.name}</th>
+                                  <th scope="col" key={f.name}>{f.displayName || f.name}</th>
                                 ))}
                               </>
                             ) : selectedSource === 'Jira' ? (
                               <>
-                                <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Key</th>
-                                <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Summary</th>
-                                <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Status</th>
+                                <th scope="col">Key</th>
+                                <th scope="col">Summary</th>
+                                <th scope="col">Status</th>
                               </>
                             ) : (
                               // Generic source (REST/DB/…): columns from the actual record keys.
                               <>
                                 {Object.keys(fetchResult.tickets[0] || {}).slice(0, 5).map((c) => (
-                                  <th key={c} style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>{c}</th>
+                                  <th scope="col" key={c}>{c}</th>
                                 ))}
                               </>
                             )}
@@ -3541,24 +3571,24 @@ export default function WizardPage() {
                             <tr key={i}>
                               {isSpSource(selectedSource) ? (
                                 <>
-                                  <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                                  <td className="is-mono">
                                     {t.spItemId || t.id || '--'}
                                   </td>
                                   {srcFields.slice(0, 3).map(f => (
-                                    <td key={f.name} style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
+                                    <td key={f.name}>
                                       {String(t.fields?.[f.name] ?? '').substring(0, 50)}
                                     </td>
                                   ))}
                                 </>
                               ) : selectedSource === 'Jira' ? (
                                 <>
-                                  <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                                  <td className="is-mono">
                                     {t.key || t.issueKey || '--'}
                                   </td>
-                                  <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
+                                  <td>
                                     {(t.fields?.summary || t.summary || '').substring(0, 60)}
                                   </td>
-                                  <td style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>
+                                  <td style={{ whiteSpace: 'nowrap' }}>
                                     {t.fields?.status?.name || t.status || '--'}
                                   </td>
                                 </>
@@ -3566,7 +3596,7 @@ export default function WizardPage() {
                                 // Generic source: show the same record keys as the header.
                                 <>
                                   {Object.keys(fetchResult.tickets[0] || {}).slice(0, 5).map((c) => (
-                                    <td key={c} style={{ padding: '4px 8px', borderBottom: '1px solid var(--border)' }}>
+                                    <td key={c}>
                                       {String(t[c] ?? '').substring(0, 50)}
                                     </td>
                                   ))}
@@ -3577,7 +3607,7 @@ export default function WizardPage() {
                         </tbody>
                       </table>
                     </div>
-                    <div style={{ marginTop: 12, fontSize: '.82rem', color: 'var(--text-secondary)' }}>
+                    <div style={{ marginTop: 12, fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)' }}>
                       {(isDbDest(selectedDest)) ? (
                         <>Click <strong>Next</strong> to push {fetchResult.totalCount} records to <strong>{destCreds.table || 'auto-generated table'}</strong> in {selectedDest}. Table is auto-created if it doesn't exist. Existing rows updated by {mappings[0]?.destinations?.[0] || 'key'}.</>
                       ) : (
@@ -3594,33 +3624,48 @@ export default function WizardPage() {
         {/* ── Step 6: Push & Sync ── */}
         {wizardStep === 6 && (
           <div className="wizard-step active">
-            <div style={{ fontWeight: 600, marginBottom: 16, fontSize: '1rem' }}>Push to {selectedDest}</div>
+            <div className="wiz-section">
+              <div className="wiz-section-main">
+                <div className="wiz-section-eyebrow">Step 6</div>
+                <div className="wiz-section-title">Push &amp; sync</div>
+                <div className="wiz-section-sub">
+                  Writes the mapped records to <strong>{selectedDest}</strong> and schedules the sync.
+                </div>
+              </div>
+            </div>
 
             {/* ── Run all entities in this group (multi-entity orchestration) ── */}
             {groupId && (
               <div className="card" style={{ padding: 16, marginBottom: 16, borderLeft: '3px solid var(--primary)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: '.9rem' }}>Entity group: <code style={{ background: 'var(--bg-main)', padding: '1px 6px', borderRadius: 3 }}>{groupId}</code></div>
-                    <div style={{ fontSize: '.76rem', color: 'var(--text-dim)' }}>Runs every <strong>active saved</strong> connection tagged with this group, one after another. Save this connection first so it's included.</div>
+                    <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-md)' }}>Entity group: <code style={{ background: 'var(--bg-main)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>{groupId}</code></div>
+                    <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Runs every <strong>active saved</strong> connection tagged with this group, one after another. Save this connection first so it's included.</div>
                   </div>
                   <button className="btn btn-primary btn-sm" disabled={groupRunStatus === 'running'} onClick={handleRunGroup}>
                     {groupRunStatus === 'running' ? 'Running all…' : '▶ Run all in group'}
                   </button>
                 </div>
                 {groupRunResult && (
-                  <div style={{ marginTop: 10, fontSize: '.8rem' }}>
+                  <div style={{ marginTop: 10, fontSize: 'var(--fs-sm)' }}>
                     {groupRunResult.error ? (
-                      <span style={{ color: 'var(--error)' }}>{groupRunResult.error}</span>
+                      <span style={{ color: 'var(--error-on)' }}>{groupRunResult.error}</span>
                     ) : (
                       <div>
-                        <div style={{ color: 'var(--success)', fontWeight: 600, marginBottom: 4 }}>Ran {groupRunResult.count} entit{groupRunResult.count === 1 ? 'y' : 'ies'}:</div>
+                        <div style={{ color: 'var(--success-on)', fontWeight: 'var(--fw-semibold)', marginBottom: 4 }}>
+                          Ran {groupRunResult.count - (groupRunResult.skipped || 0)} of {groupRunResult.count} entit{groupRunResult.count === 1 ? 'y' : 'ies'}
+                          {groupRunResult.skipped ? ` · ${groupRunResult.skipped} skipped after a failure` : ''}:
+                        </div>
                         {(groupRunResult.results || []).map((r, i) => (
                           <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '2px 0', borderBottom: '1px solid var(--border)' }}>
-                            <span>{r.name || r.integrationId}</span>
-                            {r.error
-                              ? <span style={{ color: 'var(--error)' }}>{r.error}</span>
-                              : <span style={{ color: 'var(--text-dim)' }}>{r.published ?? 0} published &times; {r.targets ?? 1} target(s)</span>}
+                            <span style={r.skipped ? { color: 'var(--text-dim)' } : undefined}>{r.name || r.integrationId}</span>
+                            {/* A skipped member is neither a success nor its own failure —
+                                it never ran because something earlier in the load order did. */}
+                            {r.skipped
+                              ? <span style={{ color: 'var(--warning-on)' }}>{r.reason || 'Skipped'}</span>
+                              : r.error
+                                ? <span style={{ color: 'var(--error-on)' }}>{r.error}</span>
+                                : <span style={{ color: 'var(--text-dim)' }}>{r.published ?? 0} published &times; {r.targets ?? 1} target(s)</span>}
                           </div>
                         ))}
                       </div>
@@ -3634,44 +3679,73 @@ export default function WizardPage() {
               {/* Config + Status row */}
               <div style={{ display: 'grid', gridTemplateColumns: pushStatus !== 'idle' || !fetchResult?.tickets?.length ? '1fr 1fr' : '1fr', gap: 16 }}>
               <div className="card" style={{ padding: 20 }}>
-                <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.9rem' }}>Push Configuration</div>
-                <div style={{ display: 'grid', gap: 10 }}>
-                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Source:</span> <strong>{selectedProject || selectedSource}</strong> ({fetchResult?.totalCount || 0} records)</div>
-                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Destination:</span> <strong>{destCreds.table || destCreds.listName || selectedDest}</strong> ({selectedDest})</div>
-                  {destCreds.siteUrl && <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Site:</span> <span style={{ fontSize: '.82rem', wordBreak: 'break-all' }}>{destCreds.siteUrl}</span></div>}
-                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Mappings:</span> {mappings.length} fields</div>
-                  <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Mode:</span> {matchKey === '__append__'
-                    ? <><strong>Append</strong> (every row inserted as new)</>
-                    : <><strong>Upsert</strong> (update by {matchKey || mappings[0]?.destinations?.[0] || 'key'}, create if new)</>}</div>
-                  {dateStart && dateEnd && <div><span style={{ fontSize: '.78rem', color: 'var(--text-dim)' }}>Date Range:</span> {dateStart} &rarr; {dateEnd}</div>}
+                <div className="wiz-card-title">Push Configuration</div>
+                {/* Facts, not a run-on list of "label: value" divs — the same
+                    read-only treatment step 5 uses, so the two review panels match. */}
+                <div className="wiz-facts">
+                  <div className="wiz-fact">
+                    <span className="wiz-fact-label">Source</span>
+                    <span className="wiz-fact-value is-prose">
+                      <strong>{selectedSource}</strong>{sourceScopeLabel ? <span style={{ color: 'var(--text-dim)' }}> &middot; {sourceScopeLabel}</span> : null}{' '}
+                      <span style={{ color: 'var(--text-dim)' }}>({fetchResult?.serverPreview && fetchResult.totalCount >= fetchResult.previewLimit ? `${fetchResult.totalCount}+ previewed` : `${fetchResult?.totalCount || 0} records`})</span>
+                    </span>
+                  </div>
+                  <div className="wiz-fact">
+                    <span className="wiz-fact-label">Destination</span>
+                    <span className="wiz-fact-value is-prose">
+                      <strong>{destCreds.table || destCreds.listName || selectedDest}</strong> <span style={{ color: 'var(--text-dim)' }}>({selectedDest})</span>
+                    </span>
+                  </div>
+                  {destCreds.siteUrl && (
+                    <div className="wiz-fact">
+                      <span className="wiz-fact-label">Site</span>
+                      <span className="wiz-fact-value is-prose">{destCreds.siteUrl}</span>
+                    </div>
+                  )}
+                  <div className="wiz-fact">
+                    <span className="wiz-fact-label">Mappings</span>
+                    <span className="wiz-fact-value is-prose">{mappings.length} fields</span>
+                  </div>
+                  <div className="wiz-fact">
+                    <span className="wiz-fact-label">Mode</span>
+                    <span className="wiz-fact-value is-prose">{matchKey === '__append__'
+                      ? <><strong>Append</strong> (every row inserted as new)</>
+                      : <><strong>Upsert</strong> (update by {matchKey || mappings[0]?.destinations?.[0] || 'key'}, create if new)</>}</span>
+                  </div>
+                  {selectedSource === 'Jira' && dateStart && dateEnd && (
+                    <div className="wiz-fact">
+                      <span className="wiz-fact-label">Date Range</span>
+                      <span className="wiz-fact-value">{dateStart} &rarr; {dateEnd}</span>
+                    </div>
+                  )}
                 </div>
-                <div style={{ marginTop: 14, padding: '8px 12px', background: 'var(--info-dim)', border: '1px solid var(--info)', borderRadius: 6, fontSize: '.78rem', color: 'var(--info)' }}>
+                <div className="wiz-note wiz-note--info" style={{ marginTop: 14 }}>
                   {matchKey === '__append__'
-                    ? <><strong>Append:</strong> Every record is inserted as a new row (no matching). The auto-increment <code style={{ background: 'var(--bg-main)', padding: '1px 4px', borderRadius: 3 }}>id</code> keeps rows unique.</>
-                    : <><strong>Dedup:</strong> Each record is matched by the <code style={{ background: 'var(--bg-main)', padding: '1px 4px', borderRadius: 3 }}>{matchKey || mappings[0]?.destinations?.[0] || 'key'}</code> column. If a row with the same key already exists in {selectedDest}, it is <strong>updated</strong>; otherwise a new row is created. No duplicates.</>}
+                    ? <><strong>Append:</strong> Every record is inserted as a new row (no matching). The auto-increment <code>id</code> keeps rows unique.</>
+                    : <><strong>Dedup:</strong> Each record is matched by the <code>{matchKey || mappings[0]?.destinations?.[0] || 'key'}</code> column. If a row with the same key already exists in {selectedDest}, it is <strong>updated</strong>; otherwise a new row is created. No duplicates.</>}
                 </div>
               </div>
 
               {/* Middle: Transformation Preview */}
               {fetchResult?.tickets?.length > 0 && pushStatus === 'idle' && (
                 <div className="card" style={{ padding: 20, gridColumn: '1 / -1', marginBottom: 0 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.9rem' }}>
-                    Transformation Preview &mdash; What goes to SharePoint
+                  <div className="wiz-card-title">
+                    Transformation Preview &mdash; what goes to {selectedDest}
                   </div>
-                  <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginBottom: 10 }}>
+                  <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)', marginBottom: 10 }}>
                     Showing transformed output for the first {Math.min(3, fetchResult.tickets.length)} of {fetchResult.totalCount} records using your {mappings.length} mapping rules.
                   </div>
-                  <div style={{ maxHeight: 320, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 6 }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.76rem' }}>
+                  <div className="wiz-table-wrap" style={{ maxHeight: 320 }}>
+                    <table className="wiz-data-table is-xs is-sticky">
                       <thead>
-                        <tr style={{ background: 'var(--bg-main)', position: 'sticky', top: 0 }}>
-                          <th style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>#</th>
+                        <tr>
+                          <th scope="col">#</th>
                           {mappings.map((m, i) => (
-                            <th key={i} style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>
+                            <th scope="col" key={i}>
                               <span title={`${m.sources.join('+')} \u2192 ${m.destinations.join('+')}`}>
                                 {m.destinations[0] || '?'}
                               </span>
-                              <div style={{ fontSize: '.65rem', color: m.transform === 'DIRECT' ? 'var(--success)' : m.transform === 'EXPRESSION' ? 'var(--warning)' : 'var(--info)', fontWeight: 400 }}>
+                              <div style={{ fontSize: 'var(--fs-xs)', color: m.transform === 'DIRECT' ? 'var(--success)' : m.transform === 'EXPRESSION' ? 'var(--warning)' : 'var(--info)', fontWeight: 'var(--fw-normal)' }}>
                                 {m.transform === 'DIRECT' ? 'Direct' : m.preset ? m.preset : 'JS Expr'}
                               </div>
                             </th>
@@ -3690,15 +3764,15 @@ export default function WizardPage() {
                           };
 
                           return (
-                            <tr key={rowIdx} style={{ borderBottom: '1px solid var(--border)' }}>
-                              <td style={{ padding: '4px 8px', fontFamily: 'monospace', color: 'var(--text-dim)' }}>
+                            <tr key={rowIdx}>
+                              <td className="is-mono" style={{ color: 'var(--text-dim)' }}>
                                 {ticket.key || ticket.issueKey || rowIdx + 1}
                               </td>
                               {mappings.map((m, colIdx) => {
                                 const val = applyTransform(m, ticket);
                                 const truncated = String(val).length > 40 ? String(val).substring(0, 40) + '...' : val;
                                 return (
-                                  <td key={colIdx} style={{ padding: '4px 8px', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={String(val)}>
+                                  <td key={colIdx} className="is-clip" style={{ maxWidth: 180 }} title={String(val)}>
                                     {truncated || <span style={{ color: 'var(--text-dim)' }}>(empty)</span>}
                                   </td>
                                 );
@@ -3709,7 +3783,7 @@ export default function WizardPage() {
                       </tbody>
                     </table>
                   </div>
-                  <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', marginTop: 6 }}>
+                  <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginTop: 6 }}>
                     Note: The actual push uses the server-side 35-field mapper for all columns. This preview shows your custom mapping transforms.
                   </div>
                 </div>
@@ -3718,14 +3792,14 @@ export default function WizardPage() {
               {/* DDL Preview — Database destination schema diff */}
               {ddlPreview && ddlPreview.requiresApproval && ddlStatus !== 'applied' && (
                 <div className="card" style={{ padding: 20, gridColumn: '1 / -1', border: '2px solid var(--warning)', background: 'var(--bg-main)' }}>
-                  <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.9rem', color: 'var(--warning)' }}>
+                  <div className="wiz-card-title is-warning">
                     &#9888; Schema Changes Required — DDL Preview
                   </div>
-                  <div style={{ fontSize: '.82rem', color: 'var(--text-secondary)', marginBottom: 12 }}>
+                  <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)', marginBottom: 12 }}>
                     The target table is missing {ddlPreview.missingColumns.length} column(s) needed by your field mapping.
                     Review the ALTER statements below and approve to proceed.
                   </div>
-                  <div style={{ background: '#1a1d2e', color: '#e2e4f0', padding: 14, borderRadius: 8, fontFamily: 'monospace', fontSize: '.78rem', whiteSpace: 'pre-wrap', marginBottom: 12, maxHeight: 240, overflow: 'auto' }}>
+                  <div style={{ background: '#1a1d2e', color: '#e2e4f0', padding: 14, borderRadius: 'var(--radius)', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-sm)', whiteSpace: 'pre-wrap', marginBottom: 12, maxHeight: 240, overflow: 'auto' }}>
                     {ddlPreview.ddlStatements.join('\n')}
                   </div>
                   <div style={{ display: 'flex', gap: 10 }}>
@@ -3763,7 +3837,7 @@ export default function WizardPage() {
                     </button>
                   </div>
                   {ddlError && (
-                    <div style={{ marginTop: 8, padding: '6px 10px', background: 'var(--error-dim)', color: 'var(--error)', borderRadius: 4, fontSize: '.78rem' }}>
+                    <div className="wiz-note wiz-note--error" style={{ marginTop: 8 }}>
                       {ddlError}
                     </div>
                   )}
@@ -3771,7 +3845,7 @@ export default function WizardPage() {
               )}
               {ddlStatus === 'applied' && (
                 <div className="card" style={{ padding: 16, gridColumn: '1 / -1', border: '2px solid var(--success)', background: 'var(--bg-main)' }}>
-                  <span style={{ color: 'var(--success)', fontWeight: 600, fontSize: '.9rem' }}>
+                  <span style={{ color: 'var(--success-on)', fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-md)' }}>
                     &#10003; DDL applied successfully — {ddlPreview?.ddlStatements?.length || 0} statement(s) executed.
                   </span>
                 </div>
@@ -3779,13 +3853,13 @@ export default function WizardPage() {
 
               {/* Right: Push status */}
               <div className="card" style={{ padding: 20, gridColumn: pushStatus === 'idle' && fetchResult?.tickets?.length > 0 ? '1 / -1' : undefined }}>
-                <div style={{ fontWeight: 600, marginBottom: 12, fontSize: '.9rem' }}>Push Status</div>
+                <div className="wiz-card-title">Push Status</div>
 
                 {pushStatus === 'idle' && (
-                  <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-dim)' }}>
-                    <div style={{ fontSize: '2rem', marginBottom: 8 }}>&#128640;</div>
-                    <div style={{ fontSize: '.88rem' }}>Ready to push {fetchResult?.totalCount || 0} records.</div>
-                    <div style={{ fontSize: '.78rem', marginTop: 4 }}>Click <strong>Push to {selectedDest}</strong> below to start.</div>
+                  <div className="wiz-empty">
+                    <div className="wiz-empty-icon">&#128640;</div>
+                    <div className="wiz-empty-title">Ready to push {fetchResult?.totalCount || 0} records.</div>
+                    <div className="wiz-empty-sub">Click <strong>Push to {selectedDest}</strong> below to start.</div>
                     <button
                       className="btn btn-primary"
                       onClick={handlePush}
@@ -3797,13 +3871,13 @@ export default function WizardPage() {
                 )}
 
                 {(pushStatus === 'pushing' || pushStatus === 'polling') && (
-                  <div style={{ textAlign: 'center', padding: '30px 20px' }}>
-                    <div style={{ fontSize: '2rem', marginBottom: 8, animation: 'spin 1.5s linear infinite', display: 'inline-block' }}>&#9696;</div>
-                    <div style={{ fontSize: '.9rem', fontWeight: 600, marginTop: 8, color: 'var(--primary)' }}>
-                      {pushStatus === 'pushing' ? 'Starting push...' : 'Pushing to SharePoint...'}
+                  <div className="wiz-empty" style={{ padding: '30px 20px' }}>
+                    <div className="wiz-empty-icon is-spinning">&#9696;</div>
+                    <div style={{ fontSize: 'var(--fs-md)', fontWeight: 'var(--fw-semibold)', marginTop: 8, color: 'var(--primary)' }}>
+                      {pushStatus === 'pushing' ? 'Starting push…' : `Pushing to ${selectedDest}…`}
                     </div>
                     {pushResult && (
-                      <div style={{ fontSize: '.82rem', color: 'var(--text-secondary)', marginTop: 8 }}>
+                      <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)', marginTop: 8 }}>
                         {pushResult.total} records queued
                         {pushProgress && (
                           <span> &middot; {(pushProgress.createdCount || 0) + (pushProgress.updatedCount || 0)} processed</span>
@@ -3816,23 +3890,23 @@ export default function WizardPage() {
                       const pct = Math.min(100, Math.round((processed / pushResult.total) * 100));
                       return (
                         <div style={{ marginTop: 14, maxWidth: 360, marginLeft: 'auto', marginRight: 'auto' }}>
-                          <div style={{ height: 9, background: 'var(--bg-main)', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
-                            <div style={{ width: `${pct}%`, height: '100%', background: 'var(--primary)', borderRadius: 6, transition: 'width .3s ease' }} />
+                          <div style={{ height: 9, background: 'var(--bg-main)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+                            <div style={{ width: `${pct}%`, height: '100%', background: 'var(--primary)', borderRadius: 'var(--radius)', transition: 'width .3s ease' }} />
                           </div>
-                          <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', marginTop: 5 }}>{processed} / {pushResult.total} records &middot; {pct}%</div>
+                          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginTop: 5 }}>{processed} / {pushResult.total} records &middot; {pct}%</div>
                         </div>
                       );
                     })()}
-                    <div style={{ fontSize: '.78rem', color: 'var(--text-dim)', marginTop: 8 }}>
-                      Push Run: <span style={{ fontFamily: 'monospace' }}>{pushResult?.pushRunId || '...'}</span>
+                    <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)', marginTop: 8 }}>
+                      Push Run: <span style={{ fontFamily: 'var(--font-mono)' }}>{pushResult?.pushRunId || '...'}</span>
                     </div>
                     {pushResult?.pushRunId && (
                       <div style={{ marginTop: 16 }}>
                         <button className="btn btn-outline" onClick={handleStopPush} disabled={stopping}
-                          style={{ borderColor: 'var(--error)', color: 'var(--error)' }}>
+                          style={{ borderColor: 'var(--error)', color: 'var(--error-on)' }}>
                           {stopping ? 'Stopping…' : '⏹ Stop push'}
                         </button>
-                        <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', marginTop: 6 }}>
+                        <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginTop: 6 }}>
                           Stops sending the rest. Records already sent are kept (no duplicates).
                         </div>
                       </div>
@@ -3849,41 +3923,41 @@ export default function WizardPage() {
                       const bg = ok ? 'var(--success-dim)' : cancelled ? 'var(--info-dim)' : 'var(--error-dim)';
                       const label = ok ? '\u2705 Push Complete' : cancelled ? '\u23F9 Push Stopped' : '\u274C Push Had Errors';
                       return (
-                        <div style={{ padding: '12px 16px', background: bg, border: `1px solid ${accent}`, borderRadius: 8, marginBottom: 16 }}>
-                          <div style={{ fontWeight: 700, color: accent, fontSize: '.9rem' }}>{label}</div>
+                        <div style={{ padding: '12px 16px', background: bg, border: `1px solid ${accent}`, borderRadius: 'var(--radius)', marginBottom: 16 }}>
+                          <div style={{ fontWeight: 'var(--fw-bold)', color: accent, fontSize: 'var(--fs-md)' }}>{label}</div>
                         </div>
                       );
                     })()}
-                    <div style={{ display: 'grid', gridTemplateColumns: pushResult.skipped != null ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr', gap: 12 }}>
-                      <div style={{ padding: 12, background: 'var(--bg-main)', borderRadius: 6, textAlign: 'center' }}>
-                        <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>Inserted</div>
-                        <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--success)' }}>{pushResult.created || pushResult.inserted || 0}</div>
+                    <div className="wiz-stats" style={{ gridTemplateColumns: pushResult.skipped != null ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr' }}>
+                      <div className="wiz-stat">
+                        <div className="wiz-stat-label">Inserted</div>
+                        <div className="wiz-stat-value is-good">{pushResult.created || pushResult.inserted || 0}</div>
                       </div>
-                      <div style={{ padding: 12, background: 'var(--bg-main)', borderRadius: 6, textAlign: 'center' }}>
-                        <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>Updated</div>
-                        <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--primary)' }}>{pushResult.updated || 0}</div>
+                      <div className="wiz-stat">
+                        <div className="wiz-stat-label">Updated</div>
+                        <div className="wiz-stat-value is-primary">{pushResult.updated || 0}</div>
                       </div>
                       {pushResult.skipped != null && (
-                        <div style={{ padding: 12, background: 'var(--bg-main)', borderRadius: 6, textAlign: 'center' }}>
-                          <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>Unchanged</div>
-                          <div style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--text-dim)' }}>{pushResult.skipped}</div>
+                        <div className="wiz-stat">
+                          <div className="wiz-stat-label">Unchanged</div>
+                          <div className="wiz-stat-value is-muted">{pushResult.skipped}</div>
                         </div>
                       )}
-                      <div style={{ padding: 12, background: 'var(--bg-main)', borderRadius: 6, textAlign: 'center' }}>
-                        <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>Failed</div>
-                        <div style={{ fontSize: '1.3rem', fontWeight: 800, color: pushResult.failed > 0 ? 'var(--error)' : 'var(--text-dim)' }}>{pushResult.failed || 0}</div>
+                      <div className="wiz-stat">
+                        <div className="wiz-stat-label">Failed</div>
+                        <div className={`wiz-stat-value ${pushResult.failed > 0 ? 'is-bad' : 'is-muted'}`}>{pushResult.failed || 0}</div>
                       </div>
                     </div>
 
                     {/* Surface why rows failed (first few errors) so failures aren't opaque */}
                     {pushResult.failed > 0 && (pushResult.errors || []).length > 0 && (
-                      <div style={{ marginTop: 12, border: '1px solid var(--error)', borderRadius: 8, overflow: 'hidden' }}>
-                        <div style={{ padding: '8px 14px', background: 'var(--bg-main)', fontWeight: 600, fontSize: '.78rem', color: 'var(--error)', borderBottom: '1px solid var(--border)' }}>
+                      <div className="wiz-panel is-error" style={{ marginTop: 12 }}>
+                        <div className="wiz-panel-head is-error">
                           Why rows failed (first {(pushResult.errors || []).length})
                         </div>
-                        <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+                        <div className="wiz-panel-body" style={{ maxHeight: 160 }}>
                           {(pushResult.errors || []).map((e, i) => (
-                            <div key={i} style={{ padding: '5px 14px', borderBottom: '1px solid var(--border)', fontSize: '.74rem', fontFamily: 'monospace', color: 'var(--text-secondary)' }}>{e}</div>
+                            <div key={i} style={{ padding: '5px 14px', borderBottom: '1px solid var(--border)', fontSize: 'var(--fs-xs)', fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{e}</div>
                           ))}
                         </div>
                       </div>
@@ -3891,22 +3965,22 @@ export default function WizardPage() {
 
                     {/* Column-level diff stats (PG smart upsert) */}
                     {pushResult.columnChanges && pushResult.columnChanges.length > 0 && (
-                      <div style={{ marginTop: 14, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-                        <div style={{ padding: '8px 14px', background: 'var(--bg-main)', fontWeight: 600, fontSize: '.78rem', borderBottom: '1px solid var(--border)' }}>
+                      <div className="wiz-panel">
+                        <div className="wiz-panel-head">
                           Column-Level Changes ({pushResult.totalColumnsChanged || 0} cell updates across {pushResult.updated || 0} rows)
                         </div>
-                        <div style={{ maxHeight: 180, overflowY: 'auto' }}>
+                        <div className="wiz-panel-body">
                           {pushResult.columnChanges.map(c => (
-                            <div key={c.column} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 14px', borderBottom: '1px solid var(--border)', fontSize: '.78rem' }}>
-                              <span style={{ fontFamily: 'monospace' }}>{c.column}</span>
-                              <span style={{ fontWeight: 600, color: 'var(--primary)' }}>{c.count} row{c.count !== 1 ? 's' : ''} changed</span>
+                            <div key={c.column} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 14px', borderBottom: '1px solid var(--border)', fontSize: 'var(--fs-sm)' }}>
+                              <span style={{ fontFamily: 'var(--font-mono)' }}>{c.column}</span>
+                              <span style={{ fontWeight: 'var(--fw-semibold)', color: 'var(--primary)' }}>{c.count} row{c.count !== 1 ? 's' : ''} changed</span>
                             </div>
                           ))}
                         </div>
                       </div>
                     )}
                     {pushResult.skipped > 0 && (!pushResult.columnChanges || pushResult.columnChanges.length === 0) && pushResult.updated === 0 && (
-                      <div style={{ marginTop: 12, padding: '8px 14px', background: 'var(--info-dim)', border: '1px solid var(--info)', borderRadius: 6, fontSize: '.78rem', color: 'var(--info)' }}>
+                      <div className="wiz-note wiz-note--info" style={{ marginTop: 12 }}>
                         All {pushResult.skipped} existing records are identical — no updates needed.
                       </div>
                     )}
@@ -3934,25 +4008,25 @@ export default function WizardPage() {
 
                     {/* Quick View — SELECT * preview */}
                     {quickViewError && (
-                      <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--error-dim)', border: '1px solid var(--error)', borderRadius: 6, fontSize: '.82rem', color: 'var(--error)' }}>
+                      <div className="wiz-note wiz-note--error" style={{ marginTop: 10 }}>
                         {quickViewError}
                       </div>
                     )}
                     {quickView && (
-                      <div style={{ marginTop: 14, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-                        <div style={{ padding: '10px 16px', background: 'var(--bg-main)', fontWeight: 600, fontSize: '.85rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div className="wiz-panel">
+                        <div className="wiz-panel-head">
                           <span>
-                            <span style={{ fontFamily: 'monospace' }}>{quickView.table}</span>
+                            <span style={{ fontFamily: 'var(--font-mono)' }}>{quickView.table}</span>
                             {' '}&mdash; {quickView.rowCount} of {quickView.totalCount} rows
                           </span>
-                          <span style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>SELECT * LIMIT 50</span>
+                          <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', fontWeight: 'var(--fw-normal)' }}>SELECT * LIMIT 50</span>
                         </div>
                         <div style={{ maxHeight: 400, overflow: 'auto' }}>
-                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.74rem' }}>
+                          <table className="wiz-data-table is-xs is-sticky is-hoverable">
                             <thead>
-                              <tr style={{ background: 'var(--bg-main)', position: 'sticky', top: 0, zIndex: 1 }}>
+                              <tr>
                                 {quickView.columns.map(col => (
-                                  <th key={col} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 600, borderBottom: '2px solid var(--border)', whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: '.72rem' }}>
+                                  <th scope="col" key={col} className="is-mono">
                                     {col}
                                   </th>
                                 ))}
@@ -3960,16 +4034,13 @@ export default function WizardPage() {
                             </thead>
                             <tbody>
                               {quickView.rows.map((row, ri) => (
-                                <tr key={ri} style={{ borderBottom: '1px solid var(--border)' }}
-                                  onMouseEnter={e => e.currentTarget.style.background = 'var(--primary-dim)'}
-                                  onMouseLeave={e => e.currentTarget.style.background = ''}
-                                >
+                                <tr key={ri}>
                                   {quickView.columns.map(col => {
                                     const val = row[col];
                                     const display = val == null ? '' : typeof val === 'object' ? JSON.stringify(val) : String(val);
                                     const truncated = display.length > 60 ? display.substring(0, 60) + '...' : display;
                                     return (
-                                      <td key={col} title={display} style={{ padding: '5px 10px', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      <td key={col} title={display} className="is-clip" style={{ maxWidth: 220 }}>
                                         {val == null ? <span style={{ color: 'var(--text-dim)', fontStyle: 'italic' }}>null</span> : truncated}
                                       </td>
                                     );
@@ -3985,7 +4056,7 @@ export default function WizardPage() {
                 )}
 
                 {pushError && (
-                  <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--error-dim)', border: '1px solid var(--error)', borderRadius: 6, fontSize: '.82rem', color: 'var(--error)' }}>
+                  <div className="wiz-note wiz-note--error" style={{ marginTop: 10 }}>
                     {pushError}
                   </div>
                 )}
@@ -3996,6 +4067,33 @@ export default function WizardPage() {
         )}
       </div>
 
+      </div>
+
+      {/* Pinned action bar. A six-step form scrolls; the way forward must not.
+          The blocking reason is stated next to the disabled button instead of
+          leaving the user to guess why Next does nothing. */}
+      <div className="wiz-actions">
+        <div className="wiz-actions-left">
+          <button className="btn btn-outline" onClick={goBack} disabled={wizardStep === 1}>&larr; Back</button>
+        </div>
+        <div className="wiz-meter">
+          <div className="wiz-meter-text">
+            <span>Step <strong>{wizardStep}</strong> of 6 &middot; {stepLabels[wizardStep - 1]}</span>
+            <span>{Math.round(((wizardStep - 1) / 5) * 100)}%</span>
+          </div>
+          <div className="wiz-meter-track" role="progressbar" aria-valuenow={wizardStep} aria-valuemin={1}
+            aria-valuemax={6} aria-label={`Step ${wizardStep} of 6`}>
+            <div className="wiz-meter-fill" style={{ width: `${((wizardStep - 1) / 5) * 100}%` }} />
+          </div>
+        </div>
+        <div className="wiz-actions-right">
+          {nextBlocked && <span className="wiz-hint">{nextBlocked}</span>}
+          <button className="btn btn-primary btn-lg" onClick={goNext} disabled={!!nextBlocked}>
+            {wizardStep === 5 && fetchStatus !== 'done' ? 'Fetch first' :
+             wizardStep === 6 ? (pushStatus === 'idle' ? `\u25B6 Push to ${selectedDest || 'destination'}` : pushStatus === 'done' ? 'Done' : 'Pushing\u2026') :
+             'Next \u2192'}
+          </button>
+        </div>
       </div>
     </div>
   );

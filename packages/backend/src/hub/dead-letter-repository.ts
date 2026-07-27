@@ -41,6 +41,33 @@ export class DeadLetterRepository {
   }
 
   /**
+   * Shelve a message that matched NO live subscription (unroutable). Distinct from a
+   * delivery failure: there is no destination to retry against, so it is stored as
+   * `poisoned` (terminal — the 5-min auto-replay scanner only picks `failed`, so this
+   * is never futilely re-dispatched) under a sentinel destConnectorId. It surfaces in
+   * the Monitor DLQ list so inbound data (e.g. a webhook with no subscription yet) is
+   * visible and accounted for instead of being silently dropped.
+   */
+  async insertUnrouted(envelope: MessageEnvelope, reason: string): Promise<string> {
+    const [row] = await this.db
+      .insert(deadLetterEntries)
+      .values({
+        orgId: envelope.orgId,
+        messageId: envelope.messageId,
+        correlationId: envelope.correlationId,
+        topic: envelope.topic,
+        destConnectorId: '(unrouted)',
+        envelopeJson: envelope,
+        error: reason,
+        retryCount: 0,
+        status: 'poisoned',
+      })
+      .returning({ id: deadLetterEntries.id });
+
+    return row.id;
+  }
+
+  /**
    * List recent dead-letter entries for display (newest first), all statuses.
    */
   async list(limit = 50): Promise<Array<{
@@ -69,6 +96,21 @@ export class DeadLetterRepository {
       .from(deadLetterEntries)
       .orderBy(desc(deadLetterEntries.createdAt))
       .limit(limit);
+  }
+
+  /**
+   * True totals for the whole queue, independent of any list() page size.
+   * Callers that show a count (dashboard KPI, DLQ header) must use this rather
+   * than `list(n).length`, which silently caps at n.
+   */
+  async counts(): Promise<{ total: number; unresolved: number }> {
+    const [row] = await this.db
+      .select({
+        total: sql<number>`count(*)::int`,
+        unresolved: sql<number>`count(*) filter (where ${deadLetterEntries.status} <> 'done')::int`,
+      })
+      .from(deadLetterEntries);
+    return { total: Number(row?.total ?? 0), unresolved: Number(row?.unresolved ?? 0) };
   }
 
   /**

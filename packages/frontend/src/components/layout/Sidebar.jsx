@@ -1,35 +1,40 @@
 import { useContext } from 'react';
 import { NavLink } from 'react-router-dom';
-import { SidebarContext } from '../../contexts/SidebarContext';
-import { useAuth } from '../../contexts/AuthContext';
+import { SidebarContext } from '../../hooks/useSidebar';
+import { useAuth } from '../../hooks/useAuth';
 import nalashaaLogo from '../../assets/nalashaa-logo1.png';
+import Icon from '../ui/Icon';
 
-// `roles` omitted = visible to everyone (RBAC-aware nav, BRD \u00A77.8).
+/* `roles` omitted = visible to everyone (RBAC-aware nav, BRD \u00A77.8).
+
+   `icon` is a key into the shared SVG set, not a glyph. The nav used to mix
+   monochrome Unicode dingbats with full-colour emoji \u2014 and two of the dingbats
+   meant something entirely unrelated to the page (see Icon.jsx). */
 const navSections = [
   {
     label: 'Operations',
     items: [
-      { icon: '\u25C9', label: 'Health Dashboard', to: '/dashboard' },
-      { icon: '\u2699', label: 'Integration Registry', to: '/registry' },
-      { icon: '\u21C4', label: 'Message Monitor', to: '/monitor' },
-      { icon: '\u26A0', label: 'Alerts', to: '/alerts' },
+      { icon: 'dashboard', label: 'Health Dashboard', to: '/dashboard' },
+      { icon: 'registry', label: 'Integration Registry', to: '/registry' },
+      { icon: 'monitor', label: 'Message Monitor', to: '/monitor' },
+      { icon: 'alerts', label: 'Alerts', to: '/alerts' },
     ],
   },
   {
     label: 'Design',
     items: [
-      { icon: '\u270E', label: 'Connector Studio', to: '/studio', roles: ['admin', 'designer'] },
-      { icon: '\u26A9', label: 'Connection Wizard', to: '/wizard', roles: ['admin', 'designer', 'operator'] },
-      { icon: '\u21CC', label: 'Mapping Canvas', to: '/canvas', roles: ['admin', 'designer'] },
-      { icon: '\u268F', label: 'Entity Catalog', to: '/catalog' },
+      { icon: 'studio', label: 'Connector Studio', to: '/studio', roles: ['admin', 'designer'] },
+      { icon: 'wizard', label: 'Connection Wizard', to: '/wizard', roles: ['admin', 'designer', 'operator'] },
+      { icon: 'canvas', label: 'Mapping Canvas', to: '/canvas', roles: ['admin', 'designer'] },
+      { icon: 'catalog', label: 'Entity Catalog', to: '/catalog' },
     ],
   },
   {
     label: 'Platform',
     items: [
-      { icon: '\uD83D\uDD17', label: 'My Connections', to: '/connected' },
-      { icon: '\uD83D\uDD12', label: 'Credential Vault', to: '/vault', roles: ['admin', 'designer', 'operator'] },
-      { icon: '\uD83D\uDC65', label: 'Administration', to: '/admin', roles: ['admin'] },
+      { icon: 'connections', label: 'My Connections', to: '/connected' },
+      { icon: 'vault', label: 'Credential Vault', to: '/vault', roles: ['admin', 'designer', 'operator'] },
+      { icon: 'admin', label: 'Administration', to: '/admin', roles: ['admin'] },
     ],
   },
 ];
@@ -57,7 +62,7 @@ export default function Sidebar() {
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           aria-expanded={!collapsed}
         >
-          {'\u2630'}
+          <Icon name="menu" size={18} />
           {!collapsed && <span>Menu</span>}
         </button>
 
@@ -76,7 +81,7 @@ export default function Sidebar() {
                     `nav-item${isActive ? ' active' : ''}`
                   }
                 >
-                  <span className="nav-icon">{item.icon}</span>
+                  <span className="nav-icon"><Icon name={item.icon} size={18} /></span>
                   <span className="nav-label">{item.label}</span>
                 </NavLink>
               ))}
@@ -84,13 +89,21 @@ export default function Sidebar() {
           ))}
         </nav>
 
-        <div className="sidebar-branding">
-          <img
-            src={nalashaaLogo}
-            alt="Nalashaa — Think Simple. Build Powerful."
-            className="nalashaa-logo-img"
-          />
-        </div>
+        {/* Hidden in the collapsed rail: at 64px the full wordmark rendered ~57px
+            wide and was illegible. Intrinsic dimensions are declared so the sidebar
+            doesn't reflow while the image decodes. */}
+        {!collapsed && (
+          <div className="sidebar-branding">
+            <img
+              src={nalashaaLogo}
+              alt="Nalashaa — Think Simple. Build Powerful."
+              className="nalashaa-logo-img"
+              width="360"
+              height="115"
+              decoding="async"
+            />
+          </div>
+        )}
       </div>
     </>
   );

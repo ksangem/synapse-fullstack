@@ -1,30 +1,45 @@
 /**
- * FileShareRuntime — file/object storage source (S3 / SFTP / Drive / Azure /
- * SharePoint files / Local FS). Phase-4 MVP implements SFTP (verifiable against
- * public test SFTP servers); the other providers are recognized and return a
- * clear "not wired yet" error until their SDK is added.
+ * FileShareRuntime — read tabular files from a storage location (SFTP / Local FS /
+ * SharePoint document library; S3 / Azure / Drive land as their providers do) and
+ * turn them into ROWS for the Wizard (discover columns, preview rows). The bus
+ * delivery uses the twin FileShareSourceConnector; this runtime powers design-time.
  *
- * `fetch` lists files under the configured path as records (name/size/modified/
- * type). Parsing file contents into rows (via the Flat File parser) is the
- * follow-up. Source-only; runs long (network I/O) so belongs in a worker.
+ * Source-only: File Share reads files INTO rows → a DB table / SharePoint list. It
+ * composes the shared StorageProvider (transport) with the shared fileCodec (parse),
+ * naming no concrete provider — an unregistered one (S3/Azure/Drive) surfaces a clear
+ * "not wired yet" from the registry.
  *
- * runtimeConfig.categoryConfig: { provider, remotePath, keyPrefix, ... }
- * creds: { host, port, username, password, remotePath }  (creds override config)
+ * runtimeConfig.categoryConfig: { provider, remotePath, keyPrefix, fileTypes, ... }
+ * creds: { host, port, username, password, remotePath, provider, ... }  (creds override config)
  */
 import { connectorService } from '../ConnectorService';
+import { buildStorageProvider, registerBuiltinStorageProviders, type ListFilter } from '../storage';
+import { parseFileBuffer } from './fileCodec';
 import type { IConnectorRuntime, RuntimeCapabilities, RuntimeContext, Creds, TestResult, FetchResult, PushResult, EntitySummary, FieldDef } from './types';
 
 interface FsConfig { runtimeKind: string; categoryConfig?: Record<string, string> }
-interface SftpEntry { name: string; size: number; modifyTime: number; type: string }
 
-const SFTP_PROVIDERS = ['sftp', 'ftp', 'scp'];
+function parseExts(raw: unknown): string[] {
+  return String(raw ?? '').split(/[,\s]+/).map((s) => s.replace(/^\./, '').toLowerCase()).filter(Boolean);
+}
+
+function inferType(v: unknown): string {
+  if (typeof v === 'number') return 'number';
+  if (typeof v === 'boolean') return 'boolean';
+  if (typeof v === 'string') {
+    if (/^-?\d+(\.\d+)?$/.test(v)) return 'number';
+    if (/^(true|false)$/i.test(v)) return 'boolean';
+    if (/^\d{4}-\d{2}-\d{2}/.test(v)) return 'datetime';
+  }
+  return 'string';
+}
 
 export class FileShareRuntime implements IConnectorRuntime {
   readonly kind = 'fileshare';
   readonly capabilities: RuntimeCapabilities = {
     scopeLabel: null, supportsDateWindow: false, entitySelectionMode: 'list',
     hasDdlPreview: false, hasQuickView: false, pushIsAsync: false,
-    canTestAtDesignTime: false, role: 'both', ingestModel: 'pull', lifecycle: 'long-running',
+    canTestAtDesignTime: true, role: 'source', ingestModel: 'pull', lifecycle: 'long-running',
   };
 
   private async cfg(ctx: RuntimeContext): Promise<Record<string, string>> {
@@ -33,76 +48,75 @@ export class FileShareRuntime implements IConnectorRuntime {
     return rc.categoryConfig ?? {};
   }
 
-  private provider(cfg: Record<string, string>, creds: Creds): string {
-    return (creds.provider || cfg.provider || 'SFTP').toLowerCase();
-  }
-
-  private async listSftp(cfg: Record<string, string>, creds: Creds): Promise<SftpEntry[]> {
-    const mod = await import('ssh2-sftp-client');
-    const Client = (mod.default ?? mod) as unknown as new () => {
-      connect(o: Record<string, unknown>): Promise<unknown>;
-      list(p: string): Promise<SftpEntry[]>;
-      end(): Promise<unknown>;
+  private fileParams(cfg: Record<string, string>, creds: Creds): { provider: string; dir: string; filter: ListFilter; format: Record<string, string | undefined> } {
+    return {
+      provider: creds.provider || cfg.provider || 'SFTP',
+      dir: creds.remotePath || cfg.remotePath || cfg.path || cfg.keyPrefix || '/',
+      filter: { extensions: parseExts(cfg.fileTypes), prefix: cfg.filePrefix || undefined },
+      format: { format: cfg.fileFormat, delimiter: cfg.delimiter, skipRows: cfg.skipRows, sheetName: cfg.sheetName },
     };
-    const sftp = new Client();
-    const remotePath = creds.remotePath || cfg.remotePath || '/';
-    try {
-      await sftp.connect({
-        host: creds.host || cfg.host,
-        port: Number(creds.port || cfg.port || 22),
-        username: creds.username || cfg.username,
-        password: creds.password || cfg.password,
-        readyTimeout: 15000,
-      });
-      return await sftp.list(remotePath);
-    } finally {
-      try { await sftp.end(); } catch { /* ignore */ }
-    }
-  }
-
-  private unsupported(provider: string): never {
-    throw new Error(`Storage provider "${provider}" is not wired yet (SFTP is supported; S3/Azure/Drive need their SDK).`);
   }
 
   async test(creds: Creds, ctx: RuntimeContext): Promise<TestResult> {
+    registerBuiltinStorageProviders();
     const cfg = await this.cfg(ctx);
-    const provider = this.provider(cfg, creds);
-    if (!SFTP_PROVIDERS.includes(provider)) return { ok: false, message: `Provider "${provider}" not wired yet` };
+    const { provider, dir, filter } = this.fileParams(cfg, creds);
+    const store = buildStorageProvider(provider, creds, cfg);
     try {
-      const list = await this.listSftp(cfg, creds);
-      return { ok: true, sampleCount: list.length, message: `Connected — ${list.length} entries` };
+      const files = await store.list(dir, filter);
+      return { ok: true, sampleCount: files.length, message: `Connected — ${files.length} matching file(s)` };
     } catch (e) {
       return { ok: false, message: (e as Error).message };
+    } finally {
+      await store.close?.();
     }
   }
 
   async discoverEntities(): Promise<EntitySummary[]> {
-    return [{ key: 'files', name: 'Files', description: 'Files/objects under the configured path' }];
+    return [{ key: 'rows', name: 'Rows', description: 'Rows parsed from the matching files' }];
   }
 
-  async discoverFields(): Promise<FieldDef[]> {
-    return [
-      { name: 'name', type: 'string' }, { name: 'size', type: 'number' },
-      { name: 'modified', type: 'datetime' }, { name: 'type', type: 'string' },
-    ];
+  async discoverFields(creds: Creds, ctx: RuntimeContext): Promise<FieldDef[]> {
+    // Download the FIRST matching file and return its real columns so the Wizard can
+    // map CSV/Excel headers → destination fields.
+    const rows = await this.readRows(await this.cfg(ctx), creds, 1, 1);
+    const first = rows[0];
+    if (!first) return [];
+    return Object.entries(first).map(([name, v]) => ({ name, displayName: name, type: inferType(v) }));
   }
 
-  async fetch(creds: Creds, _entityKey: string, ctx: RuntimeContext): Promise<FetchResult> {
-    const cfg = await this.cfg(ctx);
-    const provider = this.provider(cfg, creds);
-    if (!SFTP_PROVIDERS.includes(provider)) this.unsupported(provider);
-    const list = await this.listSftp(cfg, creds);
-    const records = list.map((e) => ({
-      name: e.name,
-      size: e.size,
-      modified: e.modifyTime ? new Date(e.modifyTime).toISOString() : null,
-      type: e.type === 'd' ? 'dir' : 'file',
-    }));
+  async fetch(creds: Creds, _entityKey: string, ctx: RuntimeContext, opts?: Record<string, unknown>): Promise<FetchResult> {
+    const limit = Number(opts?.limit) || 500;
+    const records = await this.readRows(await this.cfg(ctx), creds, Number.MAX_SAFE_INTEGER, limit);
     return { records, totalCount: records.length };
   }
 
+  /** List matching files via the shared provider, parse each with the shared codec, collect rows. */
+  private async readRows(cfg: Record<string, string>, creds: Creds, maxFiles: number, maxRows: number): Promise<Record<string, unknown>[]> {
+    registerBuiltinStorageProviders();
+    const { provider, dir, filter, format } = this.fileParams(cfg, creds);
+    const store = buildStorageProvider(provider, creds, cfg);
+    try {
+      const files = (await store.list(dir, filter)).slice(0, maxFiles);
+      const out: Record<string, unknown>[] = [];
+      for (const f of files) {
+        const buf = await store.getBuffer(f);
+        const rows = parseFileBuffer(buf, f.name, {
+          format: format.format,
+          delimiter: format.delimiter,
+          skipRows: Number(format.skipRows) || 0,
+          sheetName: format.sheetName,
+        });
+        for (const r of rows) { out.push(r); if (out.length >= maxRows) return out; }
+      }
+      return out;
+    } finally {
+      await store.close?.();
+    }
+  }
+
   async push(): Promise<PushResult> {
-    throw new Error('File Share write (upload) is not wired yet in this build.');
+    throw new Error('File Share is a source-only connector — read files into a Database / SharePoint list destination.');
   }
 }
 

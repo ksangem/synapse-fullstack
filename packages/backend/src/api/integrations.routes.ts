@@ -9,6 +9,7 @@ import { mappingAIService } from '../services/MappingAIService';
 import { recordAudit } from '../services/AuditService';
 import { refreshHubSubscriptions } from '../hub/init-hub';
 import { validateJoins, type JoinSpec } from '../hub/entity-join-step';
+import { DEFAULT_ORG_ID } from '../constants';
 
 const credentialService = new CredentialService();
 
@@ -20,7 +21,7 @@ const createIntegrationSchema = z.object({
   sourceConnectorId: z.string().uuid().optional(),
   destConnectorId: z.string().uuid().optional(),
   fieldMappings: z.record(z.string(), z.unknown()).optional(),
-  scheduleCron: z.string().optional(),
+  scheduleCron: z.string().nullish(),
   retryPolicy: z.record(z.string(), z.unknown()).optional(),
   status: z.enum(['active', 'paused', 'error', 'draft']).optional(),
 });
@@ -52,53 +53,78 @@ router.get('/', async (_req: Request, res: Response) => {
 
 // POST /api/integrations/save-connection — upsert connection by Jira endpoint URL
 // MUST be before /:id routes so Express doesn't match "save-connection" as an :id param.
-const saveConnectionSchema = z.object({
+// STRICT on purpose: zod's default `strip` silently discards any key this schema doesn't
+// declare, which is how `sourceEntity`, `targets` and `groupId` were dropped for months —
+// the Wizard sent them, the save "succeeded", and the data was simply gone (a scrape run then
+// wrote one empty row). With strictObject an undeclared key is a 400 the caller can see, so
+// the next field someone adds fails loudly instead of vanishing.
+//
+// Optional scalars are `.nullish()` (accept undefined AND null) rather than `.optional()`:
+// JS clients drop undefined keys during JSON.stringify, but any caller that sends an
+// explicit `null` would otherwise be rejected by strict parsing. Every read below is
+// `if (body.x)`-guarded, so null behaves exactly like absent.
+const saveConnectionSchema = z.strictObject({
   // When the caller already has a connection open (the Wizard's activeIntegrationId),
   // send it so every re-save UPDATES that exact row — otherwise changing the
   // destination list/table mid-wizard is seen as a new connection and duplicates pile up.
-  integrationId: z.string().optional(),
+  integrationId: z.string().nullish(),
   name: z.string().min(1),
   // Optional: only REST/Jira-style sources have a base URL; GraphQL/CSV/SFTP/etc. don't.
-  endpointUrl: z.string().optional(),
-  sourceType: z.string().optional(),
-  destType: z.string().optional(),
+  endpointUrl: z.string().nullish(),
+  sourceType: z.string().nullish(),
+  destType: z.string().nullish(),
   // Connector-registry pins (template-driven wizard)
-  sourceConnectorId: z.string().optional(),
-  destConnectorId: z.string().optional(),
-  sourceConnectorVersionId: z.string().optional(),
-  destConnectorVersionId: z.string().optional(),
-  email: z.string().optional(),
-  apiToken: z.string().optional(),
-  projectKey: z.string().optional(),
-  siteUrl: z.string().optional(),
-  listName: z.string().optional(),
+  sourceConnectorId: z.string().nullish(),
+  destConnectorId: z.string().nullish(),
+  sourceConnectorVersionId: z.string().nullish(),
+  destConnectorVersionId: z.string().nullish(),
+  email: z.string().nullish(),
+  apiToken: z.string().nullish(),
+  projectKey: z.string().nullish(),
+  siteUrl: z.string().nullish(),
+  listName: z.string().nullish(),
   // SharePoint SOURCE list (the picked entity). Persisted so a server-side run resolves
   // the source list by ID instead of a blank-name lookup ("List '' not found on this site").
-  sourceListId: z.string().optional(),
-  sourceListName: z.string().optional(),
+  sourceListId: z.string().nullish(),
+  sourceListName: z.string().nullish(),
+  // Runtime/scrape SOURCE entity (the picked entity key), the fan-out target list, and the
+  // entity-group tag. These MUST be declared: zod's default `strip` silently drops undeclared
+  // keys, so buildFm() below saw `undefined` for all three even though the Wizard sent them —
+  // a scrape run then fell back to a non-existent entity and wrote one empty row.
+  sourceEntity: z.string().nullish(),
+  targets: z.array(z.record(z.string(), z.unknown())).optional(),
+  groupId: z.string().nullish(),
+  // Run order within the entity group; lower runs first, absent runs last.
+  groupOrder: z.number().int().nullish(),
   // SharePoint Azure app-registration creds (stored encrypted with the connection)
-  tenantId: z.string().optional(),
-  clientId: z.string().optional(),
-  clientSecret: z.string().optional(),
+  tenantId: z.string().nullish(),
+  clientId: z.string().nullish(),
+  clientSecret: z.string().nullish(),
   // SharePoint DESTINATION Azure creds + site/list (when SharePoint is the destination)
-  destTenantId: z.string().optional(),
-  destClientId: z.string().optional(),
-  destClientSecret: z.string().optional(),
-  destSiteUrl: z.string().optional(),
-  destListName: z.string().optional(),
-  pgHost: z.string().optional(),
-  pgPort: z.string().optional(),
-  pgDatabase: z.string().optional(),
-  pgSchema: z.string().optional(),
-  pgTable: z.string().optional(),
-  pgUsername: z.string().optional(),
-  pgPassword: z.string().optional(),
+  destTenantId: z.string().nullish(),
+  destClientId: z.string().nullish(),
+  destClientSecret: z.string().nullish(),
+  destSiteUrl: z.string().nullish(),
+  destListName: z.string().nullish(),
+  pgHost: z.string().nullish(),
+  pgPort: z.string().nullish(),
+  pgDatabase: z.string().nullish(),
+  pgSchema: z.string().nullish(),
+  pgTable: z.string().nullish(),
+  pgUsername: z.string().nullish(),
+  pgPassword: z.string().nullish(),
   // Server-side mapping recipe (Wizard convergence): the rich mapping array + dedup key
   // + date window, so run-integration can read+map+bus without the browser shipping data.
   mappings: z.array(z.record(z.string(), z.unknown())).optional(),
-  naturalKeyColumn: z.string().optional(),
-  dateFrom: z.string().optional(),
-  dateTo: z.string().optional(),
+  naturalKeyColumn: z.string().nullish(),
+  dateFrom: z.string().nullish(),
+  dateTo: z.string().nullish(),
+  // GENERIC source credentials — an opaque key/value bag (host, port, database, username,
+  // password, baseUrl, apiKey…) encrypted as one credential and referenced by `srcCredId`,
+  // which buildIntegrationSource already resolves. Deliberately NOT a set of typed fields:
+  // adding `pgSourceHost`/`soapSourceUser`/… per connector is exactly the hardwiring this
+  // schema is meant to avoid. Any readable runtime reads the keys it needs from this bag.
+  sourceCreds: z.record(z.string(), z.string()).optional(),
   // Cross-entity joins (enrichment / lookup / aggregate). Optional — absent ⇒ no join
   // step is wired and the flow is unchanged. Each entry is a JoinSpec (alias, on, entity,
   // pull/aggregate). Kept in fieldMappings JSONB; validated structurally by the join step.
@@ -162,6 +188,42 @@ router.post('/save-connection', async (req: Request, res: Response) => {
             && (i.destConnectorId ?? null) === (body.destConnectorId ?? null);
         });
 
+    // ── Generic source credentials (any readable runtime: database, soap, email, …) ──
+    // Stored as ONE encrypted bag under `srcCredId`. Merges with the previous bag so a
+    // re-save that omits secrets (the browser rarely round-trips a password) keeps them —
+    // the same trap that blanked destination credentials before.
+    let srcCredId: string | null = null;
+    if (body.sourceCreds && Object.keys(body.sourceCreds).length) {
+      const oldSrcCredId = (existing?.fieldMappings as Record<string, string> | null)?.srcCredId;
+      let prior: Record<string, string> = {};
+      if (oldSrcCredId) {
+        const [row] = await db.select().from(credentials).where(eq(credentials.credId, oldSrcCredId));
+        if (row) {
+          try { prior = JSON.parse(credentialService.decrypt(row.encryptedPayload)) as Record<string, string>; }
+          catch { prior = {}; }
+        }
+      }
+      // Only non-empty incoming values override; blanks fall back to what was stored.
+      const merged: Record<string, string> = { ...prior };
+      for (const [k, v] of Object.entries(body.sourceCreds)) if (v !== '' && v != null) merged[k] = v;
+      const payload = credentialService.encrypt(JSON.stringify(merged));
+
+      if (oldSrcCredId) {
+        await db.update(credentials)
+          .set({ systemName: sourceType, authType: 'source_connection', encryptedPayload: payload, updatedAt: new Date() })
+          .where(eq(credentials.credId, oldSrcCredId));
+        srcCredId = oldSrcCredId;
+      } else {
+        const [cred] = await db.insert(credentials).values({
+          orgId: DEFAULT_ORG_ID,
+          systemName: sourceType,
+          authType: 'source_connection',
+          encryptedPayload: payload,
+        }).returning();
+        srcCredId = cred.credId;
+      }
+    }
+
     // Encrypt source credentials based on source type
     let credId: string | null = null;
     if (sourceType === 'Jira' && body.email && body.apiToken) {
@@ -179,7 +241,7 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       }
 
       const [cred] = await db.insert(credentials).values({
-        orgId: '00000000-0000-0000-0000-000000000001',
+        orgId: DEFAULT_ORG_ID,
         systemName: sourceType,
         authType: 'api_token',
         encryptedPayload: encPayload,
@@ -202,7 +264,7 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       }
 
       const [cred] = await db.insert(credentials).values({
-        orgId: '00000000-0000-0000-0000-000000000001',
+        orgId: DEFAULT_ORG_ID,
         systemName: 'SharePoint',
         authType: 'azure_app',
         encryptedPayload: spPayload,
@@ -215,31 +277,47 @@ router.post('/save-connection', async (req: Request, res: Response) => {
     let destCredId: string | null = null;
     const destEngine = DEST_ENGINE[destType];
     if (destEngine && body.pgHost && body.pgDatabase) {
+      // This branch is gated on LOCATION fields (host/database), NOT on the secrets — a save
+      // that only re-points the table legitimately omits username/password. So carry the prior
+      // credential's secrets forward instead of overwriting them with ''. (Blind overwrite +
+      // delete/insert meant such a save minted a BLANK credential and the destination silently
+      // fell back to connecting as the OS user: `password authentication failed for user "…"`.)
+      const oldDestCredId = (existing?.fieldMappings as Record<string, string> | null)?.destCredId;
+      let prior: Record<string, unknown> = {};
+      if (oldDestCredId) {
+        const [row] = await db.select().from(credentials).where(eq(credentials.credId, oldDestCredId));
+        if (row) {
+          try { prior = JSON.parse(credentialService.decrypt(row.encryptedPayload)) as Record<string, unknown>; }
+          catch { prior = {}; } // unreadable (rotated master key) — fall back to what was sent
+        }
+      }
+      const priorStr = (k: string): string | undefined => (typeof prior[k] === 'string' ? prior[k] as string : undefined);
       const dbPayload = credentialService.encrypt(JSON.stringify({
         engine: destEngine,
         host: body.pgHost,
-        port: Number(body.pgPort) || undefined,
+        port: Number(body.pgPort) || Number(prior.port) || undefined,
         database: body.pgDatabase,
-        username: body.pgUsername || '',
-        password: body.pgPassword || '',
-        schema: body.pgSchema || undefined,
+        username: body.pgUsername || priorStr('username') || '',
+        password: body.pgPassword || priorStr('password') || '',
+        schema: body.pgSchema || priorStr('schema') || undefined,
       }));
 
-      // Replace any prior destination credential when updating
-      if (existing) {
-        const oldFm = existing.fieldMappings as Record<string, string> | null;
-        if (oldFm?.destCredId) {
-          await db.delete(credentials).where(eq(credentials.credId, oldFm.destCredId));
-        }
+      if (oldDestCredId) {
+        // Update IN PLACE so destCredId stays stable — anything already holding the id
+        // (vault views, audit rows, a running flow) keeps resolving to a live credential.
+        await db.update(credentials)
+          .set({ systemName: destType, authType: 'database_connection', encryptedPayload: dbPayload, updatedAt: new Date() })
+          .where(eq(credentials.credId, oldDestCredId));
+        destCredId = oldDestCredId;
+      } else {
+        const [destCred] = await db.insert(credentials).values({
+          orgId: DEFAULT_ORG_ID,
+          systemName: destType,
+          authType: 'database_connection',
+          encryptedPayload: dbPayload,
+        }).returning();
+        destCredId = destCred.credId;
       }
-
-      const [destCred] = await db.insert(credentials).values({
-        orgId: '00000000-0000-0000-0000-000000000001',
-        systemName: destType,
-        authType: 'database_connection',
-        encryptedPayload: dbPayload,
-      }).returning();
-      destCredId = destCred.credId;
     } else if (destType === 'SharePoint' && body.destTenantId && body.destClientId && body.destClientSecret) {
       // SharePoint DESTINATION Azure creds — encrypt with the connection so the
       // destination authenticates with its own creds (not env), and they round-trip on load.
@@ -255,7 +333,7 @@ router.post('/save-connection', async (req: Request, res: Response) => {
         }
       }
       const [destCred] = await db.insert(credentials).values({
-        orgId: '00000000-0000-0000-0000-000000000001',
+        orgId: DEFAULT_ORG_ID,
         systemName: 'SharePoint',
         authType: 'azure_app',
         encryptedPayload: spDestPayload,
@@ -288,6 +366,8 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       fm.sourceType = sourceType;
       fm.destType = destType;
       if (credId) { fm.credId = credId; fm.authMethod = 'api_token'; }
+      // Generic READ-side credential bag (buildIntegrationSource resolves srcCredId first).
+      if (srcCredId) fm.srcCredId = srcCredId;
       if (destCredId) fm.destCredId = destCredId;
       if (body.projectKey) fm.projectKey = body.projectKey;
       if (body.siteUrl) fm.siteUrl = body.siteUrl;
@@ -319,6 +399,9 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       if (body.targets) fm.targets = body.targets;
       if (body.joins) fm.joins = body.joins;
       if (body.groupId) fm.groupId = body.groupId;
+      // Load order within the group (parents before children — see
+      // getIntegrationsByGroup). `!= null` so an explicit 0 is stored.
+      if (body.groupOrder != null) fm.groupOrder = body.groupOrder;
       if (body.sourceEntity) fm.sourceEntity = body.sourceEntity;
       // Field-level encryption: set the freshly-built block, clear on explicit
       // disable, or leave any prior block untouched when the request omits it.
@@ -342,7 +425,7 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       res.json({ success: true, data: result, updated: true });
     } else {
       const [result] = await db.insert(integrations).values({
-        orgId: '00000000-0000-0000-0000-000000000001',
+        orgId: DEFAULT_ORG_ID,
         name: body.name,
         status: 'active',
         sourceConnectorId: body.sourceConnectorId ?? null,
@@ -382,7 +465,7 @@ router.get('/:id/encryption-key/reveal', async (req: Request, res: Response) => 
     const keyHex = credentialService.decrypt(enc.wrappedDek);
 
     await recordAudit({
-      orgId: req.actor?.orgId ?? '00000000-0000-0000-0000-000000000001',
+      orgId: req.actor?.orgId ?? DEFAULT_ORG_ID,
       userId: req.actor?.userId ?? null,
       action: 'reveal',
       entityType: 'integration_key',

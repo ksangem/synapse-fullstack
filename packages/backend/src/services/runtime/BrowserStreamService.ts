@@ -45,6 +45,12 @@ export interface FieldCandidate {
   selector: string;
   sample: string;
   attr: string | null;
+  // Tier-3 "smart pick": when the value sits inside a repeating list row, the pick returns
+  // the detected row container + a selector RELATIVE to that row, so a single pick yields a
+  // per-row field (not a position-locked one-off). Absent for unique/one-off values.
+  rowSelector?: string | null;
+  relSelector?: string;
+  rowCount?: number;
 }
 
 export type FrameListener = (frame: { dataB64: string; width: number; height: number }) => void;
@@ -57,6 +63,7 @@ interface LiveSession {
   cdp: CdpSession;
   viewport: { width: number; height: number };
   listeners: Set<FrameListener>;
+  lastFrame: { dataB64: string; width: number; height: number } | null;
   recording: boolean;
   recordStartedAt: number;
   steps: RecordedStep[];
@@ -65,6 +72,23 @@ interface LiveSession {
 
 const VIEWPORT = { width: 1280, height: 800 };
 const SESSION_IDLE_MS = 15 * 60 * 1000; // reap abandoned sessions after 15 min
+
+// CDP's Input.dispatchKeyEvent needs the virtual key code (not just `key`) for
+// non-text keys to actually take effect — without it Backspace/Delete/Enter/Tab/
+// arrows are received but perform no edit (e.g. Backspace deletes nothing).
+const SPECIAL_KEYS: Record<string, { vk: number; code: string }> = {
+  Backspace: { vk: 8, code: 'Backspace' },
+  Tab: { vk: 9, code: 'Tab' },
+  Enter: { vk: 13, code: 'Enter' },
+  Escape: { vk: 27, code: 'Escape' },
+  Delete: { vk: 46, code: 'Delete' },
+  ArrowLeft: { vk: 37, code: 'ArrowLeft' },
+  ArrowUp: { vk: 38, code: 'ArrowUp' },
+  ArrowRight: { vk: 39, code: 'ArrowRight' },
+  ArrowDown: { vk: 40, code: 'ArrowDown' },
+  Home: { vk: 36, code: 'Home' },
+  End: { vk: 35, code: 'End' },
+};
 
 // In-page recorder + robust-selector generator, injected as a STRING (so esbuild's
 // keep-names never wraps it with a __name helper the page can't resolve).
@@ -111,7 +135,9 @@ const RECORDER_SCRIPT = `
     for (var i = 0; i < j.length; i++) j[i].remove();
     return (c.textContent || '').replace(/\\s+/g, ' ').trim();
   }
-  var hl = null;
+  var hl = null;         // blue box on the hovered element
+  var pool = [];         // green boxes on all sibling matches (Tier 2 "see the repeat")
+  var lastEl = null;     // only repaint when the hovered element actually changes
   function ensureHl() {
     if (hl) return hl;
     hl = document.createElement('div');
@@ -120,15 +146,49 @@ const RECORDER_SCRIPT = `
     document.documentElement.appendChild(hl);
     return hl;
   }
+  function greenBox(i) {
+    if (pool[i]) return pool[i];
+    var d = document.createElement('div');
+    d.style.position = 'fixed'; d.style.zIndex = '2147483646'; d.style.pointerEvents = 'none';
+    d.style.border = '2px solid #2ea043'; d.style.background = 'rgba(46,160,67,.12)'; d.style.borderRadius = '2px'; d.style.display = 'none';
+    document.documentElement.appendChild(d); pool[i] = d; return d;
+  }
+  function clearGreen() { for (var i = 0; i < pool.length; i++) pool[i].style.display = 'none'; }
+  // Stable tag+class selector (not positional) so we can find sibling repeats.
+  function gsel(el) {
+    if (!el || el.nodeType !== 1) return '';
+    var tag = el.nodeName.toLowerCase();
+    var raw = (typeof el.className === 'string') ? el.className : (el.getAttribute ? (el.getAttribute('class') || '') : '');
+    var parts = raw.trim().split(/\\s+/).filter(Boolean).slice(0, 2);
+    var e2 = function (c) { try { return (window.CSS && CSS.escape) ? CSS.escape(c) : c; } catch (x) { return c; } };
+    return tag + parts.map(function (c) { return '.' + e2(c); }).join('');
+  }
+  function paint(el) {
+    var hb = el.getBoundingClientRect(); var h = ensureHl();
+    h.style.display = 'block'; h.style.left = hb.left + 'px'; h.style.top = hb.top + 'px'; h.style.width = hb.width + 'px'; h.style.height = hb.height + 'px';
+    var g = gsel(el); var matches = [];
+    try { matches = g ? Array.prototype.slice.call(document.querySelectorAll(g), 0, 80) : []; } catch (e) { matches = []; }
+    var used = 0;
+    if (matches.length > 1) {
+      for (var i = 0; i < matches.length; i++) {
+        if (matches[i] === el) continue; // the hovered one keeps the blue box
+        var b = matches[i].getBoundingClientRect();
+        if (b.width === 0 && b.height === 0) continue;
+        var d = greenBox(used++);
+        d.style.display = 'block'; d.style.left = b.left + 'px'; d.style.top = b.top + 'px'; d.style.width = b.width + 'px'; d.style.height = b.height + 'px';
+      }
+    }
+    for (var j = used; j < pool.length; j++) pool[j].style.display = 'none';
+  }
   document.addEventListener('mousemove', function (e) {
     try {
       var el = e.target;
       if (!el || el === hl || el.nodeType !== 1) return;
+      window.__synapseHoverEl = el; // kept so hover-info can compute match counts on demand
       window.__synapseHover = { selector: sel(el), label: labelFor(el), sample: valOf(el).slice(0, 200), attr: null };
       if (window.__synapsePick) {
-        var b = el.getBoundingClientRect(); var h = ensureHl();
-        h.style.display = 'block'; h.style.left = b.left + 'px'; h.style.top = b.top + 'px'; h.style.width = b.width + 'px'; h.style.height = b.height + 'px';
-      } else if (hl) { hl.style.display = 'none'; }
+        if (el !== lastEl) { paint(el); lastEl = el; }
+      } else if (hl) { hl.style.display = 'none'; clearGreen(); lastEl = null; }
     } catch (err) {}
   }, true);
   document.addEventListener('click', function (e) {
@@ -290,7 +350,7 @@ export class BrowserStreamService {
     const id = randomUUID();
     const session: LiveSession = {
       id, browser, context, page, cdp: undefined as unknown as CdpSession,
-      viewport: VIEWPORT, listeners: new Set(), recording: false, recordStartedAt: 0, steps: [], createdAt: Date.now(),
+      viewport: VIEWPORT, listeners: new Set(), lastFrame: null, recording: false, recordStartedAt: 0, steps: [], createdAt: Date.now(),
     };
 
     // Recorder binding (clicks / typed values / Enter) — installed up front; only stores when recording.
@@ -332,6 +392,7 @@ export class BrowserStreamService {
     cdp.on('Page.screencastFrame', async (p: unknown) => {
       const { data, sessionId: ackId, metadata } = p as { data: string; sessionId: number; metadata: { deviceWidth?: number; deviceHeight?: number } };
       const frame = { dataB64: data, width: metadata?.deviceWidth ?? VIEWPORT.width, height: metadata?.deviceHeight ?? VIEWPORT.height };
+      session.lastFrame = frame; // remember it so a viewer that connects after the initial paint still gets an image
       for (const l of session.listeners) { try { l(frame); } catch { /* listener error ignored */ } }
       try { await cdp.send('Page.screencastFrameAck', { sessionId: ackId }); } catch { /* frame already acked / page gone */ }
     });
@@ -352,6 +413,10 @@ export class BrowserStreamService {
   subscribe(id: string, l: FrameListener): () => void {
     const s = this.get(id);
     s.listeners.add(l);
+    // Replay the most recent frame immediately: the initial page paint often lands
+    // before the viewer's socket subscribes, and a static page (e.g. a login screen)
+    // emits nothing further — so without this the viewer sees a blank box.
+    if (s.lastFrame) { try { l(s.lastFrame); } catch { /* listener error ignored */ } }
     return () => s.listeners.delete(l);
   }
 
@@ -374,8 +439,16 @@ export class BrowserStreamService {
       case 'wheel':
         await s.cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: 0, deltaY: ev.deltaY ?? 0 }); break;
       case 'key':
-        if (ev.text && ev.text.length === 1) await s.cdp.send('Input.dispatchKeyEvent', { type: 'char', text: ev.text });
-        else if (ev.key) { await s.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ev.key }); await s.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ev.key }); }
+        if (ev.text && ev.text.length === 1) {
+          await s.cdp.send('Input.dispatchKeyEvent', { type: 'char', text: ev.text });
+        } else if (ev.key) {
+          const sk = SPECIAL_KEYS[ev.key];
+          const base = sk
+            ? { key: ev.key, code: sk.code, windowsVirtualKeyCode: sk.vk, nativeVirtualKeyCode: sk.vk }
+            : { key: ev.key };
+          await s.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
+          await s.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+        }
         break;
     }
   }
@@ -423,13 +496,69 @@ export class BrowserStreamService {
 
   /** Turn the in-page hover highlight on/off (used while the designer picks fields). */
   async setPickMode(id: string, on: boolean): Promise<void> {
-    await this.get(id).page.evaluate(`window.__synapsePick = ${on ? 'true' : 'false'};`);
+    // Toggle the flag AND, when turning off, immediately hide every overlay box so they
+    // don't linger on screen until the next mouse move.
+    await this.get(id).page.evaluate(`(function(){ window.__synapsePick = ${on ? 'true' : 'false'};
+      if (!window.__synapsePick) { try { document.querySelectorAll('div').forEach(function(d){ if (d.style && d.style.zIndex && (d.style.zIndex === '2147483647' || d.style.zIndex === '2147483646') && d.style.pointerEvents === 'none') d.style.display = 'none'; }); } catch(e){} } })();`);
   }
 
-  /** Capture the element currently under the cursor (the designer pressed S to pick). */
+  /**
+   * Capture the element currently under the cursor (the designer pressed S to pick).
+   * Tier-3 smart pick: if the value lives inside a repeating list row, also return the
+   * detected row container (`rowSelector`) and a selector RELATIVE to that row
+   * (`relSelector`) plus a clean class-derived `label` — so one pick becomes a real
+   * per-row field instead of a position-locked one-off. Falls back to the absolute
+   * positional selector for unique/one-off values.
+   */
   async pickHovered(id: string): Promise<FieldCandidate | null> {
-    const hov = await this.get(id).page.evaluate<FieldCandidate | null>('window.__synapseHover || null');
-    return hov && hov.selector ? hov : null;
+    return this.get(id).page.evaluate<FieldCandidate | null>(`(function () {
+      var el = window.__synapseHoverEl;
+      if (!el || el.nodeType !== 1) return null;
+      function esc(s) { try { return (window.CSS && CSS.escape) ? CSS.escape(s) : s; } catch (e) { return s; } }
+      function classes(n) { var raw = (typeof n.className === 'string') ? n.className : (n.getAttribute ? (n.getAttribute('class') || '') : ''); return raw.trim().split(/\\s+/).filter(Boolean); }
+      function gsel(n) { if (!n || n.nodeType !== 1) return ''; var c = classes(n).slice(0, 2); return n.nodeName.toLowerCase() + c.map(function (x) { return '.' + esc(x); }).join(''); }
+      function count(sel) { if (!sel) return 0; try { return document.querySelectorAll(sel).length; } catch (e) { return 0; } }
+      function abs(n) { var parts = [], node = n; while (node && node.nodeType === 1 && parts.length < 6) { var tag = node.nodeName.toLowerCase(); if (node.id && /^[A-Za-z][\\w-]*$/.test(node.id)) { parts.unshift('#' + node.id); break; } var p = node.parentNode; if (p) { var sibs = Array.prototype.filter.call(p.children, function (c) { return c.nodeName === node.nodeName; }); if (sibs.length > 1) tag += ':nth-of-type(' + (sibs.indexOf(node) + 1) + ')'; } parts.unshift(tag); node = p; } return parts.join(' > '); }
+      function valOf(e) { if (!e) return ''; var tn = e.tagName; if ((tn === 'INPUT' || tn === 'TEXTAREA' || tn === 'SELECT') && e.value !== undefined) return '' + e.value; var c = e.cloneNode(true); var j = c.querySelectorAll ? c.querySelectorAll('style,script') : []; for (var k = 0; k < j.length; k++) j[k].remove(); return (c.textContent || '').replace(/\\s+/g, ' ').trim(); }
+      // The row container is an ANCESTOR that repeats (never the field itself). Prefer one
+      // with a class (skip bare generic tags like a wrapping <span>/<div>); fall back to the
+      // first repeating ancestor if nothing is classed.
+      var row = null, fallback = null, node = el.parentElement;
+      for (var i = 0; i < 8 && node && node.nodeType === 1; i++) {
+        var gs = gsel(node);
+        if (gs && count(gs) >= 2) { if (!fallback) fallback = node; if (classes(node).length > 0) { row = node; break; } }
+        node = node.parentElement;
+      }
+      if (!row) row = fallback;
+      var rowSelector = row ? gsel(row) : null;
+      // selector relative to the row (prefer the element's own tag+class if unique within the row)
+      function rel(target, container) {
+        if (!container) return abs(target);
+        var own = gsel(target);
+        try { if (own && container.querySelectorAll(own).length === 1) return own; } catch (e) {}
+        var parts = [], n = target;
+        while (n && n !== container && n.nodeType === 1) {
+          var seg = gsel(n) || n.nodeName.toLowerCase();
+          var p = n.parentElement;
+          if (p && classes(n).length === 0) { var same = Array.prototype.filter.call(p.children, function (c) { return c.nodeName === n.nodeName; }); if (same.length > 1) seg += ':nth-of-type(' + (same.indexOf(n) + 1) + ')'; }
+          parts.unshift(seg); n = p;
+        }
+        return parts.join(' > ') || own;
+      }
+      var relSelector = rel(el, row);
+      // clean name from the most specific class (often semantic: 'author', 'text', 'price'), else tag
+      var cls = classes(el);
+      var name = (cls.length ? cls[cls.length - 1] : el.nodeName.toLowerCase()).replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'field';
+      return {
+        label: name,
+        selector: row ? relSelector : abs(el),
+        relSelector: relSelector,
+        rowSelector: rowSelector,
+        rowCount: row ? count(rowSelector) : 0,
+        sample: valOf(el).slice(0, 200),
+        attr: null,
+      };
+    })()`);
   }
 
   async closeSession(id: string): Promise<void> {
@@ -439,6 +568,42 @@ export class BrowserStreamService {
     try { await s.cdp.send('Page.stopScreencast'); } catch { /* ignore */ }
     try { await s.context.close(); } catch { /* ignore */ }
     try { await s.browser.close(); } catch { /* ignore */ }
+  }
+
+  /**
+   * Live "is this a repeating list or a unique value?" probe for the element under the
+   * cursor — drives the recorder's hover badge so the author knows, BEFORE pressing S,
+   * whether they're picking dynamic list data (many similar elements) or a one-off value.
+   * Uses a stable tag+class ("generic") selector, not the positional one, and walks up to
+   * find the nearest repeating ancestor (the likely row container).
+   */
+  async hoverInfo(id: string): Promise<{ genericSelector: string; matchCount: number; rowSelector: string | null; rowCount: number; sample: string } | null> {
+    return this.get(id).page.evaluate<{ genericSelector: string; matchCount: number; rowSelector: string | null; rowCount: number; sample: string } | null>(`(function () {
+      var el = window.__synapseHoverEl;
+      if (!el || el.nodeType !== 1) return null;
+      function esc(s) { try { return (window.CSS && CSS.escape) ? CSS.escape(s) : s; } catch (e) { return s; } }
+      function gsel(e) {
+        if (!e || e.nodeType !== 1) return '';
+        var tag = e.nodeName.toLowerCase();
+        var raw = (typeof e.className === 'string') ? e.className : (e.getAttribute ? (e.getAttribute('class') || '') : '');
+        var parts = raw.trim().split(/\\s+/).filter(Boolean).slice(0, 2);
+        return tag + parts.map(function (c) { return '.' + esc(c); }).join('');
+      }
+      function count(sel) { if (!sel) return 0; try { return document.querySelectorAll(sel).length; } catch (e) { return 0; } }
+      function classes(n) { var raw = (typeof n.className === 'string') ? n.className : (n.getAttribute ? (n.getAttribute('class') || '') : ''); return raw.trim().split(/\\s+/).filter(Boolean); }
+      var g = gsel(el);
+      var self = count(g) || 1;
+      // Row container = a repeating ANCESTOR (never the field itself), preferring a classed one.
+      var rowSel = null, rowCount = 0, fb = null, node = el.parentElement;
+      for (var i = 0; i < 8 && node && node.nodeType === 1; i++) {
+        var gs = gsel(node); var n = count(gs);
+        if (n >= 2) { if (!fb) { fb = gs; } if (classes(node).length > 0) { rowSel = gs; rowCount = n; break; } }
+        node = node.parentElement;
+      }
+      if (!rowSel && fb) { rowSel = fb; rowCount = count(fb); }
+      var sample = (el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 60);
+      return { genericSelector: g, matchCount: self, rowSelector: rowSel, rowCount: rowCount, sample: sample };
+    })()`);
   }
 
   private reapIdle(): void {

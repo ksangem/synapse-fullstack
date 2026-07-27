@@ -215,12 +215,20 @@ export class SqlServerWriter implements IDbWriter {
         c.precision         AS numeric_precision,
         c.scale             AS numeric_scale,
         dc.definition       AS column_default,
-        c.column_id         AS ordinal_position
+        c.column_id         AS ordinal_position,
+        CAST(CASE WHEN pk.column_id IS NULL THEN 0 ELSE 1 END AS BIT) AS is_primary_key
       FROM sys.columns c
         INNER JOIN sys.objects o ON o.object_id = c.object_id
         INNER JOIN sys.schemas s ON s.schema_id = o.schema_id
         INNER JOIN sys.types   t ON t.user_type_id = c.user_type_id
         LEFT JOIN sys.default_constraints dc ON dc.object_id = c.default_object_id
+        LEFT JOIN (
+          SELECT ic.object_id, ic.column_id
+          FROM sys.indexes i
+            INNER JOIN sys.index_columns ic
+              ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+          WHERE i.is_primary_key = 1
+        ) pk ON pk.object_id = c.object_id AND pk.column_id = c.column_id
       WHERE s.name = @schema
         AND o.name = @table
         AND o.type IN ('U', 'V')
@@ -240,6 +248,7 @@ export class SqlServerWriter implements IDbWriter {
         numericScale: (r.numeric_scale as number | null) ?? null,
         columnDefault: (r.column_default as string | null) ?? null,
         ordinalPosition: r.ordinal_position as number,
+        isPrimaryKey: r.is_primary_key === true || r.is_primary_key === 1,
       };
     });
 

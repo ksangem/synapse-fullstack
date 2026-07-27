@@ -4,7 +4,7 @@ import { db } from '../db/client';
 import { sharepointPushRuns, jiraTickets, integrations } from '../db/schema';
 import { eq, desc, and, lt } from 'drizzle-orm';
 import { SharePointAuthService } from '../services/SharePointAuthService';
-import { SharePointPushService, getPushProgress } from '../services/SharePointPushService';
+import { getPushProgress } from '../services/SharePointPushService';
 import { SharePointMapperService } from '../services/SharePointMapperService';
 import { JiraItemCacheRepository } from '../db/repositories/jiraItemCacheRepository';
 import { config } from '../config';
@@ -12,16 +12,31 @@ import type { SharePointCredentials } from '../integrations/sharepoint/types';
 
 const router = Router();
 const authService = new SharePointAuthService();
-const pushService = new SharePointPushService();
 const mapperService = new SharePointMapperService();
 const cacheRepo = new JiraItemCacheRepository();
 
-// ─── Azure creds: prefer request body, fall back to env ───
+// ─── Azure creds: the caller's own app, env only on explicit opt-in ───
+// A PARTIAL credential set (say tenantId only) must NOT be silently completed from the
+// server's app — that mixes two identities and hides a misconfigured connection. Either the
+// body carries the whole set, or the caller opts in to the app-level identity wholesale.
 
-function getAzureCreds(siteUrl: string, listName: string, body?: { tenantId?: string; clientId?: string; clientSecret?: string }): SharePointCredentials {
-  const tenantId = body?.tenantId || config.AZURE_TENANT_ID;
-  const clientId = body?.clientId || config.AZURE_CLIENT_ID;
-  const clientSecret = body?.clientSecret || config.AZURE_CLIENT_SECRET;
+function getAzureCreds(
+  siteUrl: string,
+  listName: string,
+  body?: { tenantId?: string; clientId?: string; clientSecret?: string; useEnvApp?: boolean },
+): SharePointCredentials {
+  const own = body?.tenantId && body?.clientId && body?.clientSecret;
+  if (own) {
+    return { tenantId: body!.tenantId!, clientId: body!.clientId!, clientSecret: body!.clientSecret!, siteUrl, listName };
+  }
+  // No complete per-request identity. Fall back to the app-level env app only when the caller
+  // sent NOTHING (the long-standing "server-configured SharePoint" behaviour) or explicitly
+  // asked for it — never to paper over a half-filled credential form.
+  const partial = body?.tenantId || body?.clientId || body?.clientSecret;
+  if (partial && !body?.useEnvApp) {
+    throw new Error('Incomplete Azure credentials — supply tenantId, clientId AND clientSecret together (or omit all three to use the server-configured app).');
+  }
+  const { AZURE_TENANT_ID: tenantId, AZURE_CLIENT_ID: clientId, AZURE_CLIENT_SECRET: clientSecret } = config;
   if (!tenantId || !clientId || !clientSecret) {
     throw new Error('Azure credentials not provided. Supply tenantId, clientId, clientSecret in the request body or set AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET in .env');
   }
@@ -42,17 +57,6 @@ const connectionSchema = z.object({
   tenantId: z.string().optional(),
   clientId: z.string().optional(),
   clientSecret: z.string().optional(),
-});
-
-const pushSchema = z.object({
-  siteUrl: z.string().min(1),
-  listName: z.string().min(1),
-  runId: z.string().min(1),
-  source: z.string().default('api_token'),
-  upsertMode: z.boolean().default(false),
-  forceNew: z.boolean().default(false),
-  siteId: z.string().optional(),
-  listId: z.string().optional(),
 });
 
 // ─── POST /api/sharepoint/test-connection ─────────────────

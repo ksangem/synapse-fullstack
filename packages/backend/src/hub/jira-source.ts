@@ -36,6 +36,15 @@ export interface JiraSourceOptions {
   dateTo?: string;
   /** Topic source segment (unique per adapter). Defaults to "jira". */
   sourceKey?: string;
+  /**
+   * THIS CONNECTION's own Jira credentials (decrypted from its credId) plus the base URL
+   * from its saved recipe. Every other source authenticates as itself; Jira used to read
+   * only the server-wide RED_GOLD_* env identity, so two connections with different Jira
+   * accounts both pulled through one identity. These take precedence; env is the fallback.
+   */
+  baseUrl?: string;
+  email?: string;
+  apiToken?: string;
 }
 
 export class JiraSourceConnector implements ISourceConnector {
@@ -82,9 +91,20 @@ export class JiraSourceConnector implements ISourceConnector {
     const { dateFrom, dateTo } = this.opts;
     const { RED_GOLD_JIRA_URL, RED_GOLD_JIRA_EMAIL, RED_GOLD_JIRA_API_TOKEN } = config;
 
-    if (RED_GOLD_JIRA_URL && RED_GOLD_JIRA_EMAIL && RED_GOLD_JIRA_API_TOKEN) {
+    // The CONNECTION's own credentials first (how every other source behaves); the server-wide
+    // RED_GOLD_* env identity only when this connection carries none — which preserves the
+    // previous behaviour for connections saved before creds were plumbed through.
+    const own = this.opts.baseUrl && this.opts.email && this.opts.apiToken;
+    const url = own ? this.opts.baseUrl! : RED_GOLD_JIRA_URL;
+    const email = own ? this.opts.email! : RED_GOLD_JIRA_EMAIL;
+    const token = own ? this.opts.apiToken! : RED_GOLD_JIRA_API_TOKEN;
+    if (!own && RED_GOLD_JIRA_URL) {
+      console.warn(`[JiraSource ${this.connectorId}] no per-connection Jira credentials — falling back to the server-wide RED_GOLD_* identity.`);
+    }
+
+    if (url && email && token) {
       try {
-        const client = new RedGoldApiClient(RED_GOLD_JIRA_URL, RED_GOLD_JIRA_EMAIL, RED_GOLD_JIRA_API_TOKEN);
+        const client = new RedGoldApiClient(url, email, token);
         const range = `${dateFrom ? ` AND created >= "${dateFrom}"` : ''}${dateTo ? ` AND created <= "${dateTo}"` : ''}`;
         const jql = `project = ${this.opts.projectKey}${range} ORDER BY updated DESC`;
         const res = await client.searchIssues(jql, JIRA_FIELDS, 0, limit);

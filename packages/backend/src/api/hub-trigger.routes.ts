@@ -21,6 +21,7 @@ import { registerRunController, clearRunController, isRunCancelled, markRunCance
 import { validateRecipe } from '../hub/validate-recipe';
 import { applyRichMappings, applyRichMappingsByTarget, type MappingEntry } from '../services/MappingEngine';
 import { normalizeTargets } from '../hub/integration-targets';
+import { registeredSourceKinds, registeredDestinationKinds } from '../hub/connector-registry';
 import { connectorService } from '../services/ConnectorService';
 import { destinationTargetKey } from '../hub/connector-registry';
 import { scopeMessageIdToDestination } from '../hub/envelope';
@@ -31,6 +32,28 @@ import type { integrations } from '../db/schema';
 type Integration = typeof integrations.$inferSelect;
 
 const router = Router();
+
+/**
+ * GET /api/hub/runnable-kinds — which connector runtimeKinds the bus can actually RUN.
+ *
+ * The Wizard lets you pick a source/destination from the connector registry, but a kind is
+ * only runnable if a source/destination FACTORY is registered here (register-connectors.ts).
+ * Without this, kinds like flatfile/soap/mq/email preview fine (the client-side /runtime/fetch
+ * path) and then fail at the last step with "can't be run on the bus". Exposing the real list
+ * lets the UI say so up front.
+ *
+ * FAILS OPEN: when the hub is disabled the registry is empty, so `enforced:false` is returned
+ * and the UI must not disable anything — otherwise a hub-off dev environment would show every
+ * connector as unusable.
+ */
+router.get('/runnable-kinds', (_req: Request, res: Response) => {
+  const sources = registeredSourceKinds();
+  const destinations = registeredDestinationKinds();
+  res.json({
+    success: true,
+    data: { sources, destinations, enforced: sources.length > 0 && destinations.length > 0 },
+  });
+});
 
 /**
  * A fingerprint of the integration's actual destination target (site+list, host+db+table…),
@@ -210,18 +233,44 @@ router.post('/run-group/:groupId', async (req: Request, res: Response) => {
       res.status(404).json({ success: false, error: 'No active integrations found for this group' });
       return;
     }
+    /* Stop-on-error, but only for groups that actually DECLARE an order.
+       `members` arrives sorted by groupOrder, so once a member at order O fails,
+       everything at a HIGHER order is downstream of it — running a child table
+       against a parent that failed to load just produces a wall of foreign-key
+       errors. Peers at the SAME order are independent of the failure and still
+       run. Groups with no groupOrder keep the previous behaviour exactly:
+       every member runs and failures are merely collected. */
+    const orderOf = (i: typeof members[number]): number => {
+      const v = (i.fieldMappings as Record<string, unknown> | null)?.groupOrder;
+      return typeof v === 'number' ? v : Number.MAX_SAFE_INTEGER;
+    };
+    const ordered = members.some((m) => (m.fieldMappings as Record<string, unknown> | null)?.groupOrder != null);
+    let failedOrder: number | null = null;
+
     const results: Array<Record<string, unknown>> = [];
     for (const intg of members) {
+      if (ordered && failedOrder !== null && orderOf(intg) > failedOrder) {
+        results.push({
+          name: intg.name,
+          integrationId: intg.integrationId,
+          skipped: true,
+          reason: `Skipped — an earlier member of this group (load order ${failedOrder}) failed.`,
+        });
+        continue;
+      }
       try {
         const outcome = await executeIntegrationRun(intg);
+        if (!outcome.ok && failedOrder === null) failedOrder = orderOf(intg);
         results.push(outcome.ok
           ? { name: intg.name, ...outcome.result }
           : { name: intg.name, integrationId: intg.integrationId, error: outcome.error, errors: (outcome.data as { errors?: string[] })?.errors });
       } catch (err) {
+        if (failedOrder === null) failedOrder = orderOf(intg);
         results.push({ name: intg.name, integrationId: intg.integrationId, error: (err as Error).message });
       }
     }
-    res.status(202).json({ success: true, data: { groupId, count: results.length, results } });
+    const skipped = results.filter((r) => r.skipped).length;
+    res.status(202).json({ success: true, data: { groupId, count: results.length, skipped, results } });
   } catch (err) {
     const e = err as { message?: string };
     res.status(400).json({ success: false, error: e.message ?? 'run-group failed' });

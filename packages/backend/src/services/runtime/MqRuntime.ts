@@ -50,7 +50,10 @@ export class MqRuntime implements IConnectorRuntime {
     if (!REDIS_TECHS.includes(tech)) {
       throw new Error(`Queue technology "${cfg.technology || creds.technology}" is not wired yet (Redis Streams is supported; Kafka/RabbitMQ/SQS need their client).`);
     }
-    const brokerUrl = creds.brokerUrl || cfg.brokerUrl || 'redis://localhost:6379';
+    // Fail loudly rather than silently target the local broker: a connection with no
+    // brokerUrl almost always means a misconfigured credential, not "use localhost".
+    const brokerUrl = creds.brokerUrl || cfg.brokerUrl;
+    if (!brokerUrl) throw new Error('No broker URL configured for this MQ connection');
     const topic = creds.topic || cfg.topic;
     if (!topic) throw new Error('No topic / stream key configured');
     const batchSize = Number(creds.batchSize || cfg.batchSize || 100);

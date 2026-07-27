@@ -2,12 +2,13 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client';
 import { integrations, syncState, connectors, runs, runMessages, pushLog } from '../db/schema';
-import { eq, and, inArray, desc, gte } from 'drizzle-orm';
+import { eq, and, inArray, desc, gte, sql } from 'drizzle-orm';
 import { PushLogRepository } from '../db/repositories/pushLogRepository';
 import { SyncStateRepository } from '../db/repositories/syncStateRepository';
 import { upsertSchedule, removeSchedule } from '../services/SchedulerService';
 import { recordAudit } from '../services/AuditService';
 import { requireRole } from './middleware/actor';
+import { HUB_DEMO_INTEGRATION_ID } from '../hub/run-recorder';
 
 const router = Router();
 const pushLogRepo = new PushLogRepository();
@@ -26,6 +27,15 @@ function identityOf(connectorId: string | null, fallbackType: unknown, byId: Map
   }
   const t = fallbackType == null ? '' : String(fallbackType);
   return { name: t || 'Unknown', icon: null, key: t ? t.toLowerCase() : null, runtimeKind: t ? t.toLowerCase() : null };
+}
+
+/** Which execution path a connection reports running on, for the UI's badge.
+ *  Jira→SharePoint is the one pair still served by the legacy delta SyncService;
+ *  every other source→destination pair runs through the distributed bus. Kept as a
+ *  named classifier (rather than an inline ternary) so the one connector-pair
+ *  special-case lives in a single documented place. */
+function classifyRunKind(source: Identity, dest: Identity): 'sync' | 'bus' {
+  return source.runtimeKind === 'jira' && dest.runtimeKind === 'sharepoint' ? 'sync' : 'bus';
 }
 
 const DAY_MS = 86_400_000;
@@ -64,9 +74,8 @@ router.get('/', async (req: Request, res: Response) => {
     //   • source-only rows with no destination — e.g. the holding integration the Jira
     //     "Fetch" step creates just to attach pulled tickets/runs to. These previously
     //     showed up as phantom extra connections after building one connection.
-    const HUB_RUN_HOLDER = '00000000-0000-0000-0000-0000000000b5';
     const connections = allIntegrations.filter((i) => {
-      if (i.integrationId === HUB_RUN_HOLDER) return false;
+      if (i.integrationId === HUB_DEMO_INTEGRATION_ID) return false;
       const fm = (i.fieldMappings as Record<string, unknown>) ?? {};
       return !!i.destConnectorId || !!fm.destType || !!fm.destListName || !!fm.listName || !!fm.pgTable;
     });
@@ -81,8 +90,57 @@ router.get('/', async (req: Request, res: Response) => {
 
     const intgIds = connections.map((i) => i.integrationId);
     const runRows = await db.select().from(runs).where(inArray(runs.integrationId, intgIds)).orderBy(desc(runs.startedAt));
+    // Optional dashboard time filter (?windowHours=24|168|720). When set, include ALL runs
+    // since the window start (bounded) rather than just the last 5, so the KPIs/charts reflect
+    // the selected range. Omitted (e.g. My Connections) → the last-5 default is unchanged.
+    const windowHours = Math.max(0, Number(req.query.windowHours) || 0);
+    const pushSince = windowHours > 0 ? new Date(Date.now() - windowHours * 3_600_000) : null;
+    const runCap = pushSince ? 100 : 5;
+
     const newestRun = new Map<string, typeof runs.$inferSelect>();
-    for (const r of runRows) if (!newestRun.has(r.integrationId)) newestRun.set(r.integrationId, r);
+    // Recent runs per integration — the "pushes" the dashboard KPIs/charts read.
+    const recentRunsByIntg = new Map<string, (typeof runs.$inferSelect)[]>();
+    for (const r of runRows) {
+      if (!newestRun.has(r.integrationId)) newestRun.set(r.integrationId, r);
+      if (pushSince && (!r.startedAt || r.startedAt < pushSince)) continue; // outside the window
+      const arr = recentRunsByIntg.get(r.integrationId) ?? [];
+      if (arr.length < runCap) { arr.push(r); recentRunsByIntg.set(r.integrationId, arr); }
+    }
+
+    // Per-run delivered/failed tallies from the bus outbox ledger (run_messages, direction 'out').
+    // This is the real egress record — push_log is legacy and only the delta-sync path writes it.
+    const recentRunIds = [...recentRunsByIntg.values()].flat().map((r) => r.runId);
+    const runStats = new Map<string, { delivered: number; failed: number }>();
+    if (recentRunIds.length > 0) {
+      const msgAgg = await db
+        .select({ runId: runMessages.runId, status: runMessages.status, n: sql<number>`count(*)::int` })
+        .from(runMessages)
+        .where(and(inArray(runMessages.runId, recentRunIds), eq(runMessages.direction, 'out')))
+        .groupBy(runMessages.runId, runMessages.status);
+      for (const m of msgAgg) {
+        const s = runStats.get(m.runId) ?? { delivered: 0, failed: 0 };
+        if (m.status === 'failed') s.failed += Number(m.n);
+        else if (m.status === 'delivered') s.delivered += Number(m.n);
+        // 'received'/'skipped' count as neither delivered nor failed.
+        runStats.set(m.runId, s);
+      }
+    }
+
+    /** One integration's recent runs → the { pushedAt, recordCount, status } shape the UI expects. */
+    const busPushesFor = (integrationId: string) =>
+      (recentRunsByIntg.get(integrationId) ?? []).map((run) => {
+        const st = runStats.get(run.runId) ?? { delivered: 0, failed: 0 };
+        const status = st.failed > 0
+          ? (st.delivered > 0 ? 'PARTIAL' : 'FAILED')
+          : (run.status === 'error' ? 'FAILED' : 'SUCCESS');
+        return {
+          pushedAt: run.finishedAt ?? run.startedAt,
+          recordCount: st.delivered,
+          status,
+          pushType: 'bus',
+          errorMessage: st.failed > 0 ? `${st.failed} delivery(ies) failed` : null,
+        };
+      });
 
     // 7-day message volume per integration: bus path (run_messages, 1 per message) +
     // legacy sync path (push_log.recordCount). One query each; bucketed in memory.
@@ -109,13 +167,13 @@ router.get('/', async (req: Request, res: Response) => {
     const result = await Promise.all(
       connections.map(async (integ) => {
         const state = await syncStateRepo.getByIntegration(integ.integrationId);
-        const recentPushes = await pushLogRepo.listByIntegration(integ.integrationId, 5);
+        // Push history is derived from the bus (runs + run_messages), not the legacy push_log.
+        const recentPushes = busPushesFor(integ.integrationId);
         const fm = (integ.fieldMappings as Record<string, unknown>) ?? {};
 
         const source = identityOf(integ.sourceConnectorId, fm.sourceType, byId);
         const dest = identityOf(integ.destConnectorId, fm.destType, byId);
-        // Jira→SharePoint runs the legacy delta sync; everything else runs through the bus.
-        const kind: 'sync' | 'bus' = source.runtimeKind === 'jira' && dest.runtimeKind === 'sharepoint' ? 'sync' : 'bus';
+        const kind = classifyRunKind(source, dest);
 
         const days = volMap.get(integ.integrationId);
         const volume7d = emptyBuckets().map((b) => ({ date: b.date, count: days?.get(b.date) ?? 0 }));

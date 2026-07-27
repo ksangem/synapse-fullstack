@@ -1,6 +1,6 @@
-import { createContext, useState, useCallback, useRef, useEffect } from 'react';
-
-export const ConfirmContext = createContext();
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { useGrowFrom, originRect } from '../hooks/useGrowFrom';
+import { ConfirmContext } from '../hooks/useConfirm';
 
 /* A promise-based replacement for window.confirm / window.prompt.
 
@@ -14,10 +14,14 @@ export function ConfirmProvider({ children }) {
   const [value, setValue] = useState('');
   const resolverRef = useRef(null);
   const inputRef = useRef(null);
+  const cancelRef = useRef(null);
+  const dialogRef = useRef(null);
+  // Element to return focus to when the dialog closes.
+  const returnRef = useRef(null);
 
   const confirm = useCallback((opts = {}) => {
     setValue(opts.input?.defaultValue ?? '');
-    setState({ opts });
+    setState({ opts, origin: originRect() });
     return new Promise((resolve) => { resolverRef.current = resolve; });
   }, []);
 
@@ -28,17 +32,40 @@ export function ConfirmProvider({ children }) {
     if (resolve) resolve(result);
   }, []);
 
+  // Grows out of the control that asked for confirmation; falls back to a
+  // gentle scale when it was invoked from code or a keyboard shortcut.
+  useGrowFrom(dialogRef, state?.origin ?? null, { duration: 260, fallback: true });
+
   const isPrompt = !!state?.opts?.input;
   const onCancel = useCallback(() => settle(isPrompt ? null : false), [settle, isPrompt]);
   const onConfirm = useCallback(() => settle(isPrompt ? value : true), [settle, isPrompt, value]);
 
-  // Escape to cancel; focus the input/confirm button on open.
+  /* Escape cancels; focus moves into the dialog and is trapped there.
+
+     Focus lands on the INPUT for a prompt, and on CANCEL for a confirm. It used to
+     land on the confirm button — so a "Delete this connection?" dialog opened with
+     Delete focused and a stray Enter destroyed the record. */
   useEffect(() => {
     if (!state) return undefined;
-    function onKey(e) { if (e.key === 'Escape') onCancel(); }
+    returnRef.current = document.activeElement;
+    function onKey(e) {
+      if (e.key === 'Escape') { onCancel(); return; }
+      if (e.key !== 'Tab' || !dialogRef.current) return;
+      const f = dialogRef.current.querySelectorAll('button, input, [href], select, textarea, [tabindex]:not([tabindex="-1"])');
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      // Without this the Tab key walks out of the dialog into the page behind it.
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
     document.addEventListener('keydown', onKey);
-    const t = setTimeout(() => inputRef.current?.focus(), 0);
-    return () => { document.removeEventListener('keydown', onKey); clearTimeout(t); };
+    const t = setTimeout(() => (inputRef.current || cancelRef.current)?.focus(), 0);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      clearTimeout(t);
+      // Send focus back where it came from, not to <body>.
+      if (returnRef.current instanceof HTMLElement) returnRef.current.focus();
+    };
   }, [state, onCancel]);
 
   const opts = state?.opts || {};
@@ -49,6 +76,7 @@ export function ConfirmProvider({ children }) {
       {state && (
         <div className="modal-overlay" onClick={onCancel}>
           <div
+            ref={dialogRef}
             className="modal-dialog"
             role="dialog"
             aria-modal="true"
@@ -70,11 +98,10 @@ export function ConfirmProvider({ children }) {
               />
             )}
             <div className="modal-actions">
-              <button type="button" className="btn btn-outline btn-sm" onClick={onCancel}>
+              <button ref={cancelRef} type="button" className="btn btn-outline btn-sm" onClick={onCancel}>
                 {opts.cancelLabel || 'Cancel'}
               </button>
               <button
-                ref={isPrompt ? undefined : inputRef}
                 type="button"
                 className={`btn btn-sm ${opts.danger ? 'btn-danger' : 'btn-primary'}`}
                 onClick={onConfirm}

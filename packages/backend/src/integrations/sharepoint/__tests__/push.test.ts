@@ -54,18 +54,23 @@ describe('SharePointPushService — mapping integration', () => {
     }
   });
 
+  // NOTE ON EMPTY VALUES: mapToSharePointItem normalises BOTH undefined and '' to null
+  // (SharePointMapperService), because Graph rejects an empty string on typed
+  // (datetime/number) columns with badArgument/generalException. These assertions therefore
+  // expect null, not '' — they were written before that normalisation and had been failing
+  // ever since. `false` is a real value and is preserved.
   it('handles null assignee gracefully', () => {
     const item = mapper.mapToSharePointItem(sampleIssues[1], meta);
-    expect(item.fields.AssigneeName).toBe('');
-    expect(item.fields.AssigneeAccountID).toBe('');
-    expect(item.fields.AssigneeTimezone).toBe('');
+    expect(item.fields.AssigneeName).toBeNull();
+    expect(item.fields.AssigneeAccountID).toBeNull();
+    expect(item.fields.AssigneeTimezone).toBeNull();
   });
 
   it('handles null sprint gracefully', () => {
     const item = mapper.mapToSharePointItem(sampleIssues[1], meta);
     expect(item.fields.SprintID).toBeNull();
-    expect(item.fields.SprintName).toBe('');
-    expect(item.fields.SprintState).toBe('');
+    expect(item.fields.SprintName).toBeNull();
+    expect(item.fields.SprintState).toBeNull();
     expect(item.fields.SprintBoardID).toBeNull();
   });
 
@@ -73,10 +78,10 @@ describe('SharePointPushService — mapping integration', () => {
     const item = mapper.mapToSharePointItem(sampleIssues[2], meta);
     expect(item.fields.Title).toBe('Minimal issue');
     expect(item.fields.IssueKey).toBe('AC-3');
-    expect(item.fields.StatusName).toBe('');
-    expect(item.fields.Priority).toBe('');
+    expect(item.fields.StatusName).toBeNull();
+    expect(item.fields.Priority).toBeNull();
     expect(item.fields.StoryPoints).toBeNull();
-    expect(item.fields.Labels).toBe('');
+    expect(item.fields.Labels).toBeNull();
     expect(item.fields.HasLabels).toBe(false);
   });
 

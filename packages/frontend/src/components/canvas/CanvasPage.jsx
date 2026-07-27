@@ -2,11 +2,15 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { useToast } from '../../hooks/useToast';
+import Button from '../ui/Button';
 import { useToolbarAction } from '../../hooks/useToolbarAction';
 import {
-  PRESET_TRANSFORMS, PAIR_COLORS, typesCompatible, runPresetTransform,
-  evaluateExpression, generateExpression, sampleFor,
+  PRESET_GROUPS, PAIR_COLORS, typesCompatible, computeMappedValue,
+  defaultPresetConfig, presetConfigSpec, presetIssue,
+  generateExpression, sampleFor,
 } from '../mapping/mappingUtils';
+import PresetConfigFields from '../mapping/PresetConfigFields';
+import { clickable } from '../../utils/clickable';
 
 /* Mapping Canvas — real field-mapping editor over a saved integration.
    Reached standalone (pick an integration) or via hand-off from the Connection
@@ -36,6 +40,10 @@ export default function CanvasPage() {
   const [srcFields, setSrcFields] = useState(handoff?.srcFields || []);
   const [destFields, setDestFields] = useState(handoff?.destFields || []);
   const [mappings, setMappings] = useState(handoff?.mappings || []);
+  /* Bumped only when a whole set of mappings arrives at once (auto-map). Keying the
+     rows on it replays the stagger then; editing or removing a single row must NOT
+     re-animate the whole list. */
+  const [revealKey, setRevealKey] = useState(0);
   const [expanded, setExpanded] = useState(-1);
   const [aiSource, setAiSource] = useState(null); // 'ai' | 'deterministic'
   const [busy, setBusy] = useState(false);
@@ -62,24 +70,25 @@ export default function CanvasPage() {
   }, []);
 
   const runAutoMap = async () => {
-    if (!srcFields.length || !destFields.length) { showToast('No source/destination fields — open this from the Wizard or pick an integration with saved mappings'); return; }
+    if (!srcFields.length || !destFields.length) { showToast('No source/destination fields — open this from the Wizard or pick an integration with saved mappings', 'warning'); return; }
     setBusy(true);
     const res = await api.call(`/api/integrations/${integrationId || 'preview'}/mappings/auto-map`, { srcFields, destFields });
     setBusy(false);
     if (res.ok && res.data?.data) {
       const sug = res.data.data.mappings.map((m, i) => ({ id: `ai-${i}`, preset: null, ...m }));
       setMappings(sug);
+      setRevealKey((n) => n + 1);
       setAiSource(res.data.data.source);
-      showToast(res.data.data.source === 'ai' ? 'AI mapped the fields' : 'Auto-mapped (deterministic)');
-    } else showToast(res.data?.error || 'Auto-map failed');
+      showToast(res.data.data.source === 'ai' ? 'AI mapped the fields' : 'Auto-mapped (deterministic)', 'success');
+    } else showToast(res.data?.error || 'Auto-map failed', 'error');
   };
 
   const save = async () => {
-    if (!integrationId) { showToast('Select an integration to save into'); return; }
+    if (!integrationId) { showToast('Select an integration to save into', 'warning'); return; }
     setSaveState('saving');
     const res = await api.call(`/api/integrations/${integrationId}/mappings`, { mappings }, 'PUT');
     setSaveState(res.ok && res.data?.success ? 'saved' : 'error');
-    showToast(res.ok && res.data?.success ? 'Mappings saved' : (res.data?.error || 'Save failed'));
+    showToast(res.ok && res.data?.success ? 'Mappings saved' : (res.data?.error || 'Save failed'), res.ok && res.data?.success ? 'success' : 'error');
   };
 
   const updateMapping = (i, patch) => setMappings((prev) => prev.map((m, idx) => idx === i ? { ...m, ...patch } : m));
@@ -92,44 +101,49 @@ export default function CanvasPage() {
     canvas_save: save,
   });
 
-  const confColor = (c) => c >= 0.85 ? 'var(--success)' : c >= 0.6 ? 'var(--warning)' : 'var(--error)';
+  const confColor = (c) => c >= 0.85 ? 'var(--success-on)' : c >= 0.6 ? 'var(--warning-on)' : 'var(--error-on)';
 
   return (
     <div className="page active">
       <div className="page-header">
         <div>
-          <div className="page-title">Mapping Canvas</div>
+          <h1 className="page-title">Mapping Canvas</h1>
           <div className="page-subtitle">
             {handoff ? 'Editing mappings handed off from the Connection Wizard' : 'Map source fields to destination columns'}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {handoff && <button className="btn btn-outline btn-sm" onClick={() => navigate('/wizard')} title="Return to the Connection Wizard where you left off">&#8592; Back to Wizard</button>}
-          <button className="btn btn-outline btn-sm" disabled={busy} onClick={runAutoMap}>{busy ? 'Mapping…' : '✨ AI Auto-Map'}</button>
+          <Button className="btn btn-outline btn-sm" loading={busy} loadingLabel="Mapping" onClick={runAutoMap}>✨ AI Auto-Map</Button>
           <button className="btn btn-ghost btn-sm" onClick={clearAll}>Clear</button>
-          <button className={`btn btn-sm ${saveState === 'saved' ? 'btn-success' : 'btn-primary'}`} onClick={save}>
-            {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? '✓ Saved' : 'Save Mappings'}
-          </button>
+          <Button
+            className={`btn btn-sm ${saveState === 'saved' ? 'btn-success' : 'btn-primary'}`}
+            onClick={save}
+            loading={saveState === 'saving'}
+            loadingLabel="Saving"
+          >
+            {saveState === 'saved' ? '✓ Saved' : 'Save Mappings'}
+          </Button>
         </div>
       </div>
 
       <div className="page-body">
       <div className="card" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
-        <label style={{ fontWeight: 600, fontSize: '.85rem' }}>Integration</label>
-        <select value={integrationId} onChange={(e) => loadIntegration(e.target.value)} style={{ minWidth: 280 }}>
+        <label style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-base)' }} htmlFor="canvaspage-integration">Integration</label>
+        <select id="canvaspage-integration" value={integrationId} onChange={(e) => loadIntegration(e.target.value)} style={{ minWidth: 280 }}>
           <option value="">— select a saved connection —</option>
           {integrations.map((i) => (
             <option key={i.integrationId} value={i.integrationId}>{i.name}</option>
           ))}
         </select>
         {aiSource && <span className={`badge ${aiSource === 'ai' ? 'badge-success' : 'badge-info'}`}>{aiSource === 'ai' ? 'AI suggestions' : 'deterministic'}</span>}
-        <span style={{ marginLeft: 'auto', fontSize: '.78rem', color: 'var(--text-dim)' }}>
+        <span style={{ marginLeft: 'auto', fontSize: 'var(--fs-sm)', color: 'var(--text-dim)' }}>
           {srcFields.length} source · {destFields.length} dest · {mappings.length} mappings
         </span>
       </div>
 
       {mappings.length === 0 && (
-        <div className="card" style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)' }}>
+        <div className="card empty-state">
           No mappings yet. Click <strong>AI Auto-Map</strong> to generate suggestions
           {(!srcFields.length || !destFields.length) && ', or open this Canvas from the Connection Wizard so it can load the live source/destination fields'}.
         </div>
@@ -137,7 +151,8 @@ export default function CanvasPage() {
 
       {mappings.map((m, i) => (
         <MappingRow
-          key={m.id || i}
+          key={`${revealKey}:${m.id || i}`}
+          revealIndex={Math.min(i, 14)}
           mapping={m}
           index={i}
           srcFields={srcFields}
@@ -156,7 +171,7 @@ export default function CanvasPage() {
   );
 }
 
-function MappingRow({ mapping, index, srcFields, destFields, expanded, onToggle, onUpdate, onRemove, confColor, integrationId, showToast }) {
+function MappingRow({ mapping, index, revealIndex = 0, srcFields, destFields, expanded, onToggle, onUpdate, onRemove, confColor, integrationId, showToast }) {
   const color = PAIR_COLORS[index % PAIR_COLORS.length];
   const srcDisplay = (mapping.sources || []).join(' + ');
   const destDisplay = (mapping.destinations || []).join(' + ');
@@ -170,14 +185,21 @@ function MappingRow({ mapping, index, srcFields, destFields, expanded, onToggle,
   });
   const hasMismatch = !compatible && mapping.transform === 'DIRECT';
 
-  const sample = useMemo(() => sampleFor(mapping.sources || [], srcFields), [mapping.sources, srcFields]);
+  // Preview via the shared computeMappedValue — the same function the Wizard previews
+  // with, and a faithful port of the backend MappingEngine that actually writes the row.
+  // (This used to call a Canvas-only runPresetTransform that knew just 8 of the presets,
+  // so anything outside that set previewed as the untransformed input.)
+  const sample = useMemo(
+    () => sampleFor(mapping.sources || [], srcFields, mapping),
+    [mapping, srcFields],
+  );
   let preview = ''; let previewErr = '';
-  if (mapping.transform === 'DIRECT') preview = JSON.stringify(sample[mapping.sources?.[0]]);
-  else if (mapping.transform === 'PRESET') preview = JSON.stringify(runPresetTransform(mapping.preset, sample[mapping.sources?.[0]]));
-  else if (mapping.transform === 'EXPRESSION' && mapping.expression) {
-    const { result, error } = evaluateExpression(mapping.expression, sample);
-    if (error) previewErr = error; else preview = JSON.stringify(result);
+  try {
+    preview = JSON.stringify(computeMappedValue(mapping, sample));
+  } catch (e) {
+    previewErr = e.message;
   }
+  const configIssue = presetIssue(mapping);
 
   const genNl = async () => {
     if (!nl.trim()) return;
@@ -186,24 +208,26 @@ function MappingRow({ mapping, index, srcFields, destFields, expanded, onToggle,
     setNlBusy(false);
     if (res.ok && res.data?.data?.expression) {
       onUpdate({ transform: 'EXPRESSION', expression: res.data.data.expression });
-      showToast(res.data.data.source === 'ai' ? 'AI generated the transform' : 'Generated a starter transform');
-    } else showToast(res.data?.error || 'Generation failed');
+      showToast(res.data.data.source === 'ai' ? 'AI generated the transform' : 'Generated a starter transform', 'success');
+    } else showToast(res.data?.error || 'Generation failed', 'error');
   };
 
   const confidence = typeof mapping.confidence === 'number' ? mapping.confidence : null;
 
   return (
-    <div className="card" style={{ marginBottom: 8, borderLeft: `3px solid ${color}` }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }} onClick={onToggle}>
-        <span style={{ width: 22, height: 22, borderRadius: 6, background: color, color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '.72rem', fontWeight: 700 }}>{index + 1}</span>
-        <span style={{ fontFamily: 'monospace', fontSize: '.82rem' }} title={srcDisplay}>{srcDisplay}</span>
+    <div className="card canvas-row" style={{ marginBottom: 8, borderLeft: `3px solid ${color}`, '--i': revealIndex }}>
+      <div {...clickable(onToggle, { label: `${expanded ? 'Collapse' : 'Expand'} mapping ${srcDisplay} to ${destDisplay}` })}
+        aria-expanded={expanded}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+        <span className="map-num" style={{ width: 22, height: 22, borderRadius: 'var(--radius)', background: color, color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--fs-xs)', fontWeight: 'var(--fw-bold)' }}>{index + 1}</span>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-sm)' }} title={srcDisplay}>{srcDisplay}</span>
         <span style={{ color: 'var(--text-dim)' }}>→</span>
-        <span style={{ fontFamily: 'monospace', fontSize: '.82rem' }} title={destDisplay}>{destDisplay}</span>
-        <span className={`badge ${hasMismatch ? 'badge-warning' : mapping.transform === 'DIRECT' ? 'badge-neutral' : 'badge-info'}`} style={{ fontSize: '.62rem' }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-sm)' }} title={destDisplay}>{destDisplay}</span>
+        <span className={`badge ${hasMismatch ? 'badge-warning' : mapping.transform === 'DIRECT' ? 'badge-neutral' : 'badge-info'}`} style={{ fontSize: 'var(--fs-xs)' }}>
           {hasMismatch ? '⚠ Type' : mapping.transform === 'DIRECT' ? 'Direct' : mapping.transform === 'PRESET' ? 'Preset' : 'JS'}
         </span>
         {confidence != null && (
-          <span style={{ fontSize: '.68rem', color: confColor(confidence) }}>{Math.round(confidence * 100)}%</span>
+          <span style={{ fontSize: 'var(--fs-xs)', color: confColor(confidence) }}>{Math.round(confidence * 100)}%</span>
         )}
         <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={(e) => { e.stopPropagation(); onRemove(); }}>×</button>
       </div>
@@ -215,10 +239,15 @@ function MappingRow({ mapping, index, srcFields, destFields, expanded, onToggle,
               <button
                 key={t}
                 className={`btn btn-sm ${mapping.transform === t ? 'btn-primary' : 'btn-outline'}`}
-                onClick={() => onUpdate({
-                  transform: t, preset: t === 'PRESET' ? (mapping.preset || 'dateFormat') : null,
-                  expression: t === 'EXPRESSION' ? (mapping.expression || generateExpression(mapping.sources, mapping.srcTypes, mapping.destinations, mapping.destTypes)) : mapping.expression,
-                })}
+                onClick={() => {
+                  const preset = t === 'PRESET' ? (mapping.preset || 'dateFormat') : null;
+                  onUpdate({
+                    transform: t,
+                    preset,
+                    presetConfig: preset ? defaultPresetConfig(preset, mapping.presetConfig) : undefined,
+                    expression: t === 'EXPRESSION' ? (mapping.expression || generateExpression(mapping.sources, mapping.srcTypes, mapping.destinations, mapping.destTypes)) : mapping.expression,
+                  });
+                }}
               >
                 {t === 'DIRECT' ? 'Direct Copy' : t === 'PRESET' ? 'Preset' : 'JavaScript'}
               </button>
@@ -226,15 +255,38 @@ function MappingRow({ mapping, index, srcFields, destFields, expanded, onToggle,
           </div>
 
           {mapping.transform === 'PRESET' && (
-            <select value={mapping.preset || ''} onChange={(e) => onUpdate({ preset: e.target.value })} style={{ width: '100%', marginBottom: 10 }}>
-              {PRESET_TRANSFORMS.map((p) => <option key={p.value} value={p.value}>{p.label} — {p.desc}</option>)}
-            </select>
+            <>
+              <select
+                value={mapping.preset || ''}
+                // Re-seed the new preset's defaults and drop the old preset's options.
+                onChange={(e) => onUpdate({ preset: e.target.value, presetConfig: defaultPresetConfig(e.target.value) })}
+                style={{ width: '100%', marginBottom: 10 }}
+              >
+                {Object.entries(PRESET_GROUPS).map(([group, presets]) => (
+                  <optgroup key={group} label={group}>
+                    {presets.map((p) => <option key={p.value} value={p.value}>{p.label} — {p.desc}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+
+              {presetConfigSpec(mapping.preset) && (
+                <PresetConfigFields
+                  preset={mapping.preset}
+                  config={mapping.presetConfig}
+                  onChange={(presetConfig) => onUpdate({ presetConfig })}
+                />
+              )}
+
+              {configIssue && (
+                <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--warning-on)', marginBottom: 8 }}>⚠ {configIssue}</div>
+              )}
+            </>
           )}
 
           {mapping.transform === 'EXPRESSION' && (
             <>
               <textarea value={mapping.expression || ''} onChange={(e) => onUpdate({ expression: e.target.value })} spellCheck={false}
-                style={{ width: '100%', minHeight: 90, fontFamily: 'monospace', fontSize: '.78rem', marginBottom: 8 }} />
+                style={{ width: '100%', minHeight: 90, fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-sm)', marginBottom: 8 }} />
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 <input value={nl} onChange={(e) => setNl(e.target.value)} placeholder="Describe a transform in plain English…" style={{ flex: 1 }} />
                 <button className="btn btn-outline btn-sm" disabled={nlBusy} onClick={genNl}>{nlBusy ? '…' : '✨ Generate'}</button>
@@ -242,9 +294,9 @@ function MappingRow({ mapping, index, srcFields, destFields, expanded, onToggle,
             </>
           )}
 
-          <div style={{ background: 'var(--bg-main)', borderRadius: 'var(--radius-sm)', padding: 8, fontSize: '.74rem' }}>
+          <div style={{ background: 'var(--bg-main)', borderRadius: 'var(--radius-sm)', padding: 8, fontSize: 'var(--fs-xs)' }}>
             <div style={{ color: 'var(--text-dim)' }}>Input: {JSON.stringify(sample)}</div>
-            {previewErr ? <div style={{ color: 'var(--error)' }}>Error: {previewErr}</div> : <div style={{ color: 'var(--success)' }}>Output: {preview}</div>}
+            {previewErr ? <div style={{ color: 'var(--error-on)' }}>Error: {previewErr}</div> : <div style={{ color: 'var(--success-on)' }}>Output: {preview}</div>}
           </div>
         </div>
       )}

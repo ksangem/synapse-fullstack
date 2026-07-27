@@ -13,6 +13,48 @@
 import { evalExpression } from './SafeExpression';
 import { aggregate } from './aggregate';
 
+/**
+ * One foreign-key resolution, derived from a `preset: 'lookup'` mapping and handed
+ * to the DB destination (which owns the connection the mapping step lacks).
+ *
+ * The child source carries the parent's business NAME (e.g. `ClientName`), never the
+ * parent's surrogate id, so an insert into the child table failed its FK constraint.
+ */
+export interface FkLookup {
+  /** Destination column holding the FK (e.g. `account_id`). */
+  column: string;
+  /** Parent table to resolve against (e.g. `accounts`). */
+  parentTable: string;
+  /** Parent text column matched against the child's value (e.g. `name`). */
+  matchColumn: string;
+  /** Parent column returned as the FK value (e.g. `id`). */
+  returnColumn: string;
+  /** Only 'error' today: an unresolvable parent fails that row rather than writing a bad FK. */
+  onMissing?: 'error';
+}
+
+/** Derive the FK-lookup list for a target from its mappings. */
+export function foreignKeysFromMappings(mappings: MappingEntry[]): FkLookup[] {
+  const out: FkLookup[] = [];
+  for (const m of mappings) {
+    if (m.preset !== 'lookup') continue;
+    const c = m.presetConfig ?? {};
+    const column = m.destinations?.[0];
+    const parentTable = c.parentTable as string | undefined;
+    const matchColumn = c.matchColumn as string | undefined;
+    const returnColumn = c.returnColumn as string | undefined;
+    // A half-configured lookup would silently write the raw NAME into an integer FK
+    // column, so an incomplete one is dropped here and the mapping behaves as a
+    // pass-through — visible as a type error at write time, not a silent bad id.
+    if (!column || !parentTable || !matchColumn || !returnColumn) {
+      console.warn(`[MappingEngine] ignoring incomplete lookup mapping ${m.id}`);
+      continue;
+    }
+    out.push({ column, parentTable, matchColumn, returnColumn, onMissing: 'error' });
+  }
+  return out;
+}
+
 export interface MappingEntry {
   id: string;
   sources: string[];          // e.g. ['key'] or ['priority.name', 'summary']
@@ -65,7 +107,13 @@ export function getNestedValue(obj: Record<string, unknown>, path: string): unkn
   return current;
 }
 
-// ── Legacy mapper (used by SyncService) — DO NOT change its behaviour. ──
+// ── Legacy mapper — DEPRECATED, no production caller. ──
+// As of the mapping-engine unification, NOTHING on a production path calls applyMappings:
+// both the bus (run-integration) and SyncService now map via applyRichMappings below, so a
+// Jira→SP integration maps identically however it is triggered. applyMappings / runPreset /
+// validateMappingConfig / MappingConfig are retained ONLY because e2e-mapping-push.test.ts
+// still locks their legacy behaviour. Deleting them (and those tests) is a safe follow-up
+// once the SyncService rich-mapping switch is verified against real Jira→SP data.
 
 /**
  * Normalize a year / partial date / full ISO datetime into a SQL DATE string
@@ -98,7 +146,12 @@ function runPreset(preset: string, value: unknown, config?: Record<string, unkno
   }
 }
 
-/** Legacy applyMappings — used by SyncService's direct Jira→SharePoint path. */
+/**
+ * @deprecated DEAD on every production path — SyncService was migrated to applyRichMappings
+ * (the same engine the bus uses) so a Jira→SP connection maps identically however it is
+ * triggered. Retained only for its own test suite; the old "used by SyncService's direct
+ * Jira→SharePoint path" note above was stale. Safe to delete with those tests.
+ */
 export function applyMappings(
   jiraIssue: Record<string, unknown>,
   mappingConfig: MappingConfig,
@@ -161,6 +214,32 @@ function setNestedPath(obj: Record<string, unknown>, path: string, value: unknow
 }
 
 /**
+ * Parse a date written in a known day/month/year order into ISO `YYYY-MM-DD`.
+ * Additive helper for the `parseDate` preset — unlike `dateFormat` (which assumes the
+ * source is already ISO and just slices 10 chars), this understands dd/MM/yyyy and
+ * friends, and returns null for impossible dates (e.g. 30/02/2026) instead of a
+ * silently-rolled-over value. `format` names the token order, e.g. 'dd/MM/yyyy'.
+ */
+export function parseDateWithFormat(input: string, format = 'dd/MM/yyyy'): string | null {
+  const parts = String(input).split(/[^0-9]+/).filter(Boolean).map(Number);
+  const tokens = String(format).split(/[^a-zA-Z]+/).filter(Boolean);
+  if (parts.length < 3 || tokens.length < 3) return null;
+  let day = 0, month = 0, year = 0;
+  for (let i = 0; i < 3; i++) {
+    const t = tokens[i].toLowerCase();
+    if (t.startsWith('d')) day = parts[i];
+    else if (t.startsWith('m')) month = parts[i];
+    else if (t.startsWith('y')) year = parts[i];
+  }
+  if (year < 100) year += 2000;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const d = new Date(Date.UTC(year, month - 1, day));
+  // Reject calendar rollover (JS Date would turn 30 Feb into 2 Mar).
+  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) return null;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/**
  * Compute one mapping's output value for a record — a faithful port of the Wizard's
  * computeMappedValue (DIRECT, the 16 presets incl. row-local aggregations, EXPRESSION).
  */
@@ -196,6 +275,55 @@ function computeValue(m: MappingEntry, record: Record<string, unknown>): unknown
     // `concat` here is ROW-LOCAL field concatenation (space-joined, empties kept) — deliberately
     // distinct from the join's group `concat` (comma-joined), so it stays inline.
     case 'concat': return srcVal.map((v) => v ?? '').join(' ');
+
+    // ── QC-safe additive presets (no bus/config changes; used only when a mapping opts in) ──
+    // codeMap: lookup source value in a table; unmapped codes fall back to a default ('Unknown').
+    // presetConfig: { map: { A: 'Active', ... }, default?: 'Unknown' }
+    case 'codeMap': {
+      const map = (m.presetConfig?.map as Record<string, unknown>) || {};
+      const key = String(srcVal[0] ?? '');
+      const fallback = (m.presetConfig?.default as unknown) ?? 'Unknown';
+      return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : fallback;
+    }
+    // default: substitute a configured value when the source is null/empty (not written as null).
+    // presetConfig: { value: <any> }
+    case 'default': {
+      const v = srcVal[0];
+      const empty = v === null || v === undefined || v === '';
+      return empty ? ((m.presetConfig?.value as unknown) ?? '') : v;
+    }
+    // currency: multiply a numeric amount by a configured exchange rate, rounded to N decimals.
+    // presetConfig: { rate: 83.2, decimals?: 2 }
+    case 'currency': {
+      const n = Number(srcVal[0]);
+      if (!Number.isFinite(n)) return null;
+      const rate = Number(m.presetConfig?.rate ?? 1);
+      const decimals = Number(m.presetConfig?.decimals ?? 2);
+      return Number((n * rate).toFixed(decimals));
+    }
+    // divide: safe ratio of two sources with division-by-zero handled (returns null, never NaN/Infinity).
+    // sources: [numerator, denominator]; presetConfig: { multiplier?: 100 (for %), decimals?: 2 }
+    case 'divide': {
+      const num = Number(srcVal[0]);
+      const den = Number(srcVal[1]);
+      if (!Number.isFinite(num) || !Number.isFinite(den) || den === 0) return null;
+      const multiplier = Number(m.presetConfig?.multiplier ?? 1);
+      const decimals = Number(m.presetConfig?.decimals ?? 2);
+      return Number(((num / den) * multiplier).toFixed(decimals));
+    }
+    // parseDate: parse a non-ISO date (e.g. dd/MM/yyyy) into ISO YYYY-MM-DD; invalid dates -> null.
+    // presetConfig: { format?: 'dd/MM/yyyy' }
+    case 'parseDate':
+      return parseDateWithFormat(String(srcVal[0] ?? ''), String(m.presetConfig?.format ?? 'dd/MM/yyyy'));
+
+    /* lookup (foreign key): PASS THROUGH here, resolved later in the DB destination.
+       The mapping step has no DB connection, so it cannot query the parent table;
+       the destination owns the connection and does the resolve with a cached parent
+       map. The payload column therefore carries the parent's NAME at this point and
+       is swapped for the parent's id before the write.
+       presetConfig: { parentTable, matchColumn, returnColumn, onMissing } */
+    case 'lookup': return srcVal[0];
+
     default: break;
   }
 

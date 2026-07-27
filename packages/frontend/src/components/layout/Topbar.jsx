@@ -2,8 +2,10 @@ import { useState, useRef, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../../hooks/useTheme';
 import { api } from '../../services/api';
-import { SidebarContext } from '../../contexts/SidebarContext';
-import { useAuth } from '../../contexts/AuthContext';
+import { SidebarContext } from '../../hooks/useSidebar';
+import { useAlerts } from '../../hooks/useAlerts';
+import UserMenu from './UserMenu';
+import Icon from '../ui/Icon';
 
 const categoryRoutes = {
   connectors: '/studio',
@@ -11,31 +13,33 @@ const categoryRoutes = {
   entities: '/catalog',
 };
 
+// Keys into the shared SVG set (components/ui/Icon.jsx), not glyphs — see the
+// note there on why the dingbat/emoji mix was replaced.
 const categoryIcons = {
-  connectors: '⚙',
-  connections: '⇄',
-  entities: '⚏',
+  connectors: 'registry',
+  connections: 'connections',
+  entities: 'catalog',
 };
 
 // App pages (mirrors the sidebar). `kw` adds extra search aliases beyond the label.
 const pages = [
-  { label: 'Health Dashboard', to: '/dashboard', icon: '◉', kw: 'home overview status health' },
-  { label: 'Integration Registry', to: '/registry', icon: '⚙', kw: 'integrations registry list' },
-  { label: 'Message Monitor', to: '/monitor', icon: '⇄', kw: 'messages monitor logs runs' },
-  { label: 'Alerts', to: '/alerts', icon: '⚠', kw: 'alerts notifications warnings' },
-  { label: 'Connector Studio', to: '/studio', icon: '✎', kw: 'connector studio build design' },
-  { label: 'Connection Wizard', to: '/wizard', icon: '⚩', kw: 'connection wizard connect setup new' },
-  { label: 'Mapping Canvas', to: '/canvas', icon: '⇌', kw: 'mapping canvas fields map' },
-  { label: 'Entity Catalog', to: '/catalog', icon: '⚏', kw: 'entity catalog entities schema' },
-  { label: 'My Connections', to: '/connected', icon: '🔗', kw: 'my connections connected instances' },
-  { label: 'Credential Vault', to: '/vault', icon: '🔒', kw: 'credential vault secrets keys' },
-  { label: 'Administration', to: '/admin', icon: '👥', kw: 'administration admin settings users' },
+  { label: 'Health Dashboard', to: '/dashboard', icon: 'dashboard', kw: 'home overview status health' },
+  { label: 'Integration Registry', to: '/registry', icon: 'registry', kw: 'integrations registry list' },
+  { label: 'Message Monitor', to: '/monitor', icon: 'monitor', kw: 'messages monitor logs runs' },
+  { label: 'Alerts', to: '/alerts', icon: 'alerts', kw: 'alerts notifications warnings' },
+  { label: 'Connector Studio', to: '/studio', icon: 'studio', kw: 'connector studio build design' },
+  { label: 'Connection Wizard', to: '/wizard', icon: 'wizard', kw: 'connection wizard connect setup new' },
+  { label: 'Mapping Canvas', to: '/canvas', icon: 'canvas', kw: 'mapping canvas fields map' },
+  { label: 'Entity Catalog', to: '/catalog', icon: 'catalog', kw: 'entity catalog entities schema' },
+  { label: 'My Connections', to: '/connected', icon: 'connections', kw: 'my connections connected instances' },
+  { label: 'Credential Vault', to: '/vault', icon: 'vault', kw: 'credential vault secrets keys' },
+  { label: 'Administration', to: '/admin', icon: 'admin', kw: 'administration admin settings users' },
 ];
 
 export default function Topbar({ onNotificationToggle, onHelpToggle }) {
   const { theme, toggleTheme } = useTheme();
-  const { user, logout } = useAuth();
   const { toggleMobile } = useContext(SidebarContext);
+  const { unresolvedCount } = useAlerts();
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -101,7 +105,7 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
           key: `${category}:${item.id || item.name}`,
           label: item.name,
           route: categoryRoutes[category] || '/dashboard',
-          icon: categoryIcons[category] || '●',
+          icon: categoryIcons[category] || 'registry',
           focus: { type: category, id: item.id }, // tells the target page which record to open
         }));
       if (matches.length > 0) filteredResults[category] = matches;
@@ -136,10 +140,19 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
   return (
     <div className="topbar">
       <button className="hamburger-btn" onClick={toggleMobile} title="Menu" aria-label="Toggle navigation menu">
-        ☰
+        <Icon name="menu" size={18} />
       </button>
-      <div className="topbar-brand">
-        <svg viewBox="0 0 32 32" fill="none">
+      {/* The brand mark navigates home (the universal convention). It used to call
+          window.location.reload(), which discarded all SPA state and re-downloaded
+          the bundle, and spun 180° in a randomly-chosen direction on hover. */}
+      <button
+        type="button"
+        className="topbar-brand"
+        onClick={() => navigate('/dashboard')}
+        title="Go to Health Dashboard"
+        aria-label="Synapse — go to Health Dashboard"
+      >
+        <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
           <circle cx="6" cy="6" r="4" fill="#6366f1"/>
           <circle cx="26" cy="6" r="4" fill="#818cf8"/>
           <circle cx="16" cy="16" r="5" fill="#6366f1"/>
@@ -155,11 +168,11 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
           <circle cx="21" cy="21" r="1.5" fill="#a5b4fc" opacity=".8"/>
         </svg>
         Synapse
-      </div>
+      </button>
 
       <div className="topbar-center">
         <div className="universal-search" ref={searchRef}>
-          <span className="search-icon-u">&#x1F50D;</span>
+          <span className="search-icon-u"><Icon name="search" size={15} /></span>
           <input
             type="text"
             placeholder="Search integrations, entities, help..."
@@ -185,7 +198,7 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
                     onClick={() => handleResultClick(item)}
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleResultClick(item); } }}
                   >
-                    <span className="sri-icon">{item.icon}</span>
+                    <span className="sri-icon"><Icon name={item.icon} size={16} /></span>
                     {item.label}
                   </div>
                 ))}
@@ -196,22 +209,32 @@ export default function Topbar({ onNotificationToggle, onHelpToggle }) {
       </div>
 
       <div className="topbar-actions">
-        <button className="theme-toggle" onClick={toggleTheme} title="Toggle theme">
-          {theme === 'light' ? '\u263C' : '\u263E'}
+        <button className="theme-toggle" onClick={toggleTheme} title="Toggle theme"
+          aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}>
+          <Icon name={theme === 'light' ? 'sun' : 'moon'} size={17} />
         </button>
-        <button className="icon-btn" onClick={onNotificationToggle} title="Notifications">
-          &#x1F514;
-          <span className="badge-count">3</span>
+        {/* Badge reflects the real unresolved-alert count (AlertsContext) and hides at
+            zero. It was previously a hardcoded literal "3". */}
+        <button
+          className="icon-btn icon-btn--notif"
+          onClick={onNotificationToggle}
+          title={unresolvedCount > 0 ? `Notifications — ${unresolvedCount} unresolved` : 'Notifications'}
+          aria-label={unresolvedCount > 0 ? `Notifications, ${unresolvedCount} unresolved` : 'Notifications'}
+        >
+          <Icon name="bell" size={17} />
+          {unresolvedCount > 0 && (
+            <span className="badge-count">{unresolvedCount > 99 ? '99+' : unresolvedCount}</span>
+          )}
         </button>
-        <button className="icon-btn" onClick={onHelpToggle} title="Help">?</button>
-        <button className="icon-btn" onClick={toggleFullscreen} title={isFullscreen ? 'Exit full screen' : 'Full screen'}>
-          {isFullscreen ? '✖' : '⛶'}
+        <button className="icon-btn icon-btn--help" onClick={onHelpToggle} title="Help" aria-label="Help">
+          <Icon name="help" size={17} />
         </button>
-        <div className="user-menu" title={user?.email}>
-          <div className="user-avatar">{(user?.email || '?').slice(0, 2).toUpperCase()}</div>
-          <span className="user-name">{user?.email || 'Signed out'}{user?.role ? ` · ${user.role}` : ''}</span>
-          <button className="icon-btn" onClick={logout} title="Sign out" style={{ marginLeft: 8 }}>&#x23FB;</button>
-        </div>
+        <button className="icon-btn icon-btn--fs" onClick={toggleFullscreen}
+          title={isFullscreen ? 'Exit full screen' : 'Full screen'}
+          aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}>
+          <Icon name={isFullscreen ? 'collapse' : 'expand'} size={17} />
+        </button>
+        <UserMenu />
       </div>
     </div>
   );

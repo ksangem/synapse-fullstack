@@ -10,6 +10,12 @@ import { api } from '../services/api';
 export function usePolling(integrationId, enabled, { interval = 5000, onUpdate, onTerminal } = {}) {
   const timerRef = useRef(null);
   const stoppedRef = useRef(false);
+  // Latest-callback refs: onUpdate/onTerminal are usually inline lambdas that change every
+  // render. Reading them through refs keeps the poll from restarting on every render — the
+  // effect intentionally re-runs only when integrationId/enabled/interval change.
+  const onUpdateRef = useRef(onUpdate);
+  const onTerminalRef = useRef(onTerminal);
+  useEffect(() => { onUpdateRef.current = onUpdate; onTerminalRef.current = onTerminal; });
 
   useEffect(() => {
     if (!enabled || !integrationId) {
@@ -26,13 +32,13 @@ export function usePolling(integrationId, enabled, { interval = 5000, onUpdate, 
       if (!res.ok || !res.data?.data) return;
 
       const syncState = res.data.data;
-      onUpdate?.(syncState);
+      onUpdateRef.current?.(syncState);
 
       if (syncState.syncStatus === 'COMPLETED' || syncState.syncStatus === 'FAILED') {
         stoppedRef.current = true;
         clearInterval(timerRef.current);
         timerRef.current = null;
-        onTerminal?.(syncState);
+        onTerminalRef.current?.(syncState);
       }
     };
 

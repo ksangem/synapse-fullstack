@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDetailPane } from '../../hooks/useDetailPane';
 import { useToast } from '../../hooks/useToast';
 import { useToolbarAction } from '../../hooks/useToolbarAction';
 import { api } from '../../services/api';
 import { mapToCard, statusLabel } from '../../services/integrationMap';
-import { SkeletonCards } from '../layout/Skeleton';
+import IntegrationCard from './IntegrationCard';
+import { CardSkeleton, CardEmpty } from '../ui/Card';
+import Button from '../ui/Button';
 
 export default function RegistryPage() {
   const navigate = useNavigate();
@@ -17,31 +19,79 @@ export default function RegistryPage() {
   // ── Real data (T-07): load integrations from the backend ──
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [runningId, setRunningId] = useState(null);
+  // Card selection → bulk pause/resume. The Registry previously offered no way to
+  // act on more than one integration at a time even though the API supports it.
+  const [selected, setSelected] = useState(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState(null);
+
+  const load = useCallback(async () => {
+    const res = await api.getConnected();
+    if (!res.ok) showToast(res.data?.error || 'Could not load integrations', 'error');
+    const rows = (res.ok && Array.isArray(res.data?.data)) ? res.data.data : [];
+    setCards(rows.map(mapToCard));
+    return rows.length;
+  }, [showToast]);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       setLoading(true);
-      const res = await api.getConnected();
-      if (!alive) return;
-      if (!res.ok) showToast(res.data?.error || 'Could not load integrations');
-      const rows = (res.ok && Array.isArray(res.data?.data)) ? res.data.data : [];
-      setCards(rows.map(mapToCard));
-      setLoading(false);
+      await load();
+      if (alive) setLoading(false);
     })();
     return () => { alive = false; };
-  }, [showToast]);
+  }, [load]);
+
+  // Run an integration straight from its card, then refresh so the card's health,
+  // last-run stamp and 7-day volume reflect the run that just happened.
+  const handleRun = async (int) => {
+    if (runningId) return;
+    setRunningId(int.id);
+    try {
+      const res = await api.runIntegration(int.id);
+      if (res.ok && res.data?.success !== false) {
+        showToast(`Started “${int.name}”`, 'success');
+        setTimeout(() => { load(); }, 1500);
+      } else {
+        showToast(res.data?.error || `Could not start “${int.name}”`, 'error');
+      }
+    } finally {
+      setRunningId(null);
+    }
+  };
 
   useToolbarAction({
     reg_export: () => {
-      if (cards.length === 0) { showToast('Nothing to export'); return; }
+      if (cards.length === 0) { showToast('Nothing to export', 'warning'); return; }
       const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
       const row = (c) => [c.name, c.status, c.source?.name ?? c.source ?? '', c.target?.name ?? c.dest?.name ?? c.target ?? ''];
       const csv = [['name', 'status', 'source', 'destination'].join(','), ...cards.map((c) => row(c).map(esc).join(','))].join('\n');
       const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
       const a = document.createElement('a'); a.href = url; a.download = 'integrations.csv'; a.click(); URL.revokeObjectURL(url);
-      showToast(`Exported ${cards.length} integration(s)`);
+      showToast(`Exported ${cards.length} integration(s)`, 'success');
     },
+  });
+
+  const bulk = async (action) => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    setBulkBusy(action);
+    const res = await api.bulkConnected(action, ids);
+    if (res.ok && res.data?.success) {
+      showToast(`${action === 'pause' ? 'Paused' : 'Resumed'} ${res.data.data?.updated ?? ids.length} integration(s)`, 'success');
+      setSelected(new Set());
+      await load();
+    } else {
+      showToast(res.data?.error || (res.status === 403 ? 'Bulk actions require admin' : 'Bulk action failed'), 'error');
+    }
+    setBulkBusy(null);
+  };
+
+  const toggleSelect = (id, on) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (on) next.add(id); else next.delete(id);
+    return next;
   });
 
   const filterOptions = ['All', 'Jira', 'SharePoint', 'PostgreSQL', 'SQL Server', 'Active', 'Error'];
@@ -80,10 +130,10 @@ export default function RegistryPage() {
     openDetailPane(
       int.name + ' - Logs',
       <div>
-        <div style={{ fontSize: '.82rem', color: 'var(--text-secondary)', marginBottom: 12 }}>
+        <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)', marginBottom: 12 }}>
           Showing recent push log entries for <strong>{int.name}</strong>
         </div>
-        <div className="json-block" style={{ maxHeight: 400, fontSize: '.72rem' }}>
+        <div className="json-block" style={{ maxHeight: 400, fontSize: 'var(--fs-xs)' }}>
           {pushes.length ? pushes.map((p, i) => (
             <div key={i}>
               [{p.pushedAt ? new Date(p.pushedAt).toLocaleString() : '—'}] {p.status}{' '}
@@ -94,7 +144,7 @@ export default function RegistryPage() {
         </div>
       </div>,
       <>
-        <a className="clickable" onClick={() => navigate('/registry')}>Registry</a> &raquo; {int.name} &raquo; Logs
+        <button type="button" className="link-btn" onClick={() => navigate('/registry')}>Registry</button> &raquo; {int.name} &raquo; Logs
       </>
     );
   };
@@ -112,32 +162,32 @@ export default function RegistryPage() {
       <div>
         <div className="grid-2 mb-16">
           <div>
-            <div style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>Status</div>
+            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Status</div>
             <span className={`badge badge-${statusClass}`}>{statusLabel(int.status)}</span>
           </div>
           <div>
-            <div style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>Schedule</div>
-            <span style={{ fontSize: '.85rem' }}>{int.schedule || 'Manual / on-demand'}</span>
+            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Schedule</div>
+            <span style={{ fontSize: 'var(--fs-base)' }}>{int.schedule || 'Manual / on-demand'}</span>
           </div>
           <div>
-            <div style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>Route</div>
-            <span style={{ fontSize: '.85rem' }}>{int.route}</span>
+            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Route</div>
+            <span style={{ fontSize: 'var(--fs-base)' }}>{int.route}</span>
           </div>
           <div>
-            <div style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>Created</div>
-            <span style={{ fontSize: '.85rem' }}>
+            <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Created</div>
+            <span style={{ fontSize: 'var(--fs-base)' }}>
               {int.createdAt ? new Date(int.createdAt).toLocaleDateString() : '—'}
             </span>
           </div>
         </div>
 
-        <div style={{ fontWeight: 600, fontSize: '.85rem', marginBottom: 8 }}>Configuration</div>
+        <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-base)', marginBottom: 8 }}>Configuration</div>
         <table className="mb-16">
-          <thead><tr><th>Field</th><th>Value</th></tr></thead>
+          <thead><tr><th scope="col">Field</th><th scope="col">Value</th></tr></thead>
           <tbody>
             {mappingRows.length ? mappingRows.map(([k, v]) => (
               <tr key={k}>
-                <td className="clickable">{k}</td>
+                <td>{k}</td>
                 <td>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</td>
               </tr>
             )) : (
@@ -146,10 +196,10 @@ export default function RegistryPage() {
           </tbody>
         </table>
 
-        <div style={{ fontWeight: 600, fontSize: '.85rem', marginBottom: 8 }}>Recent Runs</div>
+        <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-base)', marginBottom: 8 }}>Recent Runs</div>
         <table>
           <thead>
-            <tr><th>Timestamp</th><th>Records</th><th>Type</th><th>Status</th></tr>
+            <tr><th scope="col">Timestamp</th><th scope="col">Records</th><th scope="col">Type</th><th scope="col">Status</th></tr>
           </thead>
           <tbody>
             {pushes.length ? pushes.map((p, i) => {
@@ -173,7 +223,7 @@ export default function RegistryPage() {
         </div>
       </div>,
       <>
-        <a className="clickable" onClick={() => navigate('/registry')}>Integration Registry</a> &raquo; {int.name}
+        <button type="button" className="link-btn" onClick={() => navigate('/registry')}>Integration Registry</button> &raquo; {int.name}
       </>
     );
   };
@@ -182,22 +232,22 @@ export default function RegistryPage() {
     <div className="page active">
       <div className="page-header">
         <div>
-          <div className="page-title">Integration Registry</div>
+          <h1 className="page-title">Integration Registry</h1>
           <div className="page-subtitle">
-            All deployed adapters and integrations
+            All deployed integrations
             {!loading && <span className="badge badge-success" style={{ marginLeft: 8 }}>Live</span>}
           </div>
         </div>
         <button className="btn btn-primary btn-sm" onClick={() => navigate('/wizard')}>+ New Integration</button>
       </div>
 
-      <div className="page-body">
+      <div className="page-body fit">
       <div className="flex gap-12 mb-16" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
         <div className="search-bar">
           <span className="search-icon">&#128269;</span>
           <input
             type="text"
-            placeholder="Search integrations..."
+            aria-label="Search integrations" placeholder="Search integrations..."
             style={{ width: 300 }}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -205,64 +255,69 @@ export default function RegistryPage() {
         </div>
         <div className="filter-chips">
           {filterOptions.map((f) => (
-            <span
+            <button
               key={f}
+              type="button"
               className={`chip${activeFilters.includes(f) ? ' active' : ''}`}
+              aria-pressed={activeFilters.includes(f)}
               onClick={() => handleFilterClick(f)}
             >
               {f}
-            </span>
+            </button>
           ))}
         </div>
       </div>
 
+      {/* Selection bar — appears only once something is selected, so the resting
+          page is unchanged. */}
+      {selected.size > 0 && (
+        <div className="bulk-bar" role="region" aria-label="Bulk actions">
+          <strong>{selected.size}</strong> selected
+          <button type="button" className="link-btn" onClick={() => setSelected(new Set(filteredIntegrations.map((i) => i.id)))}>
+            Select all {filteredIntegrations.length}
+          </button>
+          <button type="button" className="link-btn" onClick={() => setSelected(new Set())}>Clear</button>
+          <span style={{ flex: 1 }} />
+          <Button className="btn btn-outline btn-sm" loading={bulkBusy === 'pause'} loadingLabel="Pausing"
+            disabled={!!bulkBusy} onClick={() => bulk('pause')}>Pause</Button>
+          <Button className="btn btn-outline btn-sm" loading={bulkBusy === 'resume'} loadingLabel="Resuming"
+            disabled={!!bulkBusy} onClick={() => bulk('resume')}>Resume</Button>
+        </div>
+      )}
+
       {loading ? (
-        <SkeletonCards count={6} />
+        /* Card-shaped skeletons inside the real grid, so arriving content does not
+           reflow the page — the previous generic block had a different shape. */
+        <div className="fit-scroll ucard-grid"><CardSkeleton count={8} /></div>
       ) : filteredIntegrations.length === 0 ? (
-        <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)' }}>
-          No integrations match your filters. <a className="clickable" onClick={() => navigate('/wizard')}>Create one →</a>
+        <div className="fit-scroll ucard-grid">
+          <CardEmpty
+            title={cards.length === 0 ? 'No integrations yet' : 'Nothing matches those filters'}
+            action={cards.length === 0
+              ? <button type="button" className="btn btn-primary btn-sm" onClick={() => navigate('/wizard')}>Create one →</button>
+              : <button type="button" className="btn btn-outline btn-sm" onClick={() => { setSearchTerm(''); setActiveFilters(['All']); }}>Clear filters</button>}
+          >
+            {cards.length === 0
+              ? 'Connect a source to a destination in the Connection Wizard to see it here.'
+              : `${cards.length} integration${cards.length === 1 ? '' : 's'} exist, but none match the current search or filters.`}
+          </CardEmpty>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }}>
-          {filteredIntegrations.map((int, idx) => {
-            const statusClass = int.status === 'red' ? 'error' : int.status === 'amber' ? 'warning' : 'success';
-            const maxSpark = Math.max(...int.sparkData, 1);
-
-            return (
-              <div key={int.id || idx} className="card integration-card" onClick={() => handleCardClick(int)}>
-                <div className="int-header">
-                  <span
-                    className={`status-dot ${int.status}`}
-                    onClick={(e) => { e.stopPropagation(); handleCardClick(int); }}
-                  ></span>
-                  <span className="int-name">{int.name}</span>
-                </div>
-                <div style={{ fontSize: '.72rem', color: 'var(--text-dim)', marginBottom: 6 }}>{int.route}</div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span className={`badge badge-${statusClass}`}>{statusLabel(int.status)}</span>
-                  <span style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>{int.dept}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 10 }}>
-                  <div className="sparkline" onClick={(e) => e.stopPropagation()}>
-                    {int.sparkData.map((v, i) => (
-                      <div
-                        key={i}
-                        className="bar"
-                        style={{ height: `${(v / maxSpark) * 100}%` }}
-                      ></div>
-                    ))}
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '.85rem', fontWeight: 600 }}>{int.msgsLabel ?? int.msgs}</div>
-                    <div style={{ fontSize: '.68rem', color: 'var(--text-dim)' }}>records</div>
-                  </div>
-                </div>
-                <div className="int-meta">
-                  <span>Last: {int.lastRun}</span>
-                </div>
-              </div>
-            );
-          })}
+        <div className="fit-scroll ucard-grid">
+          {filteredIntegrations.map((int, idx) => (
+            <IntegrationCard
+              key={int.id || idx}
+              /* Stagger capped at 12 — past that the tail feels like lag, not choreography. */
+              style={{ '--i': Math.min(idx, 12) }}
+              int={int}
+              running={runningId === int.id}
+              selected={selected.has(int.id)}
+              onSelect={(on) => toggleSelect(int.id, on)}
+              onOpen={handleCardClick}
+              onRun={handleRun}
+              onLogs={handleShowLogs}
+            />
+          ))}
         </div>
       )}
       </div>

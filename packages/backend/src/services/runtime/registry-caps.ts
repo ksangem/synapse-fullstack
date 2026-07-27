@@ -21,7 +21,11 @@ export const DEFAULT_CAPS: RuntimeCapabilities = {
 export const CAPABILITIES: Record<string, RuntimeCapabilities> = {
   jira: { ...DEFAULT_CAPS, scopeLabel: 'Project', supportsDateWindow: true, role: 'source' },
   sharepoint: { ...DEFAULT_CAPS, pushIsAsync: true, role: 'both' },
-  database: { ...DEFAULT_CAPS, entitySelectionMode: 'pick-or-create', hasDdlPreview: true, hasQuickView: true, canTestAtDesignTime: false, role: 'destination' },
+  // role 'both': DatabaseRuntime implements a real paged/keyset `fetch`, so a table can be
+  // a bus SOURCE as well as a destination. This declaration is what makes it runnable —
+  // register-connectors registers the generic source for every pull-capable reader, so
+  // nothing anywhere names "database".
+  database: { ...DEFAULT_CAPS, entitySelectionMode: 'pick-or-create', hasDdlPreview: true, hasQuickView: true, canTestAtDesignTime: false, role: 'both' },
   rest: { ...DEFAULT_CAPS, role: 'both' },
   generic: { ...DEFAULT_CAPS, role: 'both' },
   graphql: { ...DEFAULT_CAPS, role: 'both' },

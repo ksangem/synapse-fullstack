@@ -1,15 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../../services/api';
+import Button from '../ui/Button';
 import { useToast } from '../../hooks/useToast';
 import { SkeletonLines } from '../layout/Skeleton';
 
 // Dead Letter Queue panel (T-04 manual replay). Lists real dead-lettered
 // messages and lets an operator replay them — single row or all at once.
-export default function DeadLetterPanel() {
+export default function DeadLetterPanel({ fill = false }) {
   const { showToast } = useToast();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  // Which async action is in flight — a single `busy` flag made every button in the
+  // panel show a spinner, so clicking "Replay all" also claimed to be "Refreshing".
+  const [busyAction, setBusyAction] = useState(null); // null | 'all' | `one:${id}`
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [query, setQuery] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -18,6 +23,7 @@ export default function DeadLetterPanel() {
     setLoading(false);
   }, []);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- loads data on mount via a reusable async loader (data fetch, not derived-state-in-effect)
   useEffect(() => { load(); }, [load]);
 
   const outcomeToast = (result) => {
@@ -28,20 +34,20 @@ export default function DeadLetterPanel() {
   };
 
   const replayOne = async (id) => {
-    setBusy(true);
+    setBusyAction(`one:${id}`);
     const res = await api.replayDeadLetter(id);
     outcomeToast(res.data?.data?.result);
     await load();
-    setBusy(false);
+    setBusyAction(null);
   };
 
   const replayAll = async () => {
-    setBusy(true);
+    setBusyAction('all');
     const res = await api.replayAllDeadLetters();
     const s = res.data?.data;
     showToast(s ? `Replay done — ${s.resolved} resolved, ${s.retried} retried, ${s.poisoned} poisoned` : 'Replay failed', 'info');
     await load();
-    setBusy(false);
+    setBusyAction(null);
   };
 
   const statusBadge = (s) =>
@@ -49,21 +55,49 @@ export default function DeadLetterPanel() {
 
   const replayable = rows.filter((r) => r.status === 'failed');
 
+  // Client-side filtering (bus/DLQ core untouched — this only narrows the displayed list).
+  const q = query.trim().toLowerCase();
+  const visible = rows.filter((r) => {
+    if (statusFilter !== 'All' && r.status !== statusFilter) return false;
+    if (q && !`${r.topic} ${r.destConnectorId} ${r.error}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+
   return (
-    <div className="card" style={{ marginBottom: 20, padding: 16 }}>
+    <div className={`dlq-panel${fill ? ' dlq-fill' : ''}`} style={{ marginBottom: fill ? 0 : 20 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: '1.05rem' }}>&#9760;</span>
-          <span style={{ fontWeight: 700, fontSize: '.95rem' }}>Dead Letter Queue</span>
-          <span className={`badge ${replayable.length ? 'badge-warning' : 'badge-success'}`} style={{ fontSize: '.7rem' }}>
+          <span style={{ fontSize: 'var(--fs-md)' }}>&#9760;</span>
+          <span style={{ fontWeight: 'var(--fw-bold)', fontSize: 'var(--fs-md)' }}>Dead Letter Queue</span>
+          <span className={`badge ${replayable.length ? 'badge-warning' : 'badge-success'}`} style={{ fontSize: 'var(--fs-xs)' }}>
             {replayable.length} replayable
           </span>
         </div>
         <div className="flex gap-8">
-          <button className="btn btn-ghost btn-sm" onClick={load} disabled={busy} title="Refresh">&#8635; Refresh</button>
-          <button className="btn btn-primary btn-sm" onClick={replayAll} disabled={busy || replayable.length === 0}>&#9654; Replay all</button>
+          <Button className="btn btn-ghost btn-sm" onClick={load} loading={loading} loadingLabel="Refreshing" disabled={!!busyAction} title="Refresh">&#8635; Refresh</Button>
+          <Button className="btn btn-primary btn-sm" onClick={replayAll} loading={busyAction === 'all'} loadingLabel="Replaying" disabled={!!busyAction || replayable.length === 0}>&#9654; Replay all</Button>
         </div>
       </div>
+
+      {rows.length > 0 && (
+        <div className="flex gap-8 items-center mb-12" style={{ flexWrap: 'wrap' }}>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ minWidth: 130 }}>
+            <option value="All">All statuses</option>
+            <option value="failed">Failed</option>
+            <option value="poisoned">Poisoned</option>
+            <option value="done">Done</option>
+            <option value="processing">Processing</option>
+          </select>
+          <input
+            type="text" value={query} onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search topic / destination / error"
+            style={{ minWidth: 240, flex: 1 }}
+          />
+          {(statusFilter !== 'All' || query) && (
+            <button className="btn btn-ghost btn-sm" onClick={() => { setStatusFilter('All'); setQuery(''); }}>Clear</button>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <div style={{ padding: 16 }}><SkeletonLines lines={3} /></div>
@@ -76,31 +110,36 @@ export default function DeadLetterPanel() {
           <table>
             <thead>
               <tr>
-                <th>Time</th><th>Topic</th><th>Destination</th><th>Error</th><th>Retries</th><th>Status</th><th></th>
+                <th scope="col">Time</th><th scope="col">Topic</th><th scope="col">Destination</th><th scope="col">Error</th><th scope="col">Retries</th><th scope="col">Status</th><th scope="col"></th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {visible.length === 0 && (
+                <tr><td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-dim)', padding: 16 }}>No messages match the filter.</td></tr>
+              )}
+              {visible.map((r) => (
                 <tr key={r.id} style={{ borderLeft: r.status === 'failed' ? '3px solid var(--warning)' : undefined }}>
-                  <td style={{ fontFamily: 'monospace', fontSize: '.75rem', color: 'var(--text-dim)' }}>
+                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>
                     {new Date(r.createdAt).toLocaleString()}
                   </td>
-                  <td style={{ fontSize: '.8rem' }}>{r.topic}</td>
-                  <td style={{ fontSize: '.8rem' }}>{r.destConnectorId}</td>
-                  <td style={{ fontSize: '.78rem', color: 'var(--error)', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.error}>
+                  <td style={{ fontSize: 'var(--fs-sm)' }}>{r.topic}</td>
+                  <td style={{ fontSize: 'var(--fs-sm)' }}>{r.destConnectorId}</td>
+                  <td style={{ fontSize: 'var(--fs-sm)', color: 'var(--error-on)', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.error}>
                     {r.error}
                   </td>
                   <td style={{ textAlign: 'center' }}>{r.retryCount}</td>
                   <td><span className={`badge ${statusBadge(r.status)}`}>{r.status}</span></td>
                   <td>
-                    <button
+                    <Button
                       className="btn btn-sm btn-primary"
-                      style={{ fontSize: '.7rem', padding: '2px 8px' }}
-                      disabled={busy || r.status !== 'failed'}
+                      style={{ fontSize: 'var(--fs-xs)', padding: '2px 8px' }}
+                      loading={busyAction === `one:${r.id}`}
+                      loadingLabel="Replaying"
+                      disabled={!!busyAction || r.status !== 'failed'}
                       onClick={() => replayOne(r.id)}
                     >
                       &#9654; Replay
-                    </button>
+                    </Button>
                   </td>
                 </tr>
               ))}

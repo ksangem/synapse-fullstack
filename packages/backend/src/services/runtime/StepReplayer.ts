@@ -8,6 +8,7 @@
  * Operator fetch (replay mode).
  */
 import { extractRecords, extractJsonRecords, type JsonSource } from './CrawlEngine';
+import { launchBrowser, type BrowserEngine } from './browserEngine';
 import type { FieldRule } from './fieldTransform';
 import type { StorageState } from './BrowserSessionService';
 import type { RecordedStep } from './BrowserStreamService';
@@ -41,6 +42,8 @@ export interface ReplayOptions {
   stepTimeoutMs?: number;
   /** Politeness: minimum gap between steps (operator runs slower than the recording). */
   paceMs?: number;
+  /** Browser engine to replay in (defaults to chromium). */
+  engine?: BrowserEngine;
 }
 
 export interface ReplayResult {
@@ -54,13 +57,11 @@ const DEFAULT_STEP_TIMEOUT = 30_000;
 
 export class StepReplayer {
   async replay(opts: ReplayOptions): Promise<ReplayResult> {
-    const mod = await import('playwright');
-    const chromium = (mod as { chromium: { launch(o: unknown): Promise<PwBrowser> } }).chromium;
     const timeout = opts.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT;
     const errors: string[] = [];
     let stepsRun = 0;
 
-    const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+    const browser = await launchBrowser<PwBrowser>(opts.engine ?? 'chromium', { headless: true });
     try {
       const context = await browser.newContext({
         viewport: { width: 1280, height: 800 },

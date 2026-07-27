@@ -1,13 +1,21 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDetailPane } from '../../hooks/useDetailPane';
 import { useToast } from '../../hooks/useToast';
 import { useToolbarAction } from '../../hooks/useToolbarAction';
 import { api } from '../../services/api';
-import { mapToCard, computeKpis, statusLabel } from '../../services/integrationMap';
+import { mapToCard, computeKpis, statusLabel, nextRunFromCron, relativeTime } from '../../services/integrationMap';
 import { Skeleton, SkeletonCards } from '../layout/Skeleton';
+import { OutcomesChart, VolumeChart } from './ActivityCharts';
+import NeedsAttentionPanel from './NeedsAttentionPanel';
+import Card from '../ui/Card';
+import { useCountUp } from '../../hooks/useCountUp';
+import { clickable } from '../../utils/clickable';
 
-function AdapterDetailContent({ tile }) {
+// Sampled to classify causes; the TRUE queue size comes from the API's `counts`.
+const DLQ_SAMPLE = 500;
+
+function IntegrationDetailContent({ tile }) {
   const pushes = tile.recentPushes || [];
   const color = tile.status;
 
@@ -15,29 +23,29 @@ function AdapterDetailContent({ tile }) {
     <>
       <div className="grid-2 mb-16">
         <div>
-          <div style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>Source</div>
-          <span style={{ fontSize: '.85rem' }}>{tile.src}</span>
+          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Source</div>
+          <span style={{ fontSize: 'var(--fs-base)' }}>{tile.src}</span>
         </div>
         <div>
-          <div style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>Destination</div>
-          <span style={{ fontSize: '.85rem' }}>{tile.dest}</span>
+          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Destination</div>
+          <span style={{ fontSize: 'var(--fs-base)' }}>{tile.dest}</span>
         </div>
         <div>
-          <div style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>Status</div>
+          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Status</div>
           <span className={`badge badge-${color === 'red' ? 'error' : color === 'amber' ? 'warning' : 'success'}`}>
             {statusLabel(color)}
           </span>
         </div>
         <div>
-          <div style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>Records (recent)</div>
-          <span style={{ fontSize: '.85rem' }}>{(tile.msgs || 0).toLocaleString()}</span>
+          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Records (recent)</div>
+          <span style={{ fontSize: 'var(--fs-base)' }}>{(tile.msgs || 0).toLocaleString()}</span>
         </div>
       </div>
 
-      <div style={{ fontWeight: 600, fontSize: '.85rem', marginBottom: 8 }}>Recent Runs</div>
+      <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-base)', marginBottom: 8 }}>Recent Runs</div>
       <table className="mb-16">
         <thead>
-          <tr><th>Timestamp</th><th>Records</th><th>Type</th><th>Status</th></tr>
+          <tr><th scope="col">Timestamp</th><th scope="col">Records</th><th scope="col">Type</th><th scope="col">Status</th></tr>
         </thead>
         <tbody>
           {pushes.length ? pushes.map((p, i) => {
@@ -58,44 +66,89 @@ function AdapterDetailContent({ tile }) {
 
       {color === 'red' && pushes[0]?.errorMessage && (
         <>
-          <div style={{ fontWeight: 600, fontSize: '.85rem', marginBottom: 8 }}>Last Error</div>
-          <div className="json-block mb-16" style={{ fontSize: '.75rem', maxHeight: 120 }}>
-            <span style={{ color: 'var(--error)' }}>{pushes[0].errorMessage}</span>
+          <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-base)', marginBottom: 8 }}>Last Error</div>
+          <div className="json-block mb-16" style={{ fontSize: 'var(--fs-xs)', maxHeight: 120 }}>
+            <span style={{ color: 'var(--error-on)' }}>{pushes[0].errorMessage}</span>
           </div>
         </>
       )}
 
-      <div style={{ fontWeight: 600, fontSize: '.85rem', marginBottom: 8 }}>Config Summary</div>
+      <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-base)', marginBottom: 8 }}>Config Summary</div>
       <div className="grid-2 mb-16">
         <div>
-          <div style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>Schedule</div>
-          <span style={{ fontSize: '.85rem' }}>{tile.schedule || 'Manual / on-demand'}</span>
+          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Schedule</div>
+          <span style={{ fontSize: 'var(--fs-base)' }}>{tile.schedule || 'Manual / on-demand'}</span>
+          {(() => {
+            const nr = tile.schedule ? nextRunFromCron(tile.schedule) : null;
+            return nr ? <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginTop: 2 }}>Next run: {new Date(nr).toLocaleString()}</div> : null;
+          })()}
         </div>
         <div>
-          <div style={{ fontSize: '.75rem', color: 'var(--text-dim)' }}>Project / List</div>
-          <span style={{ fontSize: '.85rem' }}>{tile.dept}</span>
+          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Project / List</div>
+          <span style={{ fontSize: 'var(--fs-base)' }}>{tile.dept}</span>
         </div>
       </div>
     </>
   );
 }
 
-// Lightweight bar chart from a numeric series (real push data).
-function MiniBars({ series, color = '#6366f1', empty }) {
-  if (!series.length || series.every((v) => v === 0)) {
-    return <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', fontSize: '.78rem' }}>{empty}</div>;
-  }
-  const max = Math.max(...series, 1);
-  const w = 500 / series.length;
+
+
+
+/* Dashboard leads with these figures, so they count up once on arrival. Deliberately
+   NOT used for anything that refreshes often — a ticker on a fast-changing number
+   reads as instability rather than as the value landing. */
+function KpiNumber({ value }) {
+  const n = useCountUp(Number(value) || 0);
+  return <>{n.toLocaleString()}</>;
+}
+
+/* Dashboard health tile — the compact form of the shared card.
+
+   It previously showed a status dot fed by `integration.status`, which is 'active'
+   for every integration, plus a pre-baked `meta` string. So a healthy integration
+   and one whose last run failed looked identical, and the Dashboard disagreed with
+   the Registry about the same record. Both now read `health` from the real last-run
+   outcome and show the same 7-day figure. */
+function HealthTile({ tile, onOpen, style }) {
+  const h = tile.health === 'failing'
+    ? { status: 'fail', label: 'Failing' }
+    : tile.health === 'never'
+      ? { status: 'idle', label: 'Never run' }
+      : { status: 'ok', label: 'Healthy' };
   return (
-    <svg width="100%" height="120" viewBox="0 0 500 120" preserveAspectRatio="none">
-      {series.map((v, i) => {
-        const h = (v / max) * 100;
-        return <rect key={i} x={i * w + 2} y={120 - h} width={w - 4} height={h} rx="2" fill={color} opacity="0.7" />;
-      })}
-    </svg>
+    <Card
+      interactive
+      style={style}
+      className="ucard--compact"
+      status={h.status}
+      eyebrow={h.label}
+      title={tile.name}
+      onOpen={() => onOpen(tile)}
+      ariaLabel={`${tile.name}, ${h.label}, ${tile.route}`}
+      sub={
+        <>
+          <span className="ucard-node"><span className="ucard-ico" aria-hidden="true">{tile.srcIcon}</span>{tile.src}</span>
+          <span className="ucard-arrow" aria-hidden="true">&rarr;</span>
+          <span className="ucard-node"><span className="ucard-ico" aria-hidden="true">{tile.destIcon}</span>{tile.dest}</span>
+        </>
+      }
+      foot={
+        <>
+          <span className={`int-when int-when--${tile.lastRunAt ? 'recent' : 'none'}`}>
+            {tile.lastRunAt ? relativeTime(tile.lastRunAt) : 'never run'}
+          </span>
+          <span className="int-meta">
+            <span>{(tile.records7d ?? 0).toLocaleString()} rec · 7d</span>
+          </span>
+        </>
+      }
+    />
   );
 }
+
+// Dashboard time-range dropdown → hours passed to the backend for filtering runs.
+const WINDOW_HOURS = { 'Last 24 hours': 24, 'Last 7 days': 168, 'Last 30 days': 720 };
 
 export default function DashboardPage() {
   const navigate = useNavigate();
@@ -104,18 +157,46 @@ export default function DashboardPage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [timeRange, setTimeRange] = useState('Last 24 hours');
 
+  // Adapter Health row: scroll by ~80% of the visible width per arrow click.
+  const adapterRowRef = useRef(null);
+  const scrollAdapters = (dir) => {
+    const el = adapterRowRef.current;
+    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: 'smooth' });
+  };
+
   // ── Real data (T-07) ──
   const [cards, setCards] = useState([]);
   const [kpis, setKpis] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Dead-letter queue — drives the "Needs attention" panel and its KPI tile.
+  const [dlq, setDlq] = useState({ entries: [], total: 0, loading: true, error: null });
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const res = await api.getDeadLetters(DLQ_SAMPLE);
+      if (!alive) return;
+      if (res.ok && res.data?.success) {
+        setDlq({
+          entries: res.data.data || [],
+          total: res.data.counts?.unresolved ?? (res.data.data || []).filter((e) => e.status !== 'done').length,
+          loading: false,
+          error: null,
+        });
+      } else {
+        setDlq({ entries: [], total: 0, loading: false, error: 'Could not read the dead-letter queue.' });
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       setLoading(true);
-      const res = await api.getConnected();
+      const res = await api.getConnected(`?windowHours=${WINDOW_HOURS[timeRange] || 24}`);
       if (!alive) return;
-      if (!res.ok) showToast(res.data?.error || 'Could not load dashboard data');
+      if (!res.ok) showToast(res.data?.error || 'Could not load dashboard data', 'error');
       const rows = (res.ok && Array.isArray(res.data?.data)) ? res.data.data : [];
       const mapped = rows.map(mapToCard);
       setCards(mapped);
@@ -123,23 +204,23 @@ export default function DashboardPage() {
       setLoading(false);
     })();
     return () => { alive = false; };
-  }, [showToast]);
+  }, [showToast, timeRange]);
 
   // Toolbar actions — self-contained (fetch live ids, then act) so they don't depend
   // on the dashboard's display state.
   const bulkAll = async (action) => {
     const res = await api.getConnected();
     const ids = (res.ok && Array.isArray(res.data?.data)) ? res.data.data.map((i) => i.integrationId) : [];
-    if (ids.length === 0) { showToast('No connections'); return; }
+    if (ids.length === 0) { showToast('No connections', 'warning'); return; }
     const r = await api.bulkConnected(action, ids);
-    if (r.ok && r.data?.success) showToast(`${action === 'pause' ? 'Paused' : 'Resumed'} ${r.data.data?.updated ?? ids.length} connection(s)`);
-    else showToast(r.data?.error || (r.status === 403 ? 'Bulk actions require admin' : 'Action failed'));
+    if (r.ok && r.data?.success) showToast(`${action === 'pause' ? 'Paused' : 'Resumed'} ${r.data.data?.updated ?? ids.length} connection(s)`, 'success');
+    else showToast(r.data?.error || (r.status === 403 ? 'Bulk actions require admin' : 'Action failed'), 'error');
   };
   useToolbarAction({
     dash_pauseAll: () => bulkAll('pause'),
     dash_resumeAll: () => bulkAll('resume'),
     dash_export: () => {
-      if (cards.length === 0) { showToast('Nothing to export'); return; }
+      if (cards.length === 0) { showToast('Nothing to export', 'warning'); return; }
       const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
       const csv = [['name', 'status'].join(','), ...cards.map((c) => [esc(c.name), esc(c.status)].join(','))].join('\n');
       const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
@@ -160,29 +241,24 @@ export default function DashboardPage() {
   const handleTileClick = (tile) => {
     openDetailPane(
       tile.name,
-      <AdapterDetailContent tile={tile} />,
+      <IntegrationDetailContent tile={tile} />,
       <>
-        <a className="clickable" onClick={() => navigate('/dashboard')}>Dashboard</a> &raquo; {tile.name}
+        <button type="button" className="link-btn" onClick={() => navigate('/dashboard')}>Dashboard</button> &raquo; {tile.name}
       </>
     );
   };
 
-  // Real push series for the charts (newest pushes across all integrations).
+  // Every push across all integrations — the charts bucket these by time themselves.
   const allPushes = cards.flatMap((c) => c.recentPushes || []);
-  const volumeSeries = allPushes
-    .slice()
-    .sort((a, b) => new Date(a.pushedAt || 0) - new Date(b.pushedAt || 0))
-    .map((p) => Number(p.recordCount) || 0);
-  const errorSeries = allPushes
-    .slice()
-    .sort((a, b) => new Date(a.pushedAt || 0) - new Date(b.pushedAt || 0))
-    .map((p) => (p.status === 'FAILED' ? 1 : p.status === 'PARTIAL' ? 0.5 : 0));
+  const windowHours = WINDOW_HOURS[timeRange] || 24;
+  // Stuck messages + integrations in an error state. Paused is excluded — see the KPI tile.
+  const needsAttention = (dlq.total || 0) + (kpis?.errored || 0);
 
   return (
     <div className="page active">
       <div className="page-header">
         <div>
-          <div className="page-title">Health Dashboard</div>
+          <h1 className="page-title">Health Dashboard</h1>
           <div className="page-subtitle">
             Real-time platform overview
             {!loading && <span className="badge badge-success" style={{ marginLeft: 8 }}>Live</span>}
@@ -190,7 +266,8 @@ export default function DashboardPage() {
         </div>
         <div className="flex gap-8">
           <select
-            style={{ padding: '4px 8px', fontSize: '.8rem' }}
+            aria-label="Dashboard time range"
+            style={{ padding: '4px 8px', fontSize: 'var(--fs-sm)' }}
             value={timeRange}
             onChange={(e) => setTimeRange(e.target.value)}
           >
@@ -201,10 +278,10 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="page-body">
+      <div className="page-body fit">
       {/* KPI Row */}
       {loading ? (
-        <div className="grid-4 mb-20">
+        <div className="grid-4 mb-16">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="card kpi-card">
               <Skeleton h={30} w={90} style={{ margin: '4px 0' }} />
@@ -214,25 +291,25 @@ export default function DashboardPage() {
           ))}
         </div>
       ) : (
-      <div className="grid-4 mb-20">
+      <div className="grid-4 mb-16">
         <div className="card kpi-card">
           <div className="kpi-icon">&#9881;</div>
-          <div className="kpi-value" onClick={() => navigate('/registry')}>{kpis ? kpis.total : '—'}</div>
-          <div className="kpi-label">Total Adapters</div>
+          <div className="kpi-value" {...clickable(() => navigate('/registry'), { label: 'View all integrations' })}>{kpis ? <KpiNumber value={kpis.total} /> : '—'}</div>
+          <div className="kpi-label">Total Integrations</div>
           <div className="kpi-sub">
-            <span onClick={() => navigate('/registry')}><span className="status-dot green"></span> {kpis ? kpis.active : 0} active</span>
-            <span onClick={() => navigate('/registry')}><span className="status-dot amber"></span> {kpis ? kpis.paused : 0} paused</span>
-            <span onClick={() => navigate('/registry')}><span className="status-dot red"></span> {kpis ? kpis.errored : 0} error</span>
+            <span {...clickable(() => navigate('/registry'))}><span className="status-dot green"></span> {kpis ? kpis.active : 0} active</span>
+            <span {...clickable(() => navigate('/registry'))}><span className="status-dot amber"></span> {kpis ? kpis.paused : 0} paused</span>
+            <span {...clickable(() => navigate('/registry'))}><span className="status-dot red"></span> {kpis ? kpis.errored : 0} error</span>
           </div>
         </div>
         <div className="card kpi-card">
           <div className="kpi-icon">&#9993;</div>
-          <div className="kpi-value" onClick={() => navigate('/monitor')}>{kpis ? kpis.recordsSynced.toLocaleString() : '—'}</div>
+          <div className="kpi-value" {...clickable(() => navigate('/monitor'), { label: 'View records in the Message Monitor' })}>{kpis ? <KpiNumber value={kpis.recordsSynced} /> : '—'}</div>
           <div className="kpi-label">Records Synced</div>
           <div className="kpi-sub">
-            <span style={{ color: 'var(--success)' }}>&#9650; {kpis ? kpis.pushOk : 0} ok</span>
-            <span style={{ color: 'var(--info)' }}>&#9660; {kpis ? kpis.pushPartial : 0} partial</span>
-            <span style={{ color: 'var(--error)' }}>&#9888; {kpis ? kpis.pushFailed : 0} failed</span>
+            <span style={{ color: 'var(--success-on)' }}>&#9650; {kpis ? kpis.pushOk : 0} ok</span>
+            <span style={{ color: 'var(--info-on)' }}>&#9660; {kpis ? kpis.pushPartial : 0} partial</span>
+            <span style={{ color: 'var(--error-on)' }}>&#9888; {kpis ? kpis.pushFailed : 0} failed</span>
           </div>
         </div>
         <div className="card kpi-card">
@@ -240,93 +317,100 @@ export default function DashboardPage() {
           <div className="kpi-value">{kpis ? (kpis.successRate === null ? '—' : `${kpis.successRate}%`) : '—'}</div>
           <div className="kpi-label">Push Success Rate</div>
           <div className="kpi-sub">
-            <span style={{ color: 'var(--success)' }}>{kpis ? `${kpis.pushOk + kpis.pushPartial}/${kpis.pushOk + kpis.pushPartial + kpis.pushFailed} pushes ok` : ''}</span>
+            <span style={{ color: 'var(--success-on)' }}>{kpis ? `${kpis.pushOk + kpis.pushPartial}/${kpis.pushOk + kpis.pushPartial + kpis.pushFailed} pushes ok` : ''}</span>
           </div>
         </div>
+        {/* Counts stuck messages + errored integrations. It previously counted
+            errored + PAUSED integrations, so it read 0 while thousands of messages
+            sat undelivered in the dead-letter queue — directly contradicting the
+            critical banner. Pausing is a deliberate operator choice, not a fault,
+            so it is reported on the Total Integrations tile instead. */}
         <div className="card kpi-card">
           <div className="kpi-icon">&#9888;</div>
-          <div className="kpi-value" style={{ color: 'var(--warning)' }} onClick={() => navigate('/alerts')}>{kpis ? kpis.alerts : 0}</div>
+          <div
+            className="kpi-value"
+            style={{ color: needsAttention > 0 ? 'var(--warning-on)' : undefined }}
+            {...clickable(() => navigate(dlq.total > 0 ? '/monitor' : '/alerts'), { label: 'View items needing attention' })}
+          >
+            {dlq.loading && !kpis ? '—' : <KpiNumber value={needsAttention} />}
+          </div>
           <div className="kpi-label">Needs Attention</div>
           <div className="kpi-sub">
-            <span onClick={() => navigate('/alerts')} style={{ color: 'var(--error)' }}>{kpis ? kpis.errored : 0} error</span>
-            <span onClick={() => navigate('/alerts')} style={{ color: 'var(--warning)' }}>{kpis ? kpis.paused : 0} paused</span>
+            <span {...clickable(() => navigate('/monitor'))}>{dlq.loading ? '…' : `${dlq.total.toLocaleString()} stuck`}</span>
+            <span {...clickable(() => navigate('/alerts'))}>{kpis ? kpis.errored : 0} error</span>
           </div>
         </div>
       </div>
       )}
 
-      {/* Adapter Health Grid */}
+      {/* Integration Health Grid */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <div style={{ fontWeight: 700, fontSize: '.95rem' }}>Adapter Health</div>
-        <a className="clickable" style={{ fontSize: '.78rem' }} onClick={() => navigate('/registry')}>View All &#8594;</a>
+        <div style={{ fontWeight: 'var(--fw-bold)', fontSize: 'var(--fs-md)' }}>Integration Health</div>
+        <button type="button" className="link-btn" style={{ fontSize: 'var(--fs-sm)' }} onClick={() => navigate('/registry')}>View All &#8594;</button>
       </div>
 
       <div className="filter-chips mb-12" style={{ marginBottom: 12 }}>
         {filters.map((f) => (
-          <span
+          <button
             key={f}
+            type="button"
             className={`chip${activeFilter === f ? ' active' : ''}`}
+            aria-pressed={activeFilter === f}
             onClick={() => setActiveFilter(f)}
           >
             {f}
-          </span>
+          </button>
         ))}
       </div>
 
       {loading ? (
         <SkeletonCards count={8} />
       ) : filteredTiles.length === 0 ? (
-        <div className="card mb-20" style={{ padding: 40, textAlign: 'center', color: 'var(--text-dim)' }}>
-          {cards.length === 0 ? 'No integrations yet — create one from the Connection Wizard.' : 'No adapters match this filter.'}
+        <div className="card empty-state mb-20">
+          {cards.length === 0 ? 'No integrations yet — create one from the Connection Wizard.' : 'No integrations match this filter.'}
         </div>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-            gap: 12,
-            maxHeight: 'calc(100vh - 240px)',
-            overflowY: 'auto',
-          }}
-          className="mb-20"
-        >
+        <div className="adapter-health-wrap mb-20">
+          <button
+            type="button"
+            className="ah-scroll-btn ah-left"
+            onClick={() => scrollAdapters(-1)}
+            aria-label="Scroll left"
+          >
+            &#8249;
+          </button>
+          <div className="adapter-health-row" ref={adapterRowRef}>
           {filteredTiles.map((tile, idx) => (
-            <div
-              key={tile.id || idx}
-              className={`card adapter-tile${tile.status === 'red' ? ' error' : ''}`}
-              onClick={() => handleTileClick(tile)}
-            >
-              <div className="tile-header">
-                <div className="tile-name">{tile.name}</div>
-                <span className={`status-dot ${tile.status}`}></span>
-              </div>
-              <div className="tile-route">
-                {tile.srcIcon} {tile.src} &rarr; {tile.destIcon} {tile.dest}
-              </div>
-              <div
-                className="tile-meta"
-                style={tile.metaError ? { color: tile.status === 'red' ? 'var(--error)' : 'var(--warning)' } : undefined}
-              >
-                {tile.meta}
-              </div>
-            </div>
+            <HealthTile key={tile.id || idx} tile={tile} onOpen={handleTileClick} style={{ '--i': Math.min(idx, 12) }} />
           ))}
+          </div>
+          <button
+            type="button"
+            className="ah-scroll-btn ah-right"
+            onClick={() => scrollAdapters(1)}
+            aria-label="Scroll right"
+          >
+            &#8250;
+          </button>
         </div>
       )}
 
-      {/* Charts Row */}
-      <div className="grid-2 mb-20">
-        <div className="card">
-          <div style={{ fontWeight: 600, fontSize: '.9rem', marginBottom: 12 }}>Records per Push (recent)</div>
-          <MiniBars series={volumeSeries} color="#6366f1" empty="No run data yet — trigger a sync to populate." />
-        </div>
-        <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <div style={{ fontWeight: 600, fontSize: '.9rem' }}>Failures per Push (recent)</div>
-            <a className="clickable" style={{ fontSize: '.75rem' }} onClick={() => navigate('/alerts')}>View All Alerts &#8594;</a>
-          </div>
-          <MiniBars series={errorSeries} color="#ef4444" empty="No failures recorded." />
-        </div>
+      {/* Charts Row — both charts share one time axis over the selected range */}
+      {/* The row is bounded at BOTH ends. Without a max it took every spare pixel on a
+          tall/fullscreen display and stretched the bars into thin ribbons; without a
+          sensible min it forced the page to scroll on short screens. A bar chart gains
+          nothing past ~420px of height, so it stops there and the page stays still. */}
+      <div className="dash-charts" style={{ display: 'flex', gap: 16, flex: '1 1 auto', minHeight: 240, maxHeight: 420 }}>
+        <OutcomesChart pushes={allPushes} windowHours={windowHours} />
+        <VolumeChart pushes={allPushes} windowHours={windowHours} />
+        <NeedsAttentionPanel
+          entries={dlq.entries}
+          total={dlq.total}
+          sampled={dlq.entries.length >= DLQ_SAMPLE}
+          cards={cards}
+          loading={dlq.loading}
+          error={dlq.error}
+        />
       </div>
       </div>
     </div>

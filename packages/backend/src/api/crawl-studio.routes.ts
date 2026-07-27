@@ -32,7 +32,13 @@ function toField(c: FieldCandidate, used: Set<string>) {
   let name = slug(c.label || c.sample);
   while (used.has(name)) name = `${name}_2`;
   used.add(name);
-  return { label: c.label, name, selector: c.selector, sample: c.sample, attr: c.attr ?? null, keep: !!c.sample && !NOISE.test(c.label || '') };
+  return {
+    label: c.label, name, selector: c.selector, sample: c.sample, attr: c.attr ?? null,
+    keep: !!c.sample && !NOISE.test(c.label || ''),
+    // Tier-3 smart pick: pass the detected row container through so the recorder can
+    // auto-set the Row selector on the first pick inside a repeating list.
+    rowSelector: c.rowSelector ?? null, rowCount: c.rowCount ?? 0,
+  };
 }
 
 /** Merge a patch into the draft version's runtimeConfig.categoryConfig and persist. */
@@ -81,6 +87,13 @@ router.get('/session/:id/steps', (req: Request, res: Response) => {
 // Toggle the in-page hover highlight (designer enters/leaves "pick fields" mode).
 router.post('/session/:id/pick-mode', async (req: Request, res: Response) => {
   try { await browserStreamService.setPickMode(String(req.params.id), !!req.body?.on); res.json({ success: true }); }
+  catch (err) { fail(res, err); }
+});
+
+// Live hover probe: is the element under the cursor a repeating list (many similar
+// elements) or a unique value? Polled by the recorder's hover badge while in pick mode.
+router.get('/session/:id/hover-info', async (req: Request, res: Response) => {
+  try { const info = await browserStreamService.hoverInfo(String(req.params.id)); res.json({ success: true, data: info }); }
   catch (err) { fail(res, err); }
 });
 
@@ -145,6 +158,54 @@ router.post('/session/:id/save-recipe', async (req: Request, res: Response) => {
   } catch (err) { fail(res, err); }
 });
 
+// Capture the OPERATOR's authenticated session WITHOUT baking it into the connector —
+// returns the encrypted storageState so the Wizard stores it on the CONNECTION (per operator,
+// multi-tenant). Used by the session (2FA) login method's "Launch browser & log in".
+router.post('/session/:id/capture-auth', async (req: Request, res: Response) => {
+  try {
+    const storageState = await browserStreamService.saveAuth(String(req.params.id));
+    const enc = credentialService.encrypt(JSON.stringify(storageState));
+    const cookieCount = Array.isArray(storageState.cookies) ? storageState.cookies.length : 0;
+    res.json({ success: true, data: { sessionState: enc, cookieCount } });
+  } catch (err) { fail(res, err); }
+});
+
+// Save the login recipe (method + the marked login-form selectors) for the connector.
+router.post('/session/:id/save-login', async (req: Request, res: Response) => {
+  try {
+    const { connectorId, versionId, loginMethod, login } = req.body ?? {};
+    if (!connectorId || !versionId) { fail(res, 'connectorId and versionId required'); return; }
+    await patchCategoryConfig(connectorId, versionId, {
+      ...(loginMethod ? { loginMethod } : {}),
+      login: (login && typeof login === 'object') ? login : {},
+    });
+    res.json({ success: true });
+  } catch (err) { fail(res, err); }
+});
+
+// Persist ONE named entity = the recorded navigation to a page + its highlighted fields.
+// A connector accumulates many entities (the author repeats: navigate → pick → Save as entity).
+router.post('/session/:id/save-entity', async (req: Request, res: Response) => {
+  try {
+    const { connectorId, versionId, entityKey, label, rowSelector, fields, jsonSource } = req.body ?? {};
+    if (!connectorId || !versionId || !entityKey) { fail(res, 'connectorId, versionId and entityKey required'); return; }
+    const navSteps = browserStreamService.getSteps(String(req.params.id));
+    const js = jsonSource && (jsonSource.scriptSelector || jsonSource.jsonVar) ? jsonSource : undefined;
+    const version = await connectorService.getVersion(connectorId, versionId);
+    const cc = ((version?.runtimeConfig as { categoryConfig?: Record<string, unknown> })?.categoryConfig) ?? {};
+    const entities = { ...((cc.entities as Record<string, unknown>) ?? {}) };
+    entities[String(entityKey)] = {
+      label: label || String(entityKey),
+      navSteps,
+      rowSelector: rowSelector || '',
+      fields: Array.isArray(fields) ? fields : [],
+      jsonSource: js,
+    };
+    await patchCategoryConfig(connectorId, versionId, { entities });
+    res.json({ success: true, data: { entityKey, entityCount: Object.keys(entities).length, stepCount: navSteps.length, fieldCount: Array.isArray(fields) ? fields.length : 0 } });
+  } catch (err) { fail(res, err); }
+});
+
 router.delete('/session/:id', async (req: Request, res: Response) => {
   try { await browserStreamService.closeSession(String(req.params.id)); res.json({ success: true }); }
   catch (err) { fail(res, err); }
@@ -154,16 +215,26 @@ router.delete('/session/:id', async (req: Request, res: Response) => {
 // return extracted records, so the designer can confirm values are still alive.
 router.post('/replay-test', async (req: Request, res: Response) => {
   try {
-    const { connectorId, versionId } = req.body ?? {};
+    const { connectorId, versionId, entityKey, sessionId } = req.body ?? {};
     const version = await connectorService.getVersion(connectorId, versionId);
     const cc = (version?.runtimeConfig as { categoryConfig?: Record<string, unknown> })?.categoryConfig ?? {};
-    const recipe = (cc.recipe as { steps?: unknown[]; rowSelector?: string; selectors?: Record<string, string>; fields?: import('../services/runtime/fieldTransform').FieldRule[]; jsonSource?: import('../services/runtime/CrawlEngine').JsonSource }) ?? {};
-    if (!recipe.steps?.length) { fail(res, 'No recorded recipe on this connector version'); return; }
-    let storageState = null;
-    if (typeof cc.sessionState === 'string') { try { storageState = JSON.parse(credentialService.decrypt(cc.sessionState)); } catch { /* none */ } }
+
+    // Prefer the LIVE recording browser's session (the author is logged in there) so an
+    // authenticated entity replays; else fall back to any saved session.
+    let storageState: unknown = null;
+    if (sessionId) { try { storageState = await browserStreamService.saveAuth(String(sessionId)); } catch { /* not authed */ } }
+    if (!storageState && typeof cc.sessionState === 'string') { try { storageState = JSON.parse(credentialService.decrypt(cc.sessionState)); } catch { /* none */ } }
+
+    type Recipe = { steps?: unknown[]; navSteps?: unknown[]; rowSelector?: string; selectors?: Record<string, string>; fields?: import('../services/runtime/fieldTransform').FieldRule[]; jsonSource?: import('../services/runtime/CrawlEngine').JsonSource };
+    const entities = (cc.entities as Record<string, Recipe>) ?? {};
+    // Multi-entity connectors: test the chosen (or first) entity; else the legacy single recipe.
+    const recipe: Recipe = (entityKey ? entities[String(entityKey)] : Object.values(entities)[0]) ?? (cc.recipe as Recipe) ?? {};
+    const steps = (recipe.navSteps ?? recipe.steps ?? []) as unknown[];
+    if (!Array.isArray(steps) || !steps.length) { fail(res, 'No recorded navigation for this entity/connector'); return; }
+
     const result = await stepReplayer.replay({
-      steps: recipe.steps as never, rowSelector: recipe.rowSelector, selectors: recipe.selectors ?? {}, fields: recipe.fields, jsonSource: recipe.jsonSource,
-      storageState, paceMs: 400,
+      steps: steps as never, rowSelector: recipe.rowSelector, selectors: recipe.selectors ?? {}, fields: recipe.fields, jsonSource: recipe.jsonSource,
+      storageState: storageState as never, paceMs: 400,
     });
     res.json({ success: true, data: result });
   } catch (err) { fail(res, err); }

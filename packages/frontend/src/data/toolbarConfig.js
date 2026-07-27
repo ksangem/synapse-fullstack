@@ -1,56 +1,58 @@
 // Per-page contextual toolbar buttons.
+//   icon: key into the shared SVG set (components/ui/Icon.jsx) — the toolbar sits
+//         directly under the topbar, so emoji here clashed with its line-art.
 //   navigateTo: '<route>'  → router navigation
 //   action: '<id>'         → dispatched to the page via the toolbar bus (real handler)
 //   todo: true             → feature not built yet; honest "coming soon" toast (no fake success)
 export const toolbarConfig = {
   dashboard: [
-    { icon: '⏸', label: 'Pause All', action: 'dash_pauseAll' },
-    { icon: '▶', label: 'Resume All', action: 'dash_resumeAll' },
-    { icon: '📊', label: 'Export Report', action: 'dash_export' },
+    { icon: 'pause', label: 'Pause All', action: 'dash_pauseAll' },
+    { icon: 'play', label: 'Resume All', action: 'dash_resumeAll' },
+    { icon: 'chart', label: 'Export Report', action: 'dash_export' },
   ],
   registry: [
-    { icon: '➕', label: 'New Adapter', navigateTo: 'wizard' },
-    { icon: '📤', label: 'Export', action: 'reg_export' },
-    { icon: '📋', label: 'Clone Selected', todo: true },
-    { icon: '📥', label: 'Import Config', todo: true },
+    { icon: 'plus', label: 'New Integration', navigateTo: 'wizard' },
+    { icon: 'upload', label: 'Export', action: 'reg_export' },
+    { icon: 'copy', label: 'Clone Selected', todo: true },
+    { icon: 'download', label: 'Import Config', todo: true },
   ],
   studio: [
-    { icon: '➕', label: 'New Connector', action: 'studio_new' },
-    { icon: '📥', label: 'Import Spec', todo: true },
-    { icon: '📋', label: 'Clone Template', todo: true },
+    { icon: 'plus', label: 'New Connector', action: 'studio_new' },
+    { icon: 'download', label: 'Import Spec', todo: true },
+    { icon: 'copy', label: 'Clone Template', todo: true },
   ],
-  monitor: [
-    { icon: '📤', label: 'Export Logs', action: 'mon_export' },
-    { icon: '🔄', label: 'Clear Filters', action: 'mon_clearFilters' },
-    { icon: '⚡', label: 'Toggle Real-time', action: 'mon_toggleRealtime' },
-  ],
+  /* Monitor deliberately has no toolbar actions. Export / Clear filters /
+     Real-time each existed BOTH here and on the page, and the page versions are
+     strictly better: the toggle shows its state, Export disables when there is
+     nothing to export, and Clear filters appears only when a filter is on. */
+  monitor: [],
   canvas: [
-    { icon: '🤖', label: 'Auto-Map', action: 'canvas_autoMap' },
-    { icon: '✖', label: 'Clear All', action: 'canvas_clearAll' },
-    { icon: '💾', label: 'Save', action: 'canvas_save' },
-    { icon: '✓', label: 'Validate', todo: true },
-    { icon: '↩', label: 'Undo', todo: true },
-    { icon: '↪', label: 'Redo', todo: true },
+    { icon: 'wand', label: 'Auto-Map', action: 'canvas_autoMap' },
+    { icon: 'close', label: 'Clear All', action: 'canvas_clearAll' },
+    { icon: 'save', label: 'Save', action: 'canvas_save' },
+    { icon: 'check', label: 'Validate', todo: true },
+    { icon: 'undo', label: 'Undo', todo: true },
+    { icon: 'redo', label: 'Redo', todo: true },
   ],
   vault: [
-    { icon: '➕', label: 'Add Credential', action: 'vault_add' },
-    { icon: '📤', label: 'Export Audit', action: 'vault_export' },
-    { icon: '🔄', label: 'Rotate Expiring', todo: true },
+    { icon: 'plus', label: 'Add Credential', action: 'vault_add' },
+    { icon: 'upload', label: 'Export Audit', action: 'vault_export' },
+    { icon: 'refresh', label: 'Rotate Expiring', todo: true },
   ],
   alerts: [
-    { icon: '✓', label: 'Acknowledge All', todo: true },
-    { icon: '⬆', label: 'Escalate Selected', todo: true },
-    { icon: '🔇', label: 'Mute 1hr', todo: true },
+    { icon: 'check', label: 'Acknowledge All', todo: true },
+    { icon: 'escalate', label: 'Escalate Selected', todo: true },
+    { icon: 'mute', label: 'Mute 1hr', todo: true },
   ],
   catalog: [
-    { icon: '📤', label: 'Export Catalog', action: 'catalog_export' },
-    { icon: '➕', label: 'New Entity', todo: true },
-    { icon: '🔗', label: 'Merge Entities', todo: true },
+    { icon: 'upload', label: 'Export Catalog', action: 'catalog_export' },
+    { icon: 'plus', label: 'New Entity', todo: true },
+    { icon: 'link', label: 'Merge Entities', todo: true },
   ],
   admin: [
-    { icon: '➕', label: 'Add User', action: 'admin_addUser' },
-    { icon: '📤', label: 'Export List', action: 'admin_export' },
-    { icon: '📥', label: 'Import Users', todo: true },
+    { icon: 'plus', label: 'Add User', action: 'admin_addUser' },
+    { icon: 'upload', label: 'Export List', action: 'admin_export' },
+    { icon: 'download', label: 'Import Users', todo: true },
   ],
   wizard: [],
   connected: [],

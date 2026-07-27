@@ -15,7 +15,7 @@
 import { integrations } from '../db/schema';
 import { connectorService } from '../services/ConnectorService';
 import { resolveCredentials } from './credentials';
-import { hasSourceFactory, hasDestinationFactory, validateDestinationConfig, type ConnectorBuildSpec } from './connector-registry';
+import { hasSourceFactory, hasDestinationFactory, validateDestinationConfig, validateSourceConfig, type ConnectorBuildSpec } from './connector-registry';
 import { normalizeTargets, mappingsForTarget } from './integration-targets';
 import type { MappingEntry } from '../services/MappingEngine';
 
@@ -39,6 +39,19 @@ export async function validateRecipe(integration: Integration): Promise<RecipeVa
     if (!srcHead) errors.push('The source connector no longer exists.');
     else if (!hasSourceFactory(srcHead.runtimeKind ?? '')) {
       errors.push(`Source type "${srcHead.runtimeKind ?? 'unknown'}" can't be run on the bus.`);
+    } else {
+      // Ask the source plug-in whether its config is shippable (e.g. an entity/table was
+      // actually picked), mirroring validateDestinationConfig on the write side. The core
+      // stays ignorant of any connector's required keys.
+      errors.push(...validateSourceConfig({
+        connectorId: srcHead.connectorId,
+        orgId: integration.orgId,
+        kind: srcHead.runtimeKind ?? '',
+        config,
+        creds: {},
+        entity: (config.sourceEntity as string) ?? (config.entity as string) ?? undefined,
+        integrationId: integration.integrationId,
+      }));
     }
   }
 

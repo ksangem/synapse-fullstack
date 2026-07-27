@@ -25,11 +25,50 @@ import { CredentialService } from '../CredentialService';
 import { crawlEngine, type CrawlSpec, type PaginationType, type PaginationSpec, type FieldRule, type JsonSource } from './CrawlEngine';
 import { browserSessionService, buildSessionKey, type LoginConfig, type LoginCreds } from './BrowserSessionService';
 import { stepReplayer } from './StepReplayer';
+import { normalizeEngine } from './browserEngine';
 import type { RecordedStep } from './BrowserStreamService';
 import type { IConnectorRuntime, RuntimeCapabilities, RuntimeContext, Creds, TestResult, FetchResult, PushResult, EntitySummary, FieldDef } from './types';
 
 type Cfg = Record<string, string>;
 const credentialService = new CredentialService();
+
+/** The redesigned multi-entity connector shape stored in runtimeConfig.categoryConfig. */
+type LoginMethod = 'none' | 'password' | 'session';
+interface ScrapeEntity {
+  label?: string;
+  navSteps?: RecordedStep[];
+  rowSelector?: string;
+  fields?: FieldRule[];
+  jsonSource?: JsonSource;
+}
+interface ScrapeLogin {
+  loginUrl?: string;
+  usernameSelector?: string;
+  passwordSelector?: string;
+  submitSelector?: string;
+  twoStep?: boolean;
+  totpSelector?: string;
+  totpSubmitSelector?: string;
+  successSelector?: string;
+  successUrlIncludes?: string;
+}
+interface ScrapeConnectorConfig {
+  baseUrl?: string;
+  /** Browser engine label ('Chromium'|'Firefox'|'WebKit'); normalized at use. */
+  browserEngine?: string;
+  /** Login method label ('No Auth'|'Username & Password'|'Recorded Session'); normalized at use. */
+  loginMethod?: string;
+  login?: ScrapeLogin;
+  entities?: Record<string, ScrapeEntity>;
+}
+
+/** Map the Studio's human login-method label to the canonical method. */
+function normLoginMethod(v: unknown): LoginMethod {
+  const s = String(v ?? '').toLowerCase();
+  if (s.includes('password')) return 'password';
+  if (s.includes('session') || s.includes('record') || s.includes('2fa')) return 'session';
+  return 'none';
+}
 
 export class ScrapeRuntime implements IConnectorRuntime {
   readonly kind = 'scrape';
@@ -43,6 +82,71 @@ export class ScrapeRuntime implements IConnectorRuntime {
     const version = await connectorService.getVersion(ctx.connectorId, ctx.versionId);
     const rc = (version?.runtimeConfig as { categoryConfig?: Cfg }) ?? {};
     return rc.categoryConfig ?? {};
+  }
+
+  /** The full (object-valued) categoryConfig — for the multi-entity redesign fields. */
+  private async rawCfg(ctx: RuntimeContext): Promise<ScrapeConnectorConfig> {
+    const version = await connectorService.getVersion(ctx.connectorId, ctx.versionId);
+    const rc = (version?.runtimeConfig as { categoryConfig?: ScrapeConnectorConfig }) ?? {};
+    return rc.categoryConfig ?? {};
+  }
+
+  private entitiesOf(raw: ScrapeConnectorConfig): Record<string, ScrapeEntity> {
+    return raw.entities && typeof raw.entities === 'object' ? raw.entities : {};
+  }
+
+  /**
+   * Resolve the operator's auth for a multi-entity connector into a storageState:
+   *  - none    → anonymous (null);
+   *  - password→ selector-based form+TOTP login with the OPERATOR's creds (reused per TTL);
+   *  - session → the operator's own recorded session (encrypted in their connection creds).
+   */
+  private async resolveEntityAuth(raw: ScrapeConnectorConfig, creds: Creds, ctx: RuntimeContext): Promise<import('./BrowserSessionService').StorageState | null> {
+    const method: LoginMethod = normLoginMethod(raw.loginMethod);
+    const engine = normalizeEngine(raw.browserEngine);
+    if (method === 'session') {
+      const enc = creds.sessionState;
+      if (!enc) return null;
+      try { return JSON.parse(credentialService.decrypt(enc)); } catch { return null; }
+    }
+    if (method === 'password') {
+      const login = raw.login ?? {};
+      const loginUrl = (creds.loginUrl || login.loginUrl || '').trim();
+      if (!loginUrl) return null;
+      const cfg: LoginConfig = {
+        loginUrl,
+        usernameSelector: login.usernameSelector,
+        passwordSelector: login.passwordSelector,
+        submitSelector: login.submitSelector,
+        twoStep: login.twoStep,
+        totpSelector: login.totpSelector,
+        totpSubmitSelector: login.totpSubmitSelector,
+        successSelector: login.successSelector,
+        successUrlIncludes: login.successUrlIncludes,
+        engine,
+      };
+      const lcreds: LoginCreds = { loginUrl, username: creds.username, email: creds.email, password: creds.password, totpSecret: creds.totpSecret };
+      const key = buildSessionKey(ctx.connectorId, loginUrl, creds.username || creds.email || '');
+      const s = await browserSessionService.ensureSession(cfg, lcreds, key);
+      return s.storageState;
+    }
+    return null;
+  }
+
+  /** Fetch one entity: resolve auth → replay its recorded navigation → extract its labeled fields. */
+  private async fetchEntity(entity: ScrapeEntity, raw: ScrapeConnectorConfig, creds: Creds, ctx: RuntimeContext): Promise<FetchResult> {
+    const storageState = await this.resolveEntityAuth(raw, creds, ctx);
+    const result = await stepReplayer.replay({
+      steps: entity.navSteps ?? [],
+      rowSelector: entity.rowSelector,
+      selectors: {},
+      fields: entity.fields,
+      jsonSource: entity.jsonSource,
+      storageState,
+      engine: normalizeEngine(raw.browserEngine),
+      paceMs: 600,
+    });
+    return { records: result.records, totalCount: result.records.length };
   }
 
   private urls(cfg: Cfg, creds: Creds): string[] {
@@ -199,7 +303,22 @@ export class ScrapeRuntime implements IConnectorRuntime {
     return { session: null, headers: null, note: '' };
   }
 
-  async test(creds: Creds, ctx: RuntimeContext): Promise<TestResult> {
+  async test(creds: Creds, ctx: RuntimeContext, entityKey?: string): Promise<TestResult> {
+    // Multi-entity connectors: replay one entity exactly as the operator will, and
+    // report the real record count. This gates publish (canTestAtDesignTime).
+    const raw = await this.rawCfg(ctx);
+    const entities = this.entitiesOf(raw);
+    const entity = (entityKey ? entities[entityKey] : undefined) ?? Object.values(entities)[0];
+    if (entity) {
+      try {
+        const r = await this.fetchEntity(entity, raw, creds, ctx);
+        const n = r.records.length;
+        return { ok: n > 0, sampleCount: n, message: n > 0 ? `Replayed "${entity.label || 'entity'}" — ${n} record(s)` : 'Replayed but extracted 0 records — re-check the picked fields / navigation' };
+      } catch (e) {
+        return { ok: false, message: (e as Error).message };
+      }
+    }
+
     // Record-and-replay connectors: validate exactly how the operator will run —
     // replay the recorded navigation + extract the picked fields, and report the
     // real record count. This is what gates publish for a recorded crawler.
@@ -246,11 +365,26 @@ export class ScrapeRuntime implements IConnectorRuntime {
     }
   }
 
-  async discoverEntities(): Promise<EntitySummary[]> {
+  async discoverEntities(_creds?: Creds, ctx?: RuntimeContext): Promise<EntitySummary[]> {
+    // Multi-entity connectors: the author's pre-built entities (one per page).
+    let entities: Record<string, ScrapeEntity> = {};
+    try { if (ctx?.connectorId) entities = this.entitiesOf(await this.rawCfg(ctx)); } catch { /* fall back to legacy */ }
+    const keys = Object.keys(entities);
+    if (keys.length) {
+      return keys.map((key) => ({ key, name: entities[key].label || key, fieldCount: entities[key].fields?.length ?? null }));
+    }
+    // Legacy/advanced connectors: a single page/row entity.
     return [{ key: 'page', name: 'Scraped Page', description: 'One record per page, or per row when a row selector is set' }];
   }
 
-  async discoverFields(creds: Creds, ctx: RuntimeContext): Promise<FieldDef[]> {
+  async discoverFields(creds: Creds, ctx: RuntimeContext, entityKey?: string): Promise<FieldDef[]> {
+    // Multi-entity connectors: return the picked+labeled fields of the chosen entity.
+    const raw = await this.rawCfg(ctx);
+    const entities = this.entitiesOf(raw);
+    const entity = (entityKey ? entities[entityKey] : undefined) ?? Object.values(entities)[0];
+    if (entity?.fields?.length) {
+      return entity.fields.map((f) => ({ name: f.name, type: f.type ?? 'string' }));
+    }
     const cfg = await this.cfg(ctx);
     const version = await connectorService.getVersion(ctx.connectorId, ctx.versionId);
     const recipe = (version?.runtimeConfig as { categoryConfig?: { recipe?: { fields?: FieldRule[]; rowSelector?: string } } })?.categoryConfig?.recipe;
@@ -263,8 +397,18 @@ export class ScrapeRuntime implements IConnectorRuntime {
     return [...base, ...Object.keys(this.selectors(cfg, creds)).map((name) => ({ name, type: 'string' }))];
   }
 
-  async fetch(creds: Creds, _entityKey: string, ctx: RuntimeContext): Promise<FetchResult> {
-    // Recorded-recipe mode (Studio recorder): replay the captured steps with the
+  async fetch(creds: Creds, entityKey: string, ctx: RuntimeContext): Promise<FetchResult> {
+    // Multi-entity connectors (the redesign): replay the chosen entity's recorded
+    // navigation with the OPERATOR's auth, then extract that entity's labeled fields.
+    const raw = await this.rawCfg(ctx);
+    const entities = this.entitiesOf(raw);
+    // An UNKNOWN entityKey falls back to the first recorded entity rather than dropping to
+    // legacy recipe mode — a connector that has recorded entities should always scrape one of
+    // them. (A stale caller passing a non-existent key used to yield a single empty record.)
+    const entity = (entityKey ? entities[entityKey] : undefined) ?? Object.values(entities)[0];
+    if (entity) return this.fetchEntity(entity, raw, creds, ctx);
+
+    // Legacy recorded-recipe mode (single recipe): replay the captured steps with the
     // saved session, then extract. Takes precedence over selector-based crawling.
     const recipeResult = await this.tryReplayRecipe(ctx);
     if (recipeResult) return recipeResult;

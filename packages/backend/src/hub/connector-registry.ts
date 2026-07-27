@@ -21,6 +21,9 @@ export interface ConnectorBuildSpec {
   orgId: string;
   /** The connector's kind (runtimeKind), e.g. 'rest' | 'database' | 'sharepoint'. */
   kind: string;
+  /** The connector's stable slug (connectors.key), when known. Used by topic conventions
+   *  that must be shared across integrations (e.g. webhook: keyed by connector, not adapter). */
+  key?: string;
   /** The adapter's config (integration.field_mappings); the plug-in reads its own keys. */
   config: Record<string, unknown>;
   /** Resolved (decrypted) credentials for this endpoint. */
@@ -68,15 +71,37 @@ export type DestinationValidate = (spec: ConnectorBuildSpec) => string[];
  */
 export type JoinProviderFactory = (spec: ConnectorBuildSpec, joins: JoinSpec[]) => EntityIndexProvider | Promise<EntityIndexProvider>;
 
-interface SourceEntry { factory: SourceFactory; topicPrefix?: SourceTopicPrefix }
+/**
+ * Same contract as DestinationValidate, for the READ side: human-readable config problems
+ * for a source spec (e.g. ["No source entity/table selected."]). Empty = shippable. Lets
+ * preflight fail a misconfigured source with a clear message instead of the run dying
+ * mid-read. Plug-in supplied, so the core never knows a source's required config keys.
+ */
+export type SourceValidate = (spec: ConnectorBuildSpec) => string[];
+
+interface SourceEntry { factory: SourceFactory; topicPrefix?: SourceTopicPrefix; validate?: SourceValidate }
 interface DestinationEntry { factory: DestinationFactory; targetKey?: DestinationTargetKey; validate?: DestinationValidate }
 
 const sourceFactories = new Map<string, SourceEntry>();
 const destinationFactories = new Map<string, DestinationEntry>();
 const joinProviderFactories = new Map<string, JoinProviderFactory>();
 
-export function registerSourceFactory(kind: string, factory: SourceFactory, topicPrefix?: SourceTopicPrefix): void {
-  sourceFactories.set(kind, { factory, topicPrefix });
+export function registerSourceFactory(
+  kind: string,
+  factory: SourceFactory,
+  topicPrefix?: SourceTopicPrefix,
+  validate?: SourceValidate,
+): void {
+  sourceFactories.set(kind, { factory, topicPrefix, validate });
+}
+
+/**
+ * Config problems for a source spec, as declared by its plug-in (empty = OK).
+ * Returns [] for a kind that registered no validator (can't assert, so don't block).
+ */
+export function validateSourceConfig(spec: ConnectorBuildSpec): string[] {
+  const entry = sourceFactories.get(spec.kind);
+  return entry?.validate ? entry.validate(spec) : [];
 }
 
 /** The subscription topic prefix for a source spec (defaults to its sourceKey/kind). */

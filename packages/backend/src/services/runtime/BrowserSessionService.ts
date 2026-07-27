@@ -23,6 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { generateSync as totpGenerate } from 'otplib';
+import { launchBrowser, type BrowserEngine } from './browserEngine';
 
 // ── Minimal structural Playwright types (backend tsconfig has no DOM lib) ──
 interface PwElement { fill(v: string): Promise<void>; click(): Promise<void>; }
@@ -56,6 +57,8 @@ export interface LoginConfig {
   attendedTimeoutMs?: number;
   sessionTtlMs?: number;
   userAgent?: string;
+  /** Browser engine to log in with (defaults to chromium). */
+  engine?: BrowserEngine;
 }
 
 export interface LoginCreds {
@@ -148,11 +151,10 @@ export class BrowserSessionService {
   }
 
   private async login(loginUrl: string, cfg: LoginConfig, creds: LoginCreds): Promise<StorageState> {
-    const mod = await import('playwright');
-    const chromium = (mod as { chromium: { launch(o: unknown): Promise<PwBrowser> } }).chromium;
     const user = creds.username || creds.email || '';
     const attended = !!cfg.attended;
-    const browser = await chromium.launch({ headless: !attended, args: ['--no-sandbox'] });
+    // Attended (human-approved push/SMS) needs a headed browser; TOTP/password run headless.
+    const browser = await launchBrowser<PwBrowser>(cfg.engine ?? 'chromium', { headless: !attended });
     try {
       const context = await browser.newContext(cfg.userAgent ? { userAgent: cfg.userAgent } : {});
       const page = await context.newPage();

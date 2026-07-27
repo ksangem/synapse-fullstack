@@ -83,10 +83,10 @@ export const api = {
   // ── Audit trail (admin) ──
   getAudit: async (query = '') => fetchApi(`/api/audit${query}`),
 
-  // ── Client apps (admin) ──
-  getClients: async () => fetchApi('/api/clients'),
-  registerClient: async (body) => fetchApi('/api/clients/register', { method: 'POST', body: JSON.stringify(body) }),
-  revokeClient: async (id) => fetchApi(`/api/clients/${id}/revoke`, { method: 'POST', body: JSON.stringify({}) }),
+  // ── Client apps: OAuth API-consumer registry (admin), cli_… ──
+  getClientApps: async () => fetchApi('/api/client-apps'),
+  registerClientApp: async (body) => fetchApi('/api/client-apps/register', { method: 'POST', body: JSON.stringify(body) }),
+  revokeClientApp: async (id) => fetchApi(`/api/client-apps/${id}/revoke`, { method: 'POST', body: JSON.stringify({}) }),
 
   getAlerts: async (query = '') => fetchApi(`/api/alerts${query}`),
 
@@ -214,8 +214,8 @@ export const api = {
   },
 
   // ── Real backend endpoints (Connected) ──
-  getConnected: async () => {
-    return fetchApi('/api/connected');
+  getConnected: async (query = '') => {
+    return fetchApi(`/api/connected${query}`);
   },
 
   getSyncState: async (integrationId) => {
@@ -249,6 +249,12 @@ export const api = {
     fetchApi(`/api/integrations/${integrationId}/clone`, { method: 'POST', body: JSON.stringify({}) }),
   bulkConnected: async (action, ids) =>
     fetchApi('/api/connected/bulk', { method: 'POST', body: JSON.stringify({ action, ids }) }),
+  // Which connector runtimeKinds the BUS can actually run — a kind may exist in the
+  // connector registry (authorable, testable, fetchable) without having a bus source or
+  // destination factory, in which case a connection using it fails at Push. Returns
+  // { sources:[], destinations:[], enforced }. `enforced:false` (hub off ⇒ empty registry)
+  // means the caller must NOT gate anything.
+  getRunnableKinds: async () => fetchApi('/api/hub/runnable-kinds'),
   // Trigger a generic bus adapter (non-Jira→SP). Returns { records, published, targets, runId }.
   runIntegration: async (integrationId) =>
     fetchApi(`/api/hub/run-integration/${integrationId}`, { method: 'POST', body: JSON.stringify({}) }),

@@ -13,7 +13,12 @@ export function runToolbarAction(action) {
 
 export function useToolbarAction(handlers) {
   const ref = useRef(handlers);
-  ref.current = handlers;
+  // Keep the ref current AFTER each render (not during render, which mutating a ref inline
+  // does). The listener reads ref.current at event time — well after commit — so it always
+  // sees the freshest handlers without re-subscribing.
+  useEffect(() => {
+    ref.current = handlers;
+  });
   useEffect(() => {
     const fn = (e) => {
       const h = ref.current[e.detail];

@@ -27,12 +27,14 @@ describe('Connector runtime registry', () => {
     expect(capabilitiesFor('database')).not.toEqual(capabilitiesFor('rest'));
   });
 
-  it('database is a design-time-untestable, pick-or-create destination', () => {
+  it('database is a design-time-untestable, pick-or-create reader AND writer', () => {
     const caps = capabilitiesFor('database');
     expect(caps.canTestAtDesignTime).toBe(false);
     expect(caps.entitySelectionMode).toBe('pick-or-create');
     expect(caps.hasDdlPreview).toBe(true);
-    expect(caps.role).toBe('destination');
+    // 'both', not 'destination': DatabaseRuntime implements a real keyset-paged fetch, and
+    // this declaration is what makes a table registrable as a bus SOURCE.
+    expect(caps.role).toBe('both');
   });
 
   it('jira exposes a two-level scope (project) and a date window', () => {

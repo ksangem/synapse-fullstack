@@ -2,6 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { TransformPipeline } from '../hub/transform-pipeline';
 import { createEnvelope } from '../hub/envelope';
 import { topicMatches } from '../hub/topic';
+// Imported STATICALLY on purpose. This used to be `await import(...)` inside the first
+// unrouted-shelving test; loading router-service pulls in the run-recorder → db client
+// chain, and under a full parallel suite that first-time module init took longer than the
+// 5s test timeout — so the test failed in the full run while passing in isolation. Paying
+// the init cost in the file's import phase makes it deterministic.
+import { RouterService } from '../hub/router-service';
 import type { MessageEnvelope, ITransformStep, Subscription } from '../hub/interfaces';
 
 // ─── TransformPipeline ─────────────────────────────────────
@@ -152,6 +158,42 @@ describe('RouterService topic matching', () => {
   it('segment wildcard does not match wrong segment count', () => {
     expect(topicMatches('sharepoint.*.created', 'sharepoint.created')).toBe(false);
     expect(topicMatches('sharepoint.*.created', 'sharepoint.a.b.created')).toBe(false);
+  });
+});
+
+// ─── RouterService unrouted-message shelving ────────────────
+
+describe('RouterService.route (unrouted shelving)', () => {
+  // `outboxInsert` lets a test simulate a duplicate (returns null → suppressed) without
+  // reaching the real hub-dispatch queue (Redis), so these stay pure unit tests.
+  function makeRouter(matches: Subscription[], outboxInsert: () => Promise<string | null>) {
+    const registry = { findForEnvelope: () => matches } as never;
+    const inbox = { markProcessing: vi.fn(async () => {}), markDone: vi.fn(async () => {}) } as never;
+    const outbox = { insert: vi.fn(outboxInsert) } as never;
+    const deadLetter = { insertUnrouted: vi.fn(async () => 'dlq-1') };
+    const router = new RouterService(registry, inbox, outbox, deadLetter as never);
+    return { router, deadLetter };
+  }
+
+  const env = () => createEnvelope({ topic: 'webhook.orphan', sourceConnectorId: 'wh', orgId: 'org-1', sequenceNo: 1, payload: { a: 1 } });
+
+  it('shelves a message that matches NO subscription', async () => {
+    const { router, deadLetter } = makeRouter([], async () => 'outbox-1');
+    const dispatched = await router.route(env());
+    expect(dispatched).toBe(0);
+    expect(deadLetter.insertUnrouted).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT shelve when a subscription matched but was an idempotent duplicate', async () => {
+    // Subscription matched, but the outbox suppresses it as an already-dispatched
+    // duplicate (insert → null) → dispatched 0, yet this is correct idempotency, not a
+    // lost message, so it must NOT be shelved. (null outbox → the loop `continue`s
+    // before touching the real dispatch queue, keeping this Redis-free.)
+    const sub = { id: 's1', orgId: 'org-1', topic: 'webhook.orphan', destinationConnectorId: 'd1', transformSteps: [] } as unknown as Subscription;
+    const { router, deadLetter } = makeRouter([sub], async () => null);
+    const dispatched = await router.route(env());
+    expect(dispatched).toBe(0);
+    expect(deadLetter.insertUnrouted).not.toHaveBeenCalled();
   });
 });
 
@@ -353,6 +395,29 @@ describe('DeadLetterRepository (mock)', () => {
     expect(insertedRows[0].status).toBe('failed');
     expect(insertedRows[0].retryCount).toBe(0);
     expect(insertedRows[0].error).toBe('connection timeout');
+  });
+
+  it('insertUnrouted shelves as POISONED under the (unrouted) sentinel', async () => {
+    const insertedRows: Array<Record<string, unknown>> = [];
+    const mockDb = {
+      insert: () => ({
+        values: (row: Record<string, unknown>) => {
+          insertedRows.push(row);
+          return { returning: () => [{ id: 'dlq-unrouted-1' }] };
+        },
+      }),
+    };
+
+    const { DeadLetterRepository } = await import('../hub/dead-letter-repository');
+    const repo = new DeadLetterRepository(mockDb as never);
+    const env = createEnvelope({ topic: 'webhook.my-hook', sourceConnectorId: 'wh', orgId: 'org-1', sequenceNo: 1, payload: { a: 1 } });
+
+    const id = await repo.insertUnrouted(env, 'no subscription');
+    expect(id).toBe('dlq-unrouted-1');
+    // poisoned so the auto-replay scanner (failed-only) never futilely re-dispatches it.
+    expect(insertedRows[0].status).toBe('poisoned');
+    expect(insertedRows[0].destConnectorId).toBe('(unrouted)');
+    expect(insertedRows[0].error).toBe('no subscription');
   });
 
   it('maxRetries is 5', async () => {

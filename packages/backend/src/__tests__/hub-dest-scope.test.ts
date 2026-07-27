@@ -3,6 +3,7 @@ import { createEnvelope, scopeMessageIdToDestination } from '../hub/envelope';
 import { destinationTargetKey, registeredDestinationKinds } from '../hub/connector-registry';
 import { registerBuiltinConnectors } from '../hub/register-connectors';
 import type { ConnectorBuildSpec } from '../hub/connector-registry';
+import type { JsonValue } from '../hub/interfaces';
 
 // Regression: the inbox dedups on (orgId, messageId), and messageId was derived from the
 // SOURCE only (orgId + topic + record key/content). So re-running an integration after
@@ -16,7 +17,10 @@ function row(payload: Record<string, unknown>) {
     sourceConnectorId: 'src-1',
     orgId: 'org-1',
     sequenceNo: 0,
-    payload,
+    // createEnvelope takes a JsonValue payload; these test rows are plain JSON objects, but
+    // Record<string, unknown> isn't assignable to it (unknown ⊄ JsonValue) — assert at the
+    // boundary rather than widening the envelope's payload type.
+    payload: payload as JsonValue,
     // Business key + content, as the upsert path keys it (records-delivery uses key:checksum),
     // so an unchanged re-read dedups and a CHANGED row re-flows.
     idempotencyKey: `${payload.id}:${JSON.stringify(payload)}`,

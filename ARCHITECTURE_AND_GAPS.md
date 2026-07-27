@@ -7,6 +7,40 @@
 
 ---
 
+## ⚠️ STATUS UPDATE — the correction plan below is DONE (do not read §2–§4 as "current")
+
+> The body of this doc (§2 "only the simplest layer is live", §3 "the gap — built-but-dormant",
+> §4 "the correction plan") describes the state on **2026-06-15**, BEFORE the migration. It is kept
+> as the design rationale. **As of now, the migration is complete** — verified by a full code audit:
+>
+> - **The distributed `IntegrationBus` is LIVE and ON by default** (`HUB_ENABLED` defaults to `true`;
+>   `index.ts` → `hub/init-hub.ts` boots `IntegrationBus` + `RouterService` + the intake & dispatch
+>   workers + the scheduler at startup).
+> - **ALL data transfer flows through the bus** as a checksummed `MessageEnvelope`. There are **no
+>   direct in-request destination writes left**: `POST /api/push/project` and
+>   `POST /api/connectors/runtime/push[-to-db]` were **retired**; SP→DB `push-to-pg/mysql/mssql` were
+>   removed. Jira→SP (manual + cron via `SyncService`) and SP→DB now `publishRecords()` onto the bus;
+>   `SharePointPushService`/DB writers are reached ONLY through `hub/{sp,database}-destination.ts`.
+> - **The bus is genuinely end-to-end** for jira / sharepoint / rest·saas·graphql sources: publish →
+>   inbox → `RouterService` → outbox → `hubDispatchWorker` → `TransformPipeline` → idempotency →
+>   `Destination.dispatch()` → dead-letter. Destinations are registered connector-agnostically in
+>   `hub/register-connectors.ts`; every active adapter becomes a subscription (`integration-flow.ts`).
+> - **The in-process `DurableBus` and `InMemoryBus` were DELETED** (decision §0) — one bus remains.
+> - **Mapping is one engine**: `applyRichMappings` runs server-side in `FieldMappingStep`; SyncService
+>   now uses it too, so a Jira→SP adapter maps identically however it is triggered.
+>
+> **Remaining known gaps:**
+> - **`webhook` source is `partial`**: `POST /api/ingest/:token` publishes inbound events to the bus,
+>   but there is no `webhook` source *factory*, so no subscription is registered for `webhook.*` topics.
+>   Such a message now matches zero subscriptions → the `RouterService` logs it and **shelves it to the
+>   DLQ as `(unrouted)`/`poisoned`** (visible in Monitor, not auto-replayed) instead of silently
+>   dropping it. Full auto-delivery of webhooks needs a webhook subscription model (topic alignment
+>   between ingest and the adapter). Tracked as the one true end-to-end gap.
+> - Legacy `applyMappings` (services/MappingEngine) has **no production caller** but is retained for its
+>   `e2e-mapping-push.test.ts` behavioural suite; physically deleting it + those tests is a safe follow-up.
+
+---
+
 ## 0. ARCHITECTURE DECISION (binding — 2026-06-15)
 
 **Target data-movement architecture = the distributed `IntegrationBus` (BullMQ + Redis).**

@@ -87,6 +87,32 @@ export interface FetchResult {
   /** Some runtimes (Jira) create a run row and return its id; downstream push needs it. */
   runId?: string;
   totalCount?: number;
+  /**
+   * Name of the field that IDENTIFIES a record (primary/business key). Declared by the
+   * runtime — which is the only layer that knows how its records are keyed — so the bus can
+   * derive a STABLE idempotency key without hardcoding column names. Without it a source
+   * whose records have no `id` field gets a random messageId per run, which defeats inbox
+   * dedup and re-delivers every row on every run.
+   */
+  keyField?: string;
+  /**
+   * Opaque resume token for an INCREMENTAL read (a keyset position, a watermark value, a
+   * delta link…). Its meaning is private to the runtime; the bus only persists it against
+   * the integration and hands it back as `opts.cursor` on the next call. Absent/undefined
+   * ⇒ the read is complete.
+   */
+  nextCursor?: string;
+  /** True when the runtime stopped at a safety cap and more rows remain unread. */
+  truncated?: boolean;
+}
+
+/** Options the bus may pass into a runtime read. All optional — a runtime may ignore them. */
+export interface FetchOptions {
+  /** The `nextCursor` returned by the previous call (resume point for incremental reads). */
+  cursor?: string;
+  /** Max records to return in this call. */
+  limit?: number;
+  [key: string]: unknown;
 }
 
 export interface PushResult {

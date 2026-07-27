@@ -16,6 +16,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import { connectorService } from '../services/ConnectorService';
 import { InboxRepository } from '../hub/inbox-repository';
 import { createEnvelope } from '../hub/envelope';
+import { webhookTopicPrefix } from '../hub/webhook-source';
 import type { JsonValue } from '../hub/interfaces';
 import { config } from '../config';
 import { db } from '../db/client';
@@ -56,10 +57,15 @@ router.post('/:token', async (req: Request, res: Response) => {
       }
     }
 
-    // Topic segments must be dot-separated lowercase a-z/0-9/hyphen (hub topic rules),
-    // so sanitize the configured topic / connector key (slugs use underscores).
-    const rawTopic = cc.topic || `webhook.${head.key ?? connectorId}`;
-    const topic = rawTopic.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/-*\.-*/g, '.');
+    // Default topic is CONNECTOR-scoped (webhookTopicPrefix, the SAME helper the source
+    // factory uses to build its `${prefix}.*` subscription) so a published event always
+    // matches the subscription the flow builder registered — closing the "unrouted → DLQ"
+    // gap. An explicit cc.topic still overrides it for advanced routing (the integration
+    // must then set a matching sourceKey to receive it). Segments are dot-separated
+    // lowercase a-z/0-9/hyphen per hub topic rules, so a custom topic is sanitized.
+    const topic = cc.topic
+      ? cc.topic.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/-*\.-*/g, '.')
+      : `${webhookTopicPrefix(head.key || connectorId)}.received`;
     // Dedup key: explicit idempotency header, else the signature (unique per payload).
     const idempotencyKey = (req.header('x-idempotency-key') || signatureHeader || undefined);
 
