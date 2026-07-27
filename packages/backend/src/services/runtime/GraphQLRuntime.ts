@@ -131,6 +131,24 @@ export class GraphQLRuntime implements IConnectorRuntime {
     return { records, totalCount: records.length };
   }
 
+  /**
+   * ⚠ CURRENTLY UNREACHABLE — and that is a gap, not dead code.
+   *
+   * This is the only implementation that writes GraphQL correctly: it executes the entity's
+   * bound `create` MUTATION. But `graphql` is registered as a bus destination through
+   * REST_KINDS (hub/register-connectors.ts), so a GraphQL destination is delivered by
+   * RestDestinationConnector → genericRestRuntime.push, which looks for a bound REST `create`
+   * (POST) operation and throws "No create (POST) operation bound for entity …" when the
+   * connector only defines a GraphQL mutation.
+   *
+   * So GraphQL-as-a-destination does not work today, while the code that would make it work
+   * sits here uncalled. Fixing it means giving `graphql` its own destination factory that
+   * routes to this method (rather than reusing the REST one) — deliberately left alone here
+   * because that is a behaviour change, not a cleanup.
+   *
+   * Unlike the Database/SharePoint runtimes, this is NOT a duplicate of a working bus path,
+   * which is why it was not replaced with a guard.
+   */
   async push(creds: Creds, entityKey: string, records: Record<string, unknown>[], ctx: RuntimeContext): Promise<PushResult> {
     const { rc } = await this.ctx(ctx);
     const url = this.endpoint(rc, creds);

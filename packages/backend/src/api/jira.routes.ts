@@ -4,7 +4,6 @@ import { db } from '../db/client';
 import { integrations, runs, jiraTickets, credentials } from '../db/schema';
 import { eq, desc, notInArray } from 'drizzle-orm';
 import { CredentialService } from '../services/CredentialService';
-import { DEFAULT_ORG_ID } from '../constants';
 import {
   launchBrowserAuth, getAuthStatus, isAuthInProgress, resetAuthState,
   loadExistingSession, fetchWithCookies,
@@ -35,6 +34,8 @@ function setFetchProgress(key: string, progress: FetchProgress) {
  * Prevents duplicate integration records for the same client+project.
  */
 async function findOrCreateIntegration(opts: {
+  /** Owning org — passed in from the caller's req.actor so this helper isn't pinned to one tenant. */
+  orgId: string;
   name: string;
   projectKey: string | null;
   endpointUrl: string;
@@ -71,7 +72,7 @@ async function findOrCreateIntegration(opts: {
 
   // No match — create new
   const [integ] = await db.insert(integrations).values({
-    orgId: DEFAULT_ORG_ID,
+    orgId: opts.orgId,
     name: opts.name,
     status: 'active',
     fieldMappings: {
@@ -402,10 +403,11 @@ router.post('/browser-fetch', async (req: Request, res: Response) => {
     if (body.saveConnection) {
       const enc = credentialService.encrypt(JSON.stringify({ email: body.email, authMethod: 'browser' }));
       const [cred] = await db.insert(credentials).values({
-        orgId: DEFAULT_ORG_ID, systemName: body.connectionName || 'Jira (Browser)',
+        orgId: req.actor.orgId, systemName: body.connectionName || 'Jira (Browser)',
         authType: 'browser_session', encryptedPayload: enc,
       }).returning();
       integrationId = await findOrCreateIntegration({
+        orgId: req.actor.orgId,
         name: body.connectionName || 'Jira (Browser Auth)',
         projectKey: projectKey || null,
         endpointUrl: body.endpointUrl,
@@ -415,7 +417,7 @@ router.post('/browser-fetch', async (req: Request, res: Response) => {
       });
     } else {
       const [tmp] = await db.insert(integrations).values({
-        orgId: DEFAULT_ORG_ID, name: `Jira Browser Fetch ${new Date().toISOString().slice(0, 16)}`, status: 'draft',
+        orgId: req.actor.orgId, name: `Jira Browser Fetch ${new Date().toISOString().slice(0, 16)}`, status: 'draft',
       }).returning();
       integrationId = tmp.integrationId;
     }
@@ -841,10 +843,11 @@ router.post('/fetch', async (req: Request, res: Response) => {
     if (body.saveConnection) {
       const enc = credentialService.encrypt(JSON.stringify({ email: body.email, apiToken: body.apiToken }));
       const [cred] = await db.insert(credentials).values({
-        orgId: DEFAULT_ORG_ID, systemName: body.connectionName || 'Jira',
+        orgId: req.actor.orgId, systemName: body.connectionName || 'Jira',
         authType: 'api_token', encryptedPayload: enc,
       }).returning();
       savedIntegrationId = await findOrCreateIntegration({
+        orgId: req.actor.orgId,
         name: body.connectionName || 'Jira Integration',
         projectKey: projectKey || null,
         endpointUrl: body.endpointUrl,
@@ -857,7 +860,7 @@ router.post('/fetch', async (req: Request, res: Response) => {
     let integrationId = savedIntegrationId;
     if (!integrationId) {
       const [tmp] = await db.insert(integrations).values({
-        orgId: DEFAULT_ORG_ID, name: `Jira Fetch ${new Date().toISOString().slice(0, 16)}`, status: 'draft',
+        orgId: req.actor.orgId, name: `Jira Fetch ${new Date().toISOString().slice(0, 16)}`, status: 'draft',
       }).returning();
       integrationId = tmp.integrationId;
     }

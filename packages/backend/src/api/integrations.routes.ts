@@ -9,7 +9,6 @@ import { mappingAIService } from '../services/MappingAIService';
 import { recordAudit } from '../services/AuditService';
 import { refreshHubSubscriptions } from '../hub/init-hub';
 import { validateJoins, type JoinSpec } from '../hub/entity-join-step';
-import { DEFAULT_ORG_ID } from '../constants';
 
 const credentialService = new CredentialService();
 
@@ -215,7 +214,7 @@ router.post('/save-connection', async (req: Request, res: Response) => {
         srcCredId = oldSrcCredId;
       } else {
         const [cred] = await db.insert(credentials).values({
-          orgId: DEFAULT_ORG_ID,
+          orgId: req.actor.orgId,
           systemName: sourceType,
           authType: 'source_connection',
           encryptedPayload: payload,
@@ -241,7 +240,7 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       }
 
       const [cred] = await db.insert(credentials).values({
-        orgId: DEFAULT_ORG_ID,
+        orgId: req.actor.orgId,
         systemName: sourceType,
         authType: 'api_token',
         encryptedPayload: encPayload,
@@ -264,7 +263,7 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       }
 
       const [cred] = await db.insert(credentials).values({
-        orgId: DEFAULT_ORG_ID,
+        orgId: req.actor.orgId,
         systemName: 'SharePoint',
         authType: 'azure_app',
         encryptedPayload: spPayload,
@@ -311,7 +310,7 @@ router.post('/save-connection', async (req: Request, res: Response) => {
         destCredId = oldDestCredId;
       } else {
         const [destCred] = await db.insert(credentials).values({
-          orgId: DEFAULT_ORG_ID,
+          orgId: req.actor.orgId,
           systemName: destType,
           authType: 'database_connection',
           encryptedPayload: dbPayload,
@@ -333,7 +332,7 @@ router.post('/save-connection', async (req: Request, res: Response) => {
         }
       }
       const [destCred] = await db.insert(credentials).values({
-        orgId: DEFAULT_ORG_ID,
+        orgId: req.actor.orgId,
         systemName: 'SharePoint',
         authType: 'azure_app',
         encryptedPayload: spDestPayload,
@@ -425,7 +424,7 @@ router.post('/save-connection', async (req: Request, res: Response) => {
       res.json({ success: true, data: result, updated: true });
     } else {
       const [result] = await db.insert(integrations).values({
-        orgId: DEFAULT_ORG_ID,
+        orgId: req.actor.orgId,
         name: body.name,
         status: 'active',
         sourceConnectorId: body.sourceConnectorId ?? null,
@@ -465,7 +464,7 @@ router.get('/:id/encryption-key/reveal', async (req: Request, res: Response) => 
     const keyHex = credentialService.decrypt(enc.wrappedDek);
 
     await recordAudit({
-      orgId: req.actor?.orgId ?? DEFAULT_ORG_ID,
+      orgId: req.actor.orgId,
       userId: req.actor?.userId ?? null,
       action: 'reveal',
       entityType: 'integration_key',

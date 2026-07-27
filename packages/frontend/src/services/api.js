@@ -10,6 +10,19 @@
 // proxy forwards /api to the backend (works over LAN IP and public tunnels alike).
 const API = import.meta.env.VITE_API_URL ?? `http://${window.location.hostname}:4000`;
 
+/**
+ * WebSocket origin for the same backend, derived from `API` so it honours VITE_API_URL.
+ *
+ * The Studio/Wizard recorders used to hardcode `ws://${hostname}:4000`, which broke exactly
+ * where it mattered: same-origin proxy mode (VITE_API_URL='') ignored the proxy and dialled
+ * port 4000 directly, and over an HTTPS tunnel the browser blocked `ws:` as mixed content —
+ * the "share with QA" path. Empty API ⇒ same-origin, so the scheme follows the page.
+ */
+export function wsOrigin() {
+  const base = API || window.location.origin;
+  return base.replace(/^http/, 'ws').replace(/\/$/, '');
+}
+
 // Access token set by AuthContext on login; sent as a Bearer the backend verifies
 // (BRD §7.8). When absent, dev backends fall back to the seeded admin (AUTH_REQUIRED off).
 export const ACCESS_TOKEN_KEY = 'synapse_access_token';

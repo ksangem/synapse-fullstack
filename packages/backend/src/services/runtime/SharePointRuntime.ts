@@ -11,14 +11,6 @@ import { SharePointGraphReader } from '../../integrations/sharepoint-source/Shar
 import type { IConnectorRuntime, RuntimeCapabilities, RuntimeContext, Creds, TestResult, FetchResult, PushResult, EntitySummary, FieldDef } from './types';
 import { CAPABILITIES } from './registry-caps';
 import { config } from '../../config';
-import { SharePointPushService, type GraphBatchRequest } from '../SharePointPushService';
-
-// SharePoint list columns that are read-only / system-managed and cannot be written.
-const READONLY_SP_FIELDS = new Set([
-  'id', 'ContentType', 'Attachments', 'Edit', 'LinkTitleNoMenu', 'LinkTitle',
-  'ItemChildCount', 'FolderChildCount', 'Created', 'Modified', 'Author', 'Editor',
-  'AppAuthor', 'AppEditor', '_UIVersionString', '_ComplianceFlags', '_ComplianceTag',
-]);
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 
@@ -114,7 +106,6 @@ export class SharePointRuntime implements IConnectorRuntime {
    * entityKey = destination list id. Read-only/system columns are stripped so a
    * record fetched from another SP list can be written back cleanly.
    */
-  private pushSvc = new SharePointPushService();
 
   // One paginated pass to map a key column's value → item id (for upsert), instead of a
   // per-row $filter query.
@@ -135,68 +126,17 @@ export class SharePointRuntime implements IConnectorRuntime {
     return map;
   }
 
-  async push(creds: Creds, entityKey: string, records: Record<string, unknown>[]): Promise<PushResult> {
-    const c = this.creds(creds);
-    const listId = entityKey || (creds.listId as string);
-    if (!listId) throw new Error('A destination list id (entity) is required');
-    const token = await getToken(c.tenantId, c.clientId, c.clientSecret);
-    const siteId = await resolveSiteId(c.siteUrl, token);
-
-    // Optional identity / match key (the ★ column). When set, records are upserted: an
-    // existing item with the same key value → PATCH, otherwise insert. Empty → insert-only.
-    const matchKey = typeof creds.matchKey === 'string' && creds.matchKey && creds.matchKey !== '__append__'
-      ? (creds.matchKey as string) : '';
-    const itemsRel = `/sites/${siteId}/lists/${listId}/items`;
-
-    // Resolve existing items once (bulk) for upsert, instead of a query per row.
-    const existing = matchKey ? await this.bulkLoadByKey(siteId, listId, token, matchKey) : new Map<string, string>();
-
-    // Build a PATCH/POST request per record.
-    const reqs: GraphBatchRequest[] = [];
-    const meta = new Map<string, { isCreate: boolean }>();
-    let rid = 0;
-    for (const rec of records) {
-      const fields: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(rec)) {
-        if (v === null || v === undefined) continue;
-        if (READONLY_SP_FIELDS.has(k) || k.startsWith('@') || k.startsWith('_')) continue;
-        fields[k] = v;
-      }
-      const id = String(++rid);
-      const existingId = matchKey ? existing.get(String(rec[matchKey])) : undefined;
-      if (existingId) { reqs.push({ id, method: 'PATCH', url: `${itemsRel}/${existingId}/fields`, body: fields }); meta.set(id, { isCreate: false }); }
-      else { reqs.push({ id, method: 'POST', url: itemsRel, body: { fields } }); meta.set(id, { isCreate: true }); }
-    }
-
-    // Execute Graph $batch chunks (20/req) SERIALLY per list. SharePoint serialises
-    // writes to a single list, so parallel batches collide: one sub-request fails with
-    // `generalException` (500) and the rest cascade to `FailedDependency` (424), which
-    // previously got written off as permanent failures. Sequential dispatch removes that
-    // contention; we still retry transient/cascade sub-failures (400/429/424/500/0) over
-    // a few rounds with backoff (also absorbs freshly-created columns not yet writable).
-    const SIZE = 20, CONCURRENCY = 1;
-    const results = new Map<string, { status: number; body: unknown }>();
-    let pending = reqs;
-    for (let round = 0; round <= 4 && pending.length; round++) {
-      if (round > 0) await new Promise((r) => setTimeout(r, 1500 * round));
-      const chunks: GraphBatchRequest[][] = [];
-      for (let i = 0; i < pending.length; i += SIZE) chunks.push(pending.slice(i, i + SIZE));
-      for (let i = 0; i < chunks.length; i += CONCURRENCY) {
-        const wave = chunks.slice(i, i + CONCURRENCY);
-        const maps = await Promise.all(wave.map((ch) => this.pushSvc.sendBatch(ch, token)));
-        for (const m of maps) for (const [k, v] of m) results.set(k, v);
-      }
-      pending = pending.filter((rq) => { const s = results.get(rq.id)?.status ?? 0; return (s === 400 || s === 429 || s === 424 || s === 500 || s === 0) && round < 4; });
-    }
-
-    let created = 0, updated = 0, failed = 0;
-    const errors: string[] = [];
-    for (const [id, m] of meta) {
-      const res = results.get(id);
-      if (res && res.status >= 200 && res.status < 300) { if (m.isCreate) created++; else updated++; }
-      else { failed++; if (errors.length < 5) errors.push(`${res?.status ?? 0}: ${(typeof res?.body === 'string' ? res.body : JSON.stringify(res?.body ?? '')).slice(0, 160)}`); }
-    }
-    return { created, updated, failed, errors };
+  /**
+   * Writing is the BUS's job, not the runtime's. This held a second, parallel SharePoint
+   * writer (its own Graph $batch upsert with its own retry rounds) that nothing ever called —
+   * no code path invokes `push` on a runtime. Keeping it meant a plausible-looking way to
+   * write to SharePoint while bypassing the bus: no envelope, no idempotency, no
+   * dead-lettering, no run ledger. Deliveries go through the bus SharePoint destination
+   * (hub/register-connectors.ts -> SharePointPushService), which carries the same batching
+   * and transient-retry behaviour (400/429/500/503).
+   */
+  async push(): Promise<PushResult> {
+    throw new Error('SharePoint writes go through the bus (SharePoint destination), not the runtime.');
   }
 }
 

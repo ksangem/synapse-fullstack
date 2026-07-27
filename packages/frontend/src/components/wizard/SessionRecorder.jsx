@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { api } from '../../services/api';
+import { api, wsOrigin } from '../../services/api';
 
 /* SessionRecorder — the OPERATOR logs into a site once in a live streamed browser
    (handles 2FA/SSO), and we capture their session cookies. Used by the Wizard for the
@@ -7,7 +7,8 @@ import { api } from '../../services/api';
    handed back via onCapture and stored on the connection, so each operator has their
    own identity (multi-tenant). Reuses the crawl-studio streamed-browser channel. */
 
-const WS_BASE = `ws://${window.location.hostname}:4000/api/crawl-studio/stream`;
+// Derived from the API base so it follows VITE_API_URL and uses wss: on HTTPS.
+const WS_BASE = `${wsOrigin()}/api/crawl-studio/stream`;
 const CS = '/api/crawl-studio';
 
 export default function SessionRecorder({ startUrl, onCapture }) {

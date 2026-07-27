@@ -1,7 +1,7 @@
 /**
  * DatabaseRuntime — strangles the database destination flow behind the
  * IConnectorRuntime interface, wrapping the EXISTING writer infrastructure
- * (PostgresWriter/MySqlWriter/SqlServerWriter + writeRecordsToDb) rather than
+ * (PostgresWriter/MySqlWriter/SqlServerWriter) rather than
  * reimplementing it. The Wizard's table picker/columns still use the dedicated
  * hub handlers; this makes the generic /runtime/* endpoints work for database
  * connectors too.
@@ -14,7 +14,7 @@ import { PostgresWriter } from '../../integrations/database/writers/PostgresWrit
 import { MySqlWriter } from '../../integrations/database/writers/MySqlWriter';
 import { SqlServerWriter } from '../../integrations/database/writers/SqlServerWriter';
 import { DbSchemaIntrospector } from '../../integrations/database/DbSchemaIntrospector';
-import { writeRecordsToDb, type DbEngine, type GenericMapping } from '../../integrations/database/genericDbWrite';
+import { type DbEngine } from '../../integrations/database/genericDbWrite';
 import { CAPABILITIES } from './registry-caps';
 import type { IConnectorRuntime, RuntimeCapabilities, RuntimeContext, Creds, TestResult, FetchResult, PushResult, EntitySummary, FieldDef } from './types';
 
@@ -193,18 +193,16 @@ export class DatabaseRuntime implements IConnectorRuntime {
     }
   }
 
-  async push(creds: Creds, entityKey: string, records: Record<string, unknown>[], ctx: RuntimeContext, mappings?: unknown): Promise<PushResult> {
-    const engine = await this.engine(ctx);
-    const c = this.conn(engine, creds);
-    const table = entityKey || creds.table;
-    if (!table) throw new Error('No target table');
-    let maps = mappings as GenericMapping[] | undefined;
-    if (!maps?.length) {
-      const first = records[0] ?? {};
-      maps = Object.keys(first).map((k) => ({ from: k, to: k }));
-    }
-    const r = await writeRecordsToDb({ engine, conn: { host: c.host, port: c.port, database: c.database, username: c.username, password: c.password, schema: c.schema }, table, records, mappings: maps });
-    return { created: r.inserted, updated: r.updated, failed: r.failed, errors: r.errors };
+  /**
+   * Writing is the BUS's job, not the runtime's. This used to hold a second, parallel
+   * implementation of the database write (its own writeRecordsToDb call with its own
+   * mapping fallback) that nothing ever called — no code path invokes `push` on a runtime.
+   * Keeping it meant a plausible-looking way to write to a destination while bypassing the
+   * bus entirely: no envelope, no idempotency, no dead-lettering, no run ledger.
+   * Deliveries go through hub/database-destination.ts, which owns that logic.
+   */
+  async push(): Promise<PushResult> {
+    throw new Error('Database writes go through the bus (hub/database-destination.ts), not the runtime.');
   }
 }
 

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { api } from '../../services/api';
+import { api, wsOrigin } from '../../services/api';
 
 /* CrawlRecorder — multi-entity record-and-replay authoring inside Studio.
    The backend runs a real Chromium; its screen streams here over a WebSocket
@@ -19,7 +19,8 @@ import { api } from '../../services/api';
    Props: connectorId, versionId, loginMethod ('none'|'password'|'session' — derived
    from the Stage-1 label). */
 
-const WS_BASE = `ws://${window.location.hostname}:4000/api/crawl-studio/stream`;
+// Derived from the API base so it follows VITE_API_URL and uses wss: on HTTPS.
+const WS_BASE = `${wsOrigin()}/api/crawl-studio/stream`;
 const CS = '/api/crawl-studio';
 const FIELD_TYPES = ['string', 'number', 'boolean', 'datetime', 'json'];
 

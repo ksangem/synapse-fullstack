@@ -98,10 +98,15 @@ router.get('/', async (req: Request, res: Response) => {
     const runCap = pushSince ? 100 : 5;
 
     const newestRun = new Map<string, typeof runs.$inferSelect>();
+    // Newest SUCCESSFUL run per integration. "Last synced" must not report a run that
+    // errored, so it cannot reuse newestRun. runRows is ordered newest-first, so the
+    // first success we see per integration is the latest one — no extra query needed.
+    const newestSuccess = new Map<string, typeof runs.$inferSelect>();
     // Recent runs per integration — the "pushes" the dashboard KPIs/charts read.
     const recentRunsByIntg = new Map<string, (typeof runs.$inferSelect)[]>();
     for (const r of runRows) {
       if (!newestRun.has(r.integrationId)) newestRun.set(r.integrationId, r);
+      if (r.status === 'success' && !newestSuccess.has(r.integrationId)) newestSuccess.set(r.integrationId, r);
       if (pushSince && (!r.startedAt || r.startedAt < pushSince)) continue; // outside the window
       const arr = recentRunsByIntg.get(r.integrationId) ?? [];
       if (arr.length < runCap) { arr.push(r); recentRunsByIntg.set(r.integrationId, arr); }
@@ -178,12 +183,19 @@ router.get('/', async (req: Request, res: Response) => {
         const days = volMap.get(integ.integrationId);
         const volume7d = emptyBuckets().map((b) => ({ date: b.date, count: days?.get(b.date) ?? 0 }));
 
+        // Last successful data movement. Only the legacy Jira→SharePoint delta path writes
+        // sync_state, so bus connections (everything else) would otherwise never have a
+        // "last synced" value; fall back to their newest successful run.
+        const okRun = newestSuccess.get(integ.integrationId);
+        const lastSyncedAt = state?.lastSyncedAt ?? okRun?.finishedAt ?? okRun?.startedAt ?? null;
+
         return {
           ...integ,
           source,
           dest,
           kind,
           lastRun: computeLastRun(newestRun.get(integ.integrationId), recentPushes[0]),
+          lastSyncedAt,
           volume7d,
           syncState: state,
           recentPushes,

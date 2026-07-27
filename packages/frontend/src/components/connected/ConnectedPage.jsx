@@ -137,7 +137,7 @@ function IntegrationCard(props) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 10, marginTop: 10 }}>
-        <div><div style={labelStyle}>Last Synced</div><div style={{ fontSize: 'var(--fs-sm)' }}>{fmtDate(ss.lastSyncedAt)}</div></div>
+        <div><div style={labelStyle}>Last Synced</div><div style={{ fontSize: 'var(--fs-sm)' }}>{fmtDate(ss.lastSyncedAt ?? intg.lastSyncedAt)}</div></div>
         <div><div style={labelStyle}>Date Range</div><div style={{ fontSize: 'var(--fs-sm)' }}>{ss.dateRangeStart || '--'} → {ss.dateRangeEnd || '--'}</div></div>
         <div style={{ gridColumn: '1 / -1' }}><div style={labelStyle}>Target</div><div style={{ fontSize: 'var(--fs-sm)', wordBreak: 'break-all' }}>{target}</div></div>
       </div>
@@ -363,11 +363,12 @@ export default function ConnectedPage() {
 
   const exportCsv = () => {
     if (integrations.length === 0) { showToast('Nothing to export', 'warning'); return; }
-    const cols = ['name', 'source', 'dest', 'kind', 'status', 'schedule', 'lastRun', 'lastStatus', 'volume7dTotal'];
+    const cols = ['name', 'source', 'dest', 'kind', 'status', 'schedule', 'lastRun', 'lastStatus', 'lastSynced', 'volume7dTotal'];
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const rows = integrations.map((i) => [
       i.name, i.source?.name || i.fieldMappings?.sourceType, i.dest?.name || i.fieldMappings?.destType,
       i.kind, i.status, i.scheduleCron || '', i.lastRun?.at || '', i.lastRun?.status || '',
+      i.syncState?.lastSyncedAt || i.lastSyncedAt || '',
       (i.volume7d || []).reduce((a, b) => a + (b.count || 0), 0),
     ].map(esc).join(','));
     const csv = [cols.join(','), ...rows].join('\n');
