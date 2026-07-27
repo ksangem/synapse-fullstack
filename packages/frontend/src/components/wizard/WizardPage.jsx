@@ -3810,7 +3810,7 @@ export default function WizardPage() {
                         setDdlStatus('applying');
                         setDdlError('');
                         try {
-                          const res = await api.post('/api/hub/apply-ddl', {
+                          const res = await api.call('/api/hub/apply-ddl', {
                             connection: ddlPreview._connection,
                             ddlStatements: ddlPreview.ddlStatements,
                           });

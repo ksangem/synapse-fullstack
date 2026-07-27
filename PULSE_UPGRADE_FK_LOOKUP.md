@@ -1,7 +1,34 @@
 # Pulse Upgrade — Foreign-Key Lookup + Ordered Multi-Table Load
 
-> **Status:** Designed, not yet implemented (deferred — "we can do later").
-> **Owner:** TBD · **Scope:** platform feature for Pulse normalized loads.
+> **Status: BUILT 2026-07-27** (uncommitted). Backend `tsc` clean · 536 tests pass
+> (10 new in `src/__tests__/fk-lookup.test.ts`) · frontend lint 0 / build clean.
+> **Scope:** platform feature for Pulse normalized loads.
+>
+> ### Built as designed
+> · `preset: 'lookup'` passes the parent NAME through the mapping step
+>   (`MappingEngine.computeValue`) and the **DB destination** resolves it against a
+>   TTL-cached parent map — an unresolvable parent throws with the name that failed,
+>   instead of the opaque FK-constraint error.
+> · `foreignKeys[]` derived from the target's mappings in `integration-flow.ts` and
+>   attached to the destination's config (the destination is handed `t.config`, never
+>   the mappings), read back by the `'database'` factory in `register-connectors.ts`.
+> · `groupOrder` persisted in `fieldMappings` (no migration), `getIntegrationsByGroup`
+>   ordered by it (absent last), Wizard **Load order** input, and stop-on-error in
+>   `run-group` so children never run against a parent that failed.
+>
+> ### Two deliberate deviations from §3/§4
+> · **No `loadKeyMap` on `IDbWriter`, and no three writer implementations.** The
+>   entity-join upgrade landed **`loadRows(schema, table, columns)`** on the interface
+>   *after* this spec was written, plus `WriterTableLoader`/`joinSchemaOf` in
+>   `services/join/DbJoinProvider`. The destination reuses those, so the FK feature
+>   added **zero** new writer surface.
+> · **Stop-on-error only applies to groups that declare an order**, and only skips
+>   members at a *higher* order than the failure. Peers at the same order are not
+>   downstream of it, and groups with no `groupOrder` behave exactly as before.
+>
+> ### Also hardened beyond the spec
+> The `ORDER BY` regex-guards the `::int` cast. A bare cast throws on any non-numeric
+> value, which would take down an entire group run rather than mis-order one member.
 
 ## 1. Why (the problem)
 

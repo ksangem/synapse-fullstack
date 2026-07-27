@@ -50,7 +50,6 @@ export const api = {
   getConnectorCredentialSchema: async (id) => fetchApi(`/api/connectors/${id}/credential-schema`),
   getConnectorRuntimeConfig: async (id) => fetchApi(`/api/connectors/${id}/runtime-config`),
   getConnectorEntities: async (id) => fetchApi(`/api/connectors/${id}/entities`),
-  getConnectorOperations: async (id) => fetchApi(`/api/connectors/${id}/operations`),
   getConnectorVersions: async (id) => fetchApi(`/api/connectors/${id}/versions`),
   // FSD §3-§5 category registry (drives the data-driven Studio) + runtime capabilities
   getConnectorCategories: async () => fetchApi('/api/connectors/meta/categories'),
@@ -72,7 +71,6 @@ export const api = {
 
   // ── Auth (BRD §7.8) ──
   login: async (email, password) => fetchApi('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
-  getMe: async () => fetchApi('/api/auth/me'),
 
   // ── Users & roles (admin) ──
   getUsers: async () => fetchApi('/api/users'),
@@ -101,26 +99,11 @@ export const api = {
     });
   },
 
-  startBrowserAuth: async (baseUrl, email, password, totpSecret) => {
-    return fetchApi('/api/jira/browser-auth', {
-      method: 'POST',
-      body: JSON.stringify({ baseUrl, email, password, totpSecret }),
-    });
-  },
-
-  getBrowserAuthStatus: async () => {
-    return fetchApi('/api/jira/browser-auth/status');
-  },
-
   fetchJiraIssues: async (params) => {
     return fetchApi('/api/jira/fetch', {
       method: 'POST',
       body: JSON.stringify(params),
     });
-  },
-
-  getJiraProjects: async () => {
-    return fetchApi('/api/jira/projects');
   },
 
   discoverEntities: async ({ endpointUrl, email, apiToken, projectKey }) => {
@@ -145,13 +128,6 @@ export const api = {
   },
 
   // ── Real backend endpoints (SharePoint) ──
-  testSharePointConnection: async ({ siteUrl, listName }) => {
-    return fetchApi('/api/sharepoint/test-connection', {
-      method: 'POST',
-      body: JSON.stringify({ siteUrl, listName }),
-    });
-  },
-
   getSharePointListFields: async ({ siteUrl, listName, siteId }) => {
     return fetchApi('/api/sharepoint/list-fields', {
       method: 'POST',
@@ -162,49 +138,12 @@ export const api = {
   // pushToSharePoint (POST /api/sharepoint/push) was retired — SharePoint delivery now
   // flows through the bus via publishRecords()/deliverViaBus in WizardPage.
 
-  getSharePointProgress: async (pushRunId) => {
-    return fetchApi(`/api/sharepoint/progress/${pushRunId}`);
-  },
-
   // ── Real backend endpoints (Integrations CRUD) ──
-  createIntegration: async (body) => {
-    return fetchApi('/api/integrations', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  },
-
-  getIntegration: async (id) => {
-    return fetchApi(`/api/integrations/${id}`);
-  },
-
-  triggerRun: async (id, body = {}) => {
-    return fetchApi(`/api/integrations/${id}/run`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  },
-
   getRuns: async (integrationId) => {
     return fetchApi(`/api/integrations/${integrationId}/runs`);
   },
 
-  getRun: async (runId) => {
-    return fetchApi(`/api/runs/${runId}`);
-  },
-
   // ── Real backend endpoints (Credentials) ──
-  storeCredential: async (body) => {
-    return fetchApi('/api/credentials', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  },
-
-  listCredentials: async () => {
-    return fetchApi('/api/credentials');
-  },
-
   // ── Real backend endpoints (Sync) ──
   triggerSync: async (integrationId, body) => {
     return fetchApi(`/api/sync/${integrationId}/trigger`, {
@@ -268,14 +207,6 @@ export const api = {
     fetchApi(`/api/hub/preview-integration/${integrationId}?limit=${limit}`, { method: 'POST', body: JSON.stringify({}) }),
 
   // ── Bus delivery (the single write path) ──
-  // Publish already-mapped rows onto the Integration Bus for delivery to a generic
-  // destination (database / sharepoint). Returns 202 + { runId }; poll getRunStatus.
-  publishRecords: async (body) => {
-    return fetchApi('/api/hub/publish-records', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  },
   getRunStatus: async (runId) => {
     return fetchApi(`/api/hub/run-status/${runId}`);
   },
@@ -301,14 +232,6 @@ export const api = {
     });
   },
 
-  // Update integration
-  updateIntegration: async (id, body) => {
-    return fetchApi(`/api/integrations/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(body),
-    });
-  },
-
   // Delete integration (and associated credential)
   deleteIntegration: async (id) => {
     return fetchApi(`/api/integrations/${id}`, {
@@ -330,52 +253,20 @@ export const api = {
     return fetchApi('/api/hub/fetch-sp-items', { method: 'POST', body: JSON.stringify(params) });
   },
 
-  // ── Hub: PostgreSQL Destination ──
-  getPgTables: async (params) => {
-    return fetchApi('/api/hub/pg-tables', { method: 'POST', body: JSON.stringify(params) });
-  },
+  // ── Hub: DB destinations (Postgres / MySQL / SQL Server) ──
+  // Only the `test` handlers are called by name. The table-list / column-introspect /
+  // quick-view endpoints are NOT missing: they are reached generically through
+  // `api.call(cfg.handlers.listTables | .columns | .quickView, …)`, where `cfg.handlers`
+  // comes from the connector registry (backend `connectors/seed-data.ts`). Do not add
+  // per-engine wrappers back — they duplicate the registry and go stale silently.
   testPgDest: async (params) => {
     return fetchApi('/api/hub/test-pg-dest', { method: 'POST', body: JSON.stringify(params) });
   },
-  getPgTableColumns: async (params) => {
-    return fetchApi('/api/hub/pg-table-columns', { method: 'POST', body: JSON.stringify(params) });
-  },
-  previewDdl: async (params) => {
-    return fetchApi('/api/hub/preview-ddl', { method: 'POST', body: JSON.stringify(params) });
-  },
-  applyDdl: async (params) => {
-    return fetchApi('/api/hub/apply-ddl', { method: 'POST', body: JSON.stringify(params) });
-  },
-  pgQuickView: async (params) => {
-    return fetchApi('/api/hub/pg-quick-view', { method: 'POST', body: JSON.stringify(params) });
-  },
-
-  // ── Hub: MySQL Destination ──
   testMysqlDest: async (params) => {
     return fetchApi('/api/hub/test-mysql-dest', { method: 'POST', body: JSON.stringify(params) });
   },
-  getMysqlTables: async (params) => {
-    return fetchApi('/api/hub/mysql-tables', { method: 'POST', body: JSON.stringify(params) });
-  },
-  getMysqlTableColumns: async (params) => {
-    return fetchApi('/api/hub/mysql-table-columns', { method: 'POST', body: JSON.stringify(params) });
-  },
-  mysqlQuickView: async (params) => {
-    return fetchApi('/api/hub/mysql-quick-view', { method: 'POST', body: JSON.stringify(params) });
-  },
-
-  // ── Hub: SQL Server Destination ──
   testMssqlDest: async (params) => {
     return fetchApi('/api/hub/test-mssql-dest', { method: 'POST', body: JSON.stringify(params) });
-  },
-  getMssqlTables: async (params) => {
-    return fetchApi('/api/hub/mssql-tables', { method: 'POST', body: JSON.stringify(params) });
-  },
-  getMssqlTableColumns: async (params) => {
-    return fetchApi('/api/hub/mssql-table-columns', { method: 'POST', body: JSON.stringify(params) });
-  },
-  mssqlQuickView: async (params) => {
-    return fetchApi('/api/hub/mssql-quick-view', { method: 'POST', body: JSON.stringify(params) });
   },
 
   // ── Hub: Dead Letter Queue (manual replay) ──
@@ -387,10 +278,5 @@ export const api = {
   },
   replayAllDeadLetters: async () => {
     return fetchApi('/api/hub/dlq/replay', { method: 'POST' });
-  },
-
-  // ── Health check ──
-  healthCheck: async () => {
-    return fetchApi('/health');
   },
 };

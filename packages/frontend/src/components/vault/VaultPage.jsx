@@ -176,7 +176,7 @@ export default function VaultPage() {
   const handleDbTest = async () => {
     setDbTestStatus('testing'); setDbTestMsg('');
     try {
-      const res = await api.post('/api/credentials/test-connection', { engine: dbForm.engine, host: dbForm.host, port: Number(dbForm.port), database: dbForm.database, username: dbForm.username, password: dbForm.password });
+      const res = await api.call('/api/credentials/test-connection', { engine: dbForm.engine, host: dbForm.host, port: Number(dbForm.port), database: dbForm.database, username: dbForm.username, password: dbForm.password });
       if (res.data?.data?.connectionOk) { setDbTestStatus('success'); setDbTestMsg('Connection successful'); }
       else { setDbTestStatus('error'); setDbTestMsg('Connection failed — check credentials'); }
     } catch (err) { setDbTestStatus('error'); setDbTestMsg(err.message || 'Network error'); }
@@ -185,7 +185,7 @@ export default function VaultPage() {
   const handleDbSave = async () => {
     setDbSaveStatus('saving');
     try {
-      const res = await api.post('/api/credentials', {
+      const res = await api.call('/api/credentials', {
         orgId: '00000000-0000-0000-0000-000000000001',
         systemName: `${dbForm.engine}://${dbForm.host}:${dbForm.port}/${dbForm.database}`,
         authType: 'database_connection',

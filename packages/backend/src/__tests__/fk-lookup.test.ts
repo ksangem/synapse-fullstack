@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { applyRichMappings, foreignKeysFromMappings, type MappingEntry } from '../services/MappingEngine';
+// vi.mock calls below are hoisted above this import, so the destination picks up the stubs.
+import { DatabaseDestinationConnector } from '../hub/database-destination';
 
 /**
  * Foreign-key lookup (PULSE_UPGRADE_FK_LOOKUP).
@@ -24,9 +26,6 @@ const writeMock = vi.fn();
 vi.mock('../integrations/database/genericDbWrite', () => ({
   writeRecordsToDb: (args: unknown) => writeMock(args),
 }));
-
-// Imported after the mocks so the destination picks them up.
-const { DatabaseDestinationConnector } = await import('../hub/database-destination');
 
 function lookupMapping(source: string, destination: string, cfg?: Record<string, unknown>): MappingEntry {
   return {

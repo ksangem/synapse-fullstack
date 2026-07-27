@@ -301,8 +301,13 @@ export async function getIntegrationsByGroup(groupId: string): Promise<Integrati
     .select()
     .from(integrations)
     .where(and(eq(integrations.status, 'active'), sql`${integrations.fieldMappings} ->> 'groupId' = ${groupId}`))
+    /* The regex guard matters: a bare ::int cast throws on any non-numeric value,
+       which would take down the whole group run rather than mis-order one member.
+       The save schema already enforces an int, so this only covers hand-edited
+       JSONB — such a value sorts last instead of erroring. */
     .orderBy(
-      sql`(${integrations.fieldMappings} ->> 'groupOrder')::int ASC NULLS LAST`,
+      sql`CASE WHEN ${integrations.fieldMappings} ->> 'groupOrder' ~ '^-?[0-9]+$'
+               THEN (${integrations.fieldMappings} ->> 'groupOrder')::int END ASC NULLS LAST`,
       integrations.createdAt,
     );
 }
