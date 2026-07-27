@@ -44,7 +44,6 @@
     "p-limit": "^7.3.0",
     "pg": "^8.20.0",
     "playwright": "^1.59.1",
-    "postgres": "^3.4.9",
     "quickjs-emscripten": "^0.32.0",
     "ssh2-sftp-client": "^12.1.1",
     "strong-soap": "^5.0.10",

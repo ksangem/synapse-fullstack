@@ -137,7 +137,7 @@ strategies; typed/fallback selectors; opt-in robots.txt. Files: `BrowserSessionS
 **SharePoint push tables:** `push_log` (dedup layer 1), `jira_item_cache` (dedup layer 2 — JiraKey↔SP item
 ID + terminal-status flag), `sync_state` (delta watermark), `sharepoint_push_runs` (progress/counts).
 **Hub/bus tables:** `inbox_entries`, `outbox_entries`, `dead_letter_entries`, `idempotency_entries`,
-`source_cursors` (the durable bus's checkpoints — built, mostly dormant; see ARCHITECTURE_AND_GAPS.md).
+`source_cursors` (the bus's checkpoints). All are LIVE — the distributed bus is the only data path.
 
 **Key enums:** `user_role` (admin/designer/operator/viewer), `run_status`, `integration_status`,
 `push_type` (INITIAL/OVERRIDE/SYNC_DELTA/SYNC_FRESH), `push_status`, `sync_status`,
@@ -183,9 +183,13 @@ Full detail in **`ARCHITECTURE_AND_GAPS.md`**. The essentials:
 - **The engineered bus is independent of source/destination** — sources/destinations are plug-ins
   (`read()` / `dispatch()`); the bus only handles a standard **`MessageEnvelope`** (JSON `payload` inside a
   fixed wrapper). This turns **M×N** bespoke integrations into **M+N** plug-ins.
-- **★ BINDING DECISION (2026-06-15):** the target is the **distributed `IntegrationBus` (BullMQ/Redis)**,
-  not the in-process `DurableBus`. The **#1 missing piece to build = the per-subscription dispatch worker**.
-  Migrate via the **strangler pattern** behind a `HUB_ENABLED` flag; delete the other buses once proven.
+- **★ BINDING DECISION (2026-06-15) — since DELIVERED:** the target was the **distributed
+  `IntegrationBus` (BullMQ/Redis)**, not the in-process `DurableBus`. That migration is **complete**:
+  the per-subscription dispatch worker (`workers/hubDispatchWorker.ts`) is built and live, `HUB_ENABLED`
+  defaults to **true**, and `DurableBus` + `InMemoryBus` have been **deleted**. Every source→destination
+  transfer now goes through the distributed bus; there are no direct in-request destination writes left.
+  Item (3) above ("what actually runs: direct synchronous in-HTTP-request calls") describes the
+  pre-migration state and is retained only as history.
 
 ---
 

@@ -416,24 +416,23 @@ npm run db:push
 | POST | `/discover-sp-lists` | List non-hidden SP lists |
 | POST | `/sp-list-fields` | Get SP list columns |
 | POST | `/fetch-sp-items` | Fetch all items (paginated) |
-| POST | `/test-pg-dest` | Test PostgreSQL connection |
-| POST | `/pg-tables` | List PG tables + column counts |
-| POST | `/pg-table-columns` | Introspect PG table schema |
-| POST | `/push-to-pg` | Auto-create table + upsert items |
 | POST | `/preview-ddl` | Preview DDL changes |
 | POST | `/apply-ddl` | Apply DDL statements |
-| POST | `/pg-quick-view` | SELECT * LIMIT N |
+| POST | `/test-pg-dest` | Test PostgreSQL connection |
 | POST | `/test-mysql-dest` | Test MySQL connection |
-| POST | `/mysql-tables` | List MySQL tables |
-| POST | `/mysql-table-columns` | Introspect MySQL table |
-| POST | `/push-to-mysql` | Auto-create + upsert to MySQL |
-| POST | `/mysql-quick-view` | SELECT * view |
+| POST | `/test-mssql-dest` | Test SQL Server connection |
+| POST | `/{pg,mysql,mssql}-tables` | List tables + column counts |
+| POST | `/{pg,mysql,mssql}-table-columns` | Introspect a table schema |
+| POST | `/{pg,mysql,mssql}-quick-view` | SELECT * LIMIT N + total count |
 
-### Push (`/api/push`)
+The nine `{engine}-…` handlers share one lifecycle helper (`withWriter`) in `hub.routes.ts`;
+the three `-table-columns` routes are one implementation (`introspectTable`) registered three times.
+The frontend does NOT call them through named `api.js` methods — it dispatches generically with
+`api.call(cfg.handlers.listTables | .columns | .quickView)`, where `cfg.handlers` comes from the
+connector registry (`connectors/seed-data.ts`).
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/project` | Push project with 3-layer dedup |
+**Retired** (they bypassed the bus; all delivery now goes through it): `/push-to-pg`,
+`/push-to-mysql`, `/push-to-mssql`, and the whole `/api/push` router including `POST /project`.
 
 ### Sync (`/api/sync`)
 
@@ -580,7 +579,9 @@ interface ITransformStep {
 | `SharePointGraphReader.ts` | Graph API delta queries for items/columns |
 | `SharePointFieldTypeMapper.ts` | SP field types to canonical types |
 | `SharePointSourceConnector.ts` | Implements `ISourceConnector` |
-| `SharePointListSchemaDiscovery.ts` | Discover list columns at config time |
+
+(`SharePointListSchemaDiscovery.ts` was deleted 2026-07-27 — nothing imported it. Column
+discovery goes through `SharePointGraphReader` / the `/api/hub/sp-list-fields` endpoint.)
 
 ### Destination Connectors
 

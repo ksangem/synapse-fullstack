@@ -36,8 +36,11 @@
 >   DLQ as `(unrouted)`/`poisoned`** (visible in Monitor, not auto-replayed) instead of silently
 >   dropping it. Full auto-delivery of webhooks needs a webhook subscription model (topic alignment
 >   between ingest and the adapter). Tracked as the one true end-to-end gap.
-> - Legacy `applyMappings` (services/MappingEngine) has **no production caller** but is retained for its
->   `e2e-mapping-push.test.ts` behavioural suite; physically deleting it + those tests is a safe follow-up.
+> - ~~Legacy `applyMappings` is retained for its test suite~~ — **DONE**: `applyMappings`, `runPreset`,
+>   `validateMappingConfig` and `MappingConfig` were deleted along with the five legacy describe blocks
+>   in `e2e-mapping-push.test.ts`. `applyRichMappings` is now the only mapping engine, and with the
+>   legacy path gone no mapper evaluates EXPRESSION via `new Function()` — the survivor uses the
+>   quickjs WASM sandbox.
 
 ---
 

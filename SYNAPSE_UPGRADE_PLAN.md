@@ -1,10 +1,14 @@
 # Synapse Upgrade Plan — Turn On the Distributed Integration Bus
 
-> Approved 2026-06-15. Day-by-day, each day manually verified by the operator. Mirror of the approved
-> plan; the live progress tracker is at the bottom + in memory (`synapse-upgrade-plan`).
-> Background: `ARCHITECTURE_AND_GAPS.md`, `SYNAPSE_KNOWLEDGE.md`.
+> ## ✅ COMPLETE — historical record, not a to-do list
+>
+> Approved 2026-06-15; **all 16 days delivered**. The distributed `IntegrationBus` is live and ON by
+> default (`HUB_ENABLED` defaults to `true`), and the in-process `DurableBus` + `InMemoryBus` were
+> deleted. The "Context" section below describes the state BEFORE this work and is kept only as the
+> rationale — do not read it as current. For current architecture see `CLAUDE.md`, and for the
+> post-migration audit see the status header of `ARCHITECTURE_AND_GAPS.md`.
 
-## Context
+## Context (as of 2026-06-15, pre-migration)
 
 Today Synapse moves data the "simple" way — synchronous, in-HTTP-request, direct service-to-service calls
 (Jira→SharePoint, SharePoint→DB). The durable message bus (inbox dedup, topic fan-out, exactly-once
