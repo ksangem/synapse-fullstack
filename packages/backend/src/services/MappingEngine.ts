@@ -7,7 +7,11 @@
  * Three transform modes:
  * - DIRECT: copy source value to destination as-is
  * - PRESET: apply a built-in transform function (joinArray, dateFormat, etc.)
- * - EXPRESSION: evaluate a user-written JS expression via new Function()
+ * - EXPRESSION: evaluate a user-written JS expression in the quickjs WASM sandbox
+ *   (services/SafeExpression) — never new Function()/eval on the Node heap.
+ *
+ * There is ONE engine: applyRichMappings. The bus (run-integration) and SyncService
+ * both go through it, so an integration maps identically however it is triggered.
  */
 
 import { evalExpression } from './SafeExpression';
@@ -74,12 +78,6 @@ export interface MappingEntry {
   routes?: { targetId: string; column: string }[];
 }
 
-export interface MappingConfig {
-  entity: string;             // e.g. 'issues'
-  projectKey?: string;
-  mappings: MappingEntry[];
-}
-
 /**
  * Resolve a dot-path like "status.name" against a Jira issue object.
  * Tries both flat (issue.fields['status.name']) and nested (issue.fields.status.name).
@@ -107,14 +105,6 @@ export function getNestedValue(obj: Record<string, unknown>, path: string): unkn
   return current;
 }
 
-// ── Legacy mapper — DEPRECATED, no production caller. ──
-// As of the mapping-engine unification, NOTHING on a production path calls applyMappings:
-// both the bus (run-integration) and SyncService now map via applyRichMappings below, so a
-// Jira→SP integration maps identically however it is triggered. applyMappings / runPreset /
-// validateMappingConfig / MappingConfig are retained ONLY because e2e-mapping-push.test.ts
-// still locks their legacy behaviour. Deleting them (and those tests) is a safe follow-up
-// once the SyncService rich-mapping switch is verified against real Jira→SP data.
-
 /**
  * Normalize a year / partial date / full ISO datetime into a SQL DATE string
  * "YYYY-MM-DD". A bare year "2026" → "2026-01-01"; "2026-05" → "2026-05-01"; a
@@ -130,54 +120,7 @@ export function toSqlDate(value: unknown): string | null {
   return `${m[1]}-${mo}-${d}`;
 }
 
-/** Apply a built-in preset transform to a value (legacy). */
-function runPreset(preset: string, value: unknown, config?: Record<string, unknown>): unknown {
-  if (value === null || value === undefined) return null;
-  switch (preset) {
-    case 'dateFormat': return typeof value === 'string' ? value.substring(0, 10) : String(value);
-    case 'toDate': return toSqlDate(value);
-    case 'uppercase': return String(value).toUpperCase();
-    case 'lowercase': return String(value).toLowerCase();
-    case 'trim': return String(value).trim();
-    case 'joinArray': { const sep = (config?.separator as string) ?? ', '; return Array.isArray(value) ? value.join(sep) : String(value); }
-    case 'extractNumber': { const match = String(value).match(/[\d.]+/); return match ? Number(match[0]) : null; }
-    case 'boolean': return Boolean(value);
-    default: return value;
-  }
-}
-
-/**
- * @deprecated DEAD on every production path — SyncService was migrated to applyRichMappings
- * (the same engine the bus uses) so a Jira→SP connection maps identically however it is
- * triggered. Retained only for its own test suite; the old "used by SyncService's direct
- * Jira→SharePoint path" note above was stale. Safe to delete with those tests.
- */
-export function applyMappings(
-  jiraIssue: Record<string, unknown>,
-  mappingConfig: MappingConfig,
-): Record<string, unknown> {
-  const spFields: Record<string, unknown> = {};
-  for (const mapping of mappingConfig.mappings) {
-    if (mapping.sources.length === 0 || mapping.destinations.length === 0) continue;
-    const source: Record<string, unknown> = {};
-    for (const srcField of mapping.sources) source[srcField] = getNestedValue(jiraIssue, srcField);
-
-    let result: unknown;
-    if (mapping.transform === 'DIRECT') result = source[mapping.sources[0]];
-    else if (mapping.transform === 'PRESET') result = runPreset(mapping.preset ?? '', source[mapping.sources[0]], mapping.presetConfig);
-    else if (mapping.transform === 'EXPRESSION') {
-      try { result = new Function('source', mapping.expression)(source); }
-      catch (err) { console.error(`[MappingEngine] Expression error for mapping ${mapping.id}: ${err}`); result = null; }
-    }
-
-    if (mapping.destinations.length === 1) spFields[mapping.destinations[0]] = result;
-    else if (result && typeof result === 'object' && !Array.isArray(result)) Object.assign(spFields, result);
-    else for (const dest of mapping.destinations) spFields[dest] = result;
-  }
-  return spFields;
-}
-
-// ── Wizard-faithful mapper (used by the bus) — matches WizardPage.computeMappedValue. ──
+// ── Wizard-faithful mapper (the single mapping engine) — matches WizardPage.computeMappedValue. ──
 
 /**
  * Collapse a raw source value to a scalar the way the Wizard does client-side:
@@ -356,7 +299,7 @@ function computeValue(m: MappingEntry, record: Record<string, unknown>): unknown
  * Apply Wizard-shaped mappings to one source record → a flat destination row.
  * Mirrors WizardPage.mapRecordsToDest exactly (extraction, 16 presets, one-to-many),
  * so a server-side run/preview equals what the Wizard showed. Used by the bus path
- * (FieldMappingStep + preview) — separate from the legacy applyMappings above.
+ * (FieldMappingStep + preview) and by SyncService — the one and only mapping engine.
  */
 export function applyRichMappings(
   record: Record<string, unknown>,
@@ -434,23 +377,3 @@ export function applyRichMappingsByTarget(
   return out;
 }
 
-/**
- * Check if a mapping config is valid.
- */
-export function validateMappingConfig(config: MappingConfig): { valid: boolean; errors: string[] } {
-  const errors: string[] = [];
-  if (!config.mappings || config.mappings.length === 0) {
-    errors.push('No mappings defined');
-  }
-  for (const m of config.mappings) {
-    if (m.sources.length === 0) errors.push(`Mapping ${m.id}: no source fields`);
-    if (m.destinations.length === 0) errors.push(`Mapping ${m.id}: no destination fields`);
-    if (m.transform === 'EXPRESSION' && !m.expression.trim()) {
-      errors.push(`Mapping ${m.id}: empty expression`);
-    }
-    if (m.transform === 'PRESET' && !m.preset) {
-      errors.push(`Mapping ${m.id}: no preset selected`);
-    }
-  }
-  return { valid: errors.length === 0, errors };
-}

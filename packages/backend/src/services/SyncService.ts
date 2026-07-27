@@ -256,9 +256,10 @@ export async function runSync(
 
         // Map with the SAME rich engine the bus's run-integration path uses, so a Jira→SP
         // integration produces IDENTICAL output however it is triggered (delta sync here vs
-        // run-integration). Previously this path used the legacy applyMappings, so the same
-        // connection could map differently depending on the trigger. Only the explicit
-        // user-mapping branch changes; the default mapper (no user mappings) is untouched.
+        // run-integration). This path once used a separate legacy mapper, so the same
+        // connection could map differently depending on the trigger; that mapper is gone.
+        // Only the explicit user-mapping branch uses this; the default mapper (no user
+        // mappings) is untouched.
         const userMappings = (fieldMappings as Record<string, unknown> | null)?.mappings as MappingEntry[] | undefined;
         const rawMapped = userMappings?.length
           ? applyRichMappings(issue, userMappings)
