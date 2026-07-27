@@ -6,7 +6,7 @@
 > default (`HUB_ENABLED` defaults to `true`), and the in-process `DurableBus` + `InMemoryBus` were
 > deleted. The "Context" section below describes the state BEFORE this work and is kept only as the
 > rationale — do not read it as current. For current architecture see `CLAUDE.md`, and for the
-> post-migration audit see the status header of `ARCHITECTURE_AND_GAPS.md`.
+> post-migration audit see the status header of `../architecture/data-flow.md`.
 
 ## Context (as of 2026-06-15, pre-migration)
 

@@ -2,9 +2,10 @@
 
 > The single "everything about Synapse" reference. Consolidates the BRD, DEVELOPER_GUIDE,
 > PRODUCT_STATUS, CONNECTOR_PLAYBOOK, and code traces as of **2026-06-15**.
-> Companion docs: **`ARCHITECTURE_AND_GAPS.md`** (deep data-flow architecture + the bus decision + a
-> plain-English concepts primer) and **`SESSION_NOTES_2026-06-15.md`** (dated working log).
+> Companion doc: **[`data-flow.md`](data-flow.md)** — deep data-flow architecture, the bus
+> decision, and a plain-English concepts primer.
 > Point-in-time: verify file:line claims against current code before relying on them.
+> (A `SESSION_NOTES_2026-06-15.md` was referenced here but never existed in the repo.)
 
 ---
 
@@ -85,7 +86,7 @@ branches with one generic path.
   generic set of endpoints (`/api/connectors/runtime/{test,fetch,push,push-to-db}`) for *any* connector.
 - **All 12 categories have real runtimes** in `services/runtime/`.
 
-### Honest "does it actually move data?" map (from CONNECTOR_PLAYBOOK.md)
+### Honest "does it actually move data?" map (from ../guides/connectors.md)
 | Category | Real? | Direction |
 |---|---|---|
 | REST, SaaS (on REST), GraphQL | ✅ live | both ways |
@@ -174,7 +175,7 @@ dest, DDL preview/apply) · `/api/push/project` (3-layer dedup direct push) · `
 
 ## 11. How data moves Source → Destination (and the decision)
 
-Full detail in **`ARCHITECTURE_AND_GAPS.md`**. The essentials:
+Full detail in **`data-flow.md`**. The essentials:
 
 - **Three layers of "wiring" exist; only the simplest runs.** (1) BRD's async-worker pattern; (2) the
   ambitious **durable message bus** (inbox → router → outbox → transform → dispatch, with idempotency,
@@ -233,10 +234,9 @@ backends, write-sides, full Wizard `runtimeClient` cutover, and **turning on the
 
 | Doc | Purpose |
 |---|---|
-| **`SYNAPSE_KNOWLEDGE.md`** (this) | Master "everything about Synapse" reference |
-| `ARCHITECTURE_AND_GAPS.md` | Deep data-flow architecture, the bus, the binding decision, concepts primer |
-| `SESSION_NOTES_2026-06-15.md` | Dated working log (incl. how-to-run + Claude-CLI auto-mode notes) |
-| `DEVELOPER_GUIDE.md` | Long-form developer guide (structure, API, hub pattern) |
-| `PRODUCT_STATUS.md` | Candid module build-status |
-| `CONNECTOR_PLAYBOOK.md` | All 12 categories: how to author + honest does-it-move-data map |
-| `DEMO_GUIDE.md` / `SYNAPSE_TEST_GUIDE.md` / `E2E_TEST_PLAN.md` | Walkthroughs + test plans |
+| **`overview.md`** (this) | Master "everything about Synapse" reference |
+| `data-flow.md` | Deep data-flow architecture, the bus, the binding decision, concepts primer |
+| `developer-guide.md` | Long-form developer guide (structure, API, hub pattern) |
+| `../status/product-status.md` | Candid module build-status |
+| `../guides/connectors.md` | All 12 categories: how to author + honest does-it-move-data map |
+| `../guides/demo.md` / `../guides/test-guide.md` / `../guides/testing.md` | Walkthroughs + test plans |

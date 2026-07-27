@@ -34,7 +34,7 @@ Class-less `<button>` count: **52 → 0**. Sub-24px tap targets app-wide: **0**.
 >   scroll region (see the landmine note in the audit doc).
 > · Verified: 24 cards no clipping, health split 13/1/10, selection causes zero layout shift, cards are
 >   `role=button tabindex=0`, blocked pickers are non-focusable, keyboard Enter selects, dark theme clean.
-**Companion doc:** `UI_AUDIT_2026-07-23.md` (Week 1 applied; colour/type/token/a11y tiers still open)
+**Companion doc:** `ui-audit-2026-07-23.md` (Week 1 applied; colour/type/token/a11y tiers still open)
 
 ---
 

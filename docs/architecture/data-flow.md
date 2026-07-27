@@ -2,7 +2,7 @@
 
 > A deep-dive into how data is *meant* to move from Source → Destination ("the highly
 > engineered wiring"), how it *actually* moves today, the precise gap, and the correction plan.
-> Sources: `docs/Synapse_BRD_v1.docx` §6.2, `DEVELOPER_GUIDE.md` §9, and a code-level trace
+> Sources: `../reference/Synapse_BRD_v1.docx` §6.2, `developer-guide.md` §9, and a code-level trace
 > of `packages/backend/src` (2026-06-15).
 
 ---

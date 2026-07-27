@@ -1,6 +1,6 @@
 # Synapse Connector Playbook — all 12 systems, one by one
 
-Companion to **DEMO_GUIDE.md** (use that for setup + the detailed Wizard run + proof points).
+Companion to **demo.md** (use that for setup + the detailed Wizard run + proof points).
 This file walks **every connector category**: how to author it, and whether/how it transfers data.
 
 ---
@@ -92,10 +92,10 @@ runtime needs an extra service.)
 
 ## PHASE C — Data transfer, one source at a time → a database
 
-Each transfer is the **same Wizard flow** (DEMO_GUIDE.md Part 3 / Part 9). Pick the source you
+Each transfer is the **same Wizard flow** (demo.md Part 3 / Part 9). Pick the source you
 built, a **database destination**, **Fetch → Push**, then **prove** it (source on the left,
 **Adminer** http://localhost:8082 on the right). Destination connection values & proof commands
-are in **DEMO_GUIDE.md §9.4**.
+are in **demo.md §9.4**.
 
 ### C1. REST / SaaS → Database ✅ (verified)
 - **Source proof:** open `http://localhost:8089/api/products` (6 JSON products).
@@ -105,18 +105,18 @@ are in **DEMO_GUIDE.md §9.4**.
 - Repeat changing only the destination to **MySQL** and **SQL Server** → "any database."
 
 ### C2. Flat File / CSV → Database
-- Create `demo.csv` (3 rows — see DEMO_GUIDE.md §9.3-B). **Source proof:** open the file.
+- Create `demo.csv` (3 rows — see demo.md §9.3-B). **Source proof:** open the file.
 - Wizard: source `Demo CSV` → upload `demo.csv` in Step 2 → destination any DB → Fetch (3) → Push.
 - **Destination proof:** the 3 CSV rows in the DB table.
 
 ### C3. Webhook → Database
 - **Source proof:** the curl payload you send to the ingest URL (`/api/ingest/<connectorId>`,
-  shown in the connector's Stage-5 test). See DEMO_GUIDE.md §9.3-C.
+  shown in the connector's Stage-5 test). See demo.md §9.3-C.
 - Send 2 events → Wizard fetch reads them → Push → **Destination proof:** 2 rows in the DB.
 
 ### C4. Message Queue (Redis Streams) → Database
 - **Source proof:** `docker exec synapse-redis redis-cli XADD demo-stream "*" id E-1 item "Event A"`
-  (add a couple). See DEMO_GUIDE.md §9.3-D.
+  (add a couple). See demo.md §9.3-D.
 - Wizard: source `Demo Queue` → DB → Fetch → Push → **Destination proof:** the events as rows.
 
 ### C5. (Advanced) GraphQL / Email / Web Scraping → Database

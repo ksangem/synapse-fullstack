@@ -1,6 +1,16 @@
 # Synapse Integration Platform
 
-**Jira-to-SharePoint data synchronization platform.** Pulls issue data from Jira (via API or browser scraping), normalizes it, and pushes it to SharePoint lists via Microsoft Graph API. Includes scheduling, deduplication, credential management, and a monitoring dashboard.
+**A connector-based data integration platform.** Author a connector, wire a source to one
+or more destinations in the Wizard, and every record moves over a durable message bus
+(BullMQ/Redis) with mapping, idempotency, retry and a dead-letter queue.
+
+Sources and destinations span Jira, SharePoint, relational databases
+(Postgres/MySQL/SQL Server), REST/SaaS/GraphQL endpoints, file shares (SFTP/S3/Azure/
+Google Drive/local) and authored web-scraping connectors. Jira → SharePoint was the
+original module and is still the reference flow, but it is no longer the whole product.
+
+> **📚 Documentation lives in [`docs/`](docs/README.md)** — start with that index; it
+> says which document answers which question.
 
 ## Tech Stack
 
@@ -8,10 +18,10 @@
 |-------|-----------|
 | Frontend | React 19 + React Router 7 + Vite |
 | Backend | Express 5 + TypeScript + Drizzle ORM |
-| Database | PostgreSQL 16 (13 tables, 2 schemas) |
-| Queue | Redis 7 + BullMQ |
-| Browser Automation | Playwright (Jira SSO/MFA scraping) |
-| Infrastructure | Docker Compose (Postgres + Redis) |
+| Database | PostgreSQL 16 (schemas `app` + `jira_data`) |
+| Bus / Queue | Redis 7 + BullMQ (durable inbox/outbox/DLQ) |
+| Browser Automation | Playwright (Jira SSO/MFA scraping, web-scrape connectors) |
+| Infrastructure | Docker Compose — Postgres ×2, MySQL, SQL Server, Redis, MinIO, RabbitMQ, WireMock, Adminer |
 
 ## Prerequisites
 
@@ -83,22 +93,45 @@ npm run dev
 
 ## Project Structure
 
+Reorganised 2026-07-27: the root used to hold ~20 loose `SHOUTING_CASE.md` files and a
+scatter of `.xlsx` / `.py` / `.bat`. Those are now grouped by purpose.
+
 ```
 synapse-fullstack/
-├── docker-compose.yml          # Postgres + Redis
+├── README.md                   # you are here
+├── CLAUDE.md                   # agent context (gitignored; tooling expects it at root)
+├── docker-compose.yml          # Postgres ×2, MySQL, MSSQL, Redis, MinIO, RabbitMQ, WireMock, Adminer
+│
 ├── packages/
-│   ├── backend/
-│   │   └── src/
-│   │       ├── api/            # Express route handlers
-│   │       ├── db/             # Drizzle schema + migrations
-│   │       ├── integrations/   # Jira & SharePoint connectors
-│   │       ├── services/       # Business logic
-│   │       ├── workers/        # BullMQ background jobs
-│   │       └── queues/         # Queue definitions
-│   └── frontend/
-│       └── src/                # React app
-├── docs/                       # BRD, project plan, diagrams
-└── .env.example                # Environment template
+│   ├── backend/src/
+│   │   ├── api/                # Express route handlers
+│   │   ├── hub/                # the live message bus (routing, inbox/outbox, DLQ, destinations)
+│   │   ├── db/                 # Drizzle schema + migrations
+│   │   ├── integrations/       # connector implementations (Jira, SharePoint, databases, …)
+│   │   ├── services/           # business logic (mapping, credentials, sync, storage)
+│   │   ├── workers/            # BullMQ consumers
+│   │   └── queues/             # queue definitions
+│   └── frontend/src/           # React app
+│
+├── docs/                       # ALL documentation — see docs/README.md
+│   ├── architecture/           # how the system works
+│   ├── guides/                 # demo, connectors, testing, QA sharing
+│   ├── upgrades/               # design docs for delivered features
+│   ├── history/                # completed plans + audits (record, not to-do)
+│   ├── status/                 # built-vs-pending snapshot
+│   └── reference/              # BRD/FSD source docs + diagrams
+│
+├── planning/                   # project-management artifacts, not engineering docs
+│   └── generators/             # the scripts that produce them
+│
+├── scripts/
+│   ├── setup/                  # first-run DB + server setup, QA launcher
+│   ├── dev/                    # log tailing, DB browser
+│   ├── demo/  └── e2e/         # seeding and the end-to-end runner
+│
+├── wiremock/                   # mock REST/SOAP stubs — mounted by docker-compose (do not move)
+├── logs/                       # `npm run dev:logged` writes here (do not move)
+└── .env.example
 ```
 
 ## Database

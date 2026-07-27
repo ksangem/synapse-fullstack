@@ -6,7 +6,7 @@
 > (all config / registry driven). The high-risk / architecture-changing items are explicitly
 > **excluded** (see the last section).
 >
-> Companion docs: [[PULSE_UPGRADE_ENTITY_JOIN.md]], [[PULSE_UPGRADE_FK_LOOKUP.md]].
+> Companion docs: [[entity-join.md]], [[fk-lookup.md]].
 > Source of the gap list: `synapse-QC Plan.xlsx` (Sheet1 Status/Notes + Sheet2 deviation analysis).
 
 ## Guardrails (why these are safe)

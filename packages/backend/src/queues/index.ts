@@ -39,6 +39,10 @@ export const getCredentialRotatorQueue = (): Queue => queue('credential-rotator'
 // credential scanner; obtaining the queue here does not start it.
 export const getAlertDispatcherQueue = (): Queue => queue('alert-dispatcher');
 
+// Data retention — the nightly sweeper that keeps the bus ledgers and logs from growing
+// without bound. Producer handle only; initHub starts the consuming Worker.
+export const getRetentionQueue = (): Queue => queue('data-retention');
+
 // Distributed Integration Bus — the two fixed queues (decision #2). These are producer
 // handles; the consuming Workers are started only by initHub (gated by HUB_ENABLED), so
 // obtaining the queues here doesn't start the bus.

@@ -41,7 +41,7 @@
 > **Owner:** TBD · **Scope:** platform feature — mappings that pull values from **other entities**
 > (another source list/table, or another destination table) by joining on a key, with optional
 > aggregation, chained across hops.
-> **Relationship to FK-lookup:** `PULSE_UPGRADE_FK_LOOKUP.md` §6 explicitly scopes this out
+> **Relationship to FK-lookup:** `fk-lookup.md` §6 explicitly scopes this out
 > ("*not a general cross-entity join/aggregate — that is the separate multi-entity-source feature*").
 > This doc is that feature. **FK-lookup is the narrow special case; this subsumes it.**
 
@@ -304,7 +304,7 @@ Add `loadRows(schema, table, keyCol, columns[])` to `IDbWriter` + the three writ
 FK-lookup `loadKeyMap`). Add the dest-side `EntityIndexProvider` with the TTL cache. Wire the step in
 `integration-flow.ts` **only when `config.joins` present**. Now `side:"dest"` joins work — and FK-lookup
 (`name → id`) is just a dest join pulling `id`. **Gate:** the FK-lookup end-to-end from
-`PULSE_UPGRADE_FK_LOOKUP.md §7` passes *through this engine*; a no-joins regression run is byte-identical.
+`fk-lookup.md §7` passes *through this engine*; a no-joins regression run is byte-identical.
 
 **Phase 2 — Source-side provider (enrichment from another source entity).**
 Extend the provider with `side:"source"` — read the joined entity via the existing `buildSource(...)`

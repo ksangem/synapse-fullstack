@@ -221,7 +221,7 @@ is closer to **"we need Tara ATS and a CRM feed; almost everything else is alrea
 5. **Wave 3 — HR/PMS** (biggest surprise win): `appraisals`, `onboarding_steps`, `bgv_status`,
    `one_on_ones`, `engagement_surveys`. Cross-site — each site is a separate connection.
 6. **Wave 4 — Finance:** `billing_actuals`, `revenue_snapshots`, `ar_aging`, `gross_margin` — needs
-   the cross-entity join feature (`PULSE_UPGRADE_ENTITY_JOIN.md`) to combine Invoice + Resource Cost
+   the cross-entity join feature (`entity-join.md`) to combine Invoice + Resource Cost
    + Clients.
 7. **Escalate, don't build:** P-360 data entry; Tara ATS access (30 KPIs of TA + hiring); a CRM feed.
 

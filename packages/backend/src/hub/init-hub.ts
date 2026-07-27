@@ -119,6 +119,17 @@ export async function initHub(): Promise<HubRuntime> {
     console.error('[Hub] alert dispatcher wiring failed:', (err as Error).message);
   }
 
+  // Data retention — nightly sweep so the bus ledgers, DLQ and run traces stay bounded.
+  // Windows are per-table and env-overridable; see retentionWorker for the safety rules
+  // (terminal rows only, replayed-only DLQ entries, audit sweeping off by default).
+  try {
+    const { startRetentionWorker, registerRetentionSweep } = await import('../workers/retentionWorker');
+    workers.push(startRetentionWorker());
+    await registerRetentionSweep();
+  } catch (err) {
+    console.error('[Hub] retention sweep wiring failed:', (err as Error).message);
+  }
+
   // Watchdog (#4): guarantees every run terminates — no push can spin forever.
   try {
     const { startRunWatchdog } = await import('./run-watchdog');

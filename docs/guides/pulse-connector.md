@@ -1,6 +1,6 @@
 # Build guide — SharePoint → Pulse DB connectors
 
-> Companion to `PULSE_SHAREPOINT_FEASIBILITY.md` (which tables are fillable *at all*).
+> Companion to `../upgrades/sharepoint-feasibility.md` (which tables are fillable *at all*).
 > This is the **how**: which list, which transformation, which destination table — step by step.
 >
 > Grounded in live introspection 2026-07-16: the real `pulse_2` schema (identity columns, 91 foreign
@@ -42,7 +42,7 @@ Two consequences:
 - **Load parents before children** (see §2).
 - **Resolve the FK with a join**, not a direct map. In Step 4 open **Cross-Entity Joins → Look up an
   ID**: look up `employees` by `employee_id_external` = the SharePoint employee id, return `id`, and
-  map that to `employee_id`. This is the dest-side FK lookup built in `PULSE_UPGRADE_ENTITY_JOIN.md`.
+  map that to `employee_id`. This is the dest-side FK lookup built in `../upgrades/entity-join.md`.
 
 ### Rule 4 — the match key is the unique business column, never `id`
 Set **"Match records by"** in Step 4 to these:
