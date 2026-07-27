@@ -6,6 +6,7 @@ import { useToolbarAction } from '../../hooks/useToolbarAction';
 import { api } from '../../services/api';
 import { mapToCard, statusLabel } from '../../services/integrationMap';
 import IntegrationCard from './IntegrationCard';
+import { RunLogPanel } from './RunProgress';
 import { CardSkeleton, CardEmpty } from '../ui/Card';
 import Button from '../ui/Button';
 
@@ -20,6 +21,10 @@ export default function RegistryPage() {
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(true);
   const [runningId, setRunningId] = useState(null);
+  // The run that is currently in flight, as { integrationId, runId }. run-integration has
+  // always RETURNED a runId; the page used to throw it away, which is why a run was
+  // invisible the moment it started. Holding it is what makes live progress possible.
+  const [activeRun, setActiveRun] = useState(null);
   // Card selection → bulk pause/resume. The Registry previously offered no way to
   // act on more than one integration at a time even though the API supports it.
   const [selected, setSelected] = useState(() => new Set());
@@ -48,11 +53,16 @@ export default function RegistryPage() {
   const handleRun = async (int) => {
     if (runningId) return;
     setRunningId(int.id);
+    setActiveRun(null);
     try {
       const res = await api.runIntegration(int.id);
       if (res.ok && res.data?.success !== false) {
-        showToast(`Started “${int.name}”`, 'success');
-        setTimeout(() => { load(); }, 1500);
+        const runId = res.data?.data?.runId;
+        // Keep the runId so the card (and the Logs pane) can poll this run's real
+        // progress. Without one there is nothing to watch, so fall back to the old
+        // fire-and-forget behaviour rather than pretending to track it.
+        if (runId) setActiveRun({ integrationId: int.id, runId });
+        else { showToast(`Started “${int.name}”`, 'success'); setTimeout(() => { load(); }, 1500); }
       } else {
         showToast(res.data?.error || `Could not start “${int.name}”`, 'error');
       }
@@ -60,6 +70,19 @@ export default function RegistryPage() {
       setRunningId(null);
     }
   };
+
+  /** Run settled: report the outcome once, then refresh so the card's health,
+   *  last-run stamp and 7-day volume reflect what just happened. */
+  const handleRunFinished = useCallback((intName) => (status) => {
+    const failed = status.failed || 0;
+    const delivered = status.delivered || 0;
+    if (failed > 0) {
+      showToast(`“${intName}” finished — ${delivered} delivered, ${failed} failed. See Logs.`, 'warning');
+    } else {
+      showToast(`“${intName}” finished — ${delivered} record(s) delivered`, 'success');
+    }
+    load();
+  }, [showToast, load]);
 
   useToolbarAction({
     reg_export: () => {
@@ -125,13 +148,17 @@ export default function RegistryPage() {
     return match;
   });
 
-  const handleShowLogs = (int) => {
+  const handleShowLogs = (int, runId) => {
     const pushes = int.recentPushes || [];
     openDetailPane(
       int.name + ' - Logs',
       <div>
+        {/* Live section first — a run in flight is the thing you opened this for. It polls
+            itself: the pane stores this element as captured, so props passed now would
+            freeze at open time. History below is a static snapshot, which is correct for it. */}
+        {runId && <RunLogPanel runId={runId} />}
         <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)', marginBottom: 12 }}>
-          Showing recent push log entries for <strong>{int.name}</strong>
+          {runId ? <>Past runs for <strong>{int.name}</strong></> : <>Showing recent push log entries for <strong>{int.name}</strong></>}
         </div>
         <div className="json-block" style={{ maxHeight: 400, fontSize: 'var(--fs-xs)' }}>
           {pushes.length ? pushes.map((p, i) => (
@@ -334,11 +361,14 @@ export default function RegistryPage() {
               style={{ '--i': Math.min(idx, 12) }}
               int={int}
               running={runningId === int.id}
+              /* Only the card whose run is in flight gets a runId, so only it polls. */
+              runId={activeRun?.integrationId === int.id ? activeRun.runId : null}
+              onRunFinished={handleRunFinished(int.name)}
               selected={selected.has(int.id)}
               onSelect={(on) => toggleSelect(int.id, on)}
               onOpen={handleCardClick}
               onRun={handleRun}
-              onLogs={handleShowLogs}
+              onLogs={(i) => handleShowLogs(i, activeRun?.integrationId === i.id ? activeRun.runId : null)}
             />
           ))}
         </div>

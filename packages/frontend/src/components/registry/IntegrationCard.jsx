@@ -1,6 +1,7 @@
 import { relativeTime } from '../../services/integrationMap';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
+import { RunProgressStrip } from './RunProgress';
 
 /* Registry card — now composed from the shared `Card` base, which owns the
    anatomy, focus/keyboard behaviour, selection and the status rail. What stays
@@ -30,7 +31,7 @@ function freshness(iso) {
   return 'stale';
 }
 
-export default function IntegrationCard({ int, onOpen, onRun, onLogs, running, selected, onSelect, style }) {
+export default function IntegrationCard({ int, onOpen, onRun, onLogs, running, runId, onRunFinished, selected, onSelect, style }) {
   const h = HEALTH[int.health] || HEALTH.never;
   const fresh = freshness(int.lastRunAt);
   const series = int.volume7d || [];
@@ -86,7 +87,12 @@ export default function IntegrationCard({ int, onOpen, onRun, onLogs, running, s
         </>
       }
     >
-      {/* Payload: the real 7-day daily series, with the period total as the headline. */}
+      {/* Payload. While this integration has a run in flight, the card shows that run's
+          live progress instead of the 7-day history — the history is one poll away and
+          the thing you just started is what you want to see. */}
+      {runId ? (
+        <RunProgressStrip runId={runId} onFinish={onRunFinished} />
+      ) : (
       <div className="ucard-body">
         <div className="int-spark" aria-hidden="true">
           {series.map((d) => {
@@ -106,6 +112,7 @@ export default function IntegrationCard({ int, onOpen, onRun, onLogs, running, s
           <span>records · 7d</span>
         </div>
       </div>
+      )}
     </Card>
   );
 }

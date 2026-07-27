@@ -725,12 +725,9 @@ html.dark-theme{--viz-ok:#059669;--viz-fail:#ef4444;--viz-vol:#6366f1;--viz-grid
 .wiz-step.is-done .wiz-step-token{background:var(--primary-solid);border-color:var(--primary-solid);color:#fff}
 .wiz-step.is-current .wiz-step-token{background:var(--primary-solid);border-color:var(--primary-solid);color:#fff;
   box-shadow:0 0 0 3px var(--primary-dim)}
-.wiz-step-text{display:flex;flex-direction:column;min-width:0;gap:1px}
-.wiz-step-n{font-size:var(--fs-xs);font-weight:var(--fw-bold);letter-spacing:.07em;text-transform:uppercase;
-  color:var(--text-dim);line-height:1}
+/* One line per step: the token carries the number, so the label is the only text. */
 .wiz-step-label{font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text-secondary);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.25}
-.wiz-step.is-current .wiz-step-n{color:var(--primary-on)}
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.25}
 .wiz-step.is-current .wiz-step-label{color:var(--text)}
 .wiz-step.is-done .wiz-step-label{color:var(--text-secondary)}
 /* Completed steps are navigable; upcoming ones are not, so only the former
@@ -756,6 +753,41 @@ button.wiz-step.is-done:hover .wiz-step-token{filter:brightness(1.1)}
 .wiz-meter-track{height:4px;border-radius:2px;background:var(--bg-input);overflow:hidden}
 .wiz-meter-fill{height:100%;border-radius:2px;background:var(--primary-solid);
   transition:width var(--dur-slow) var(--ease-out)}
+/* A run with failures colours its own bar — the number alone is easy to skim past. */
+.wiz-meter-fill.is-fail{background:var(--error-solid)}
+
+/* ── Live run progress (Integration Registry card + Logs pane) ─────────
+   Before this, starting a run gave a toast and nothing else: the card reloaded a
+   second later and the Logs pane showed only historical push rows, so a run in
+   flight was invisible. Both surfaces render the same poll of
+   /api/hub/run-status/:runId. */
+.runp{display:flex;flex-direction:column;gap:7px;min-width:0}
+.runp--card{padding:8px 0 2px}
+.runp--panel{padding:12px 14px;margin-bottom:14px;background:var(--bg-input);
+  border:1px solid var(--border);border-radius:var(--radius)}
+.runp-title{font-weight:var(--fw-semibold);font-size:var(--fs-sm);color:var(--text);
+  display:flex;align-items:center;gap:8px}
+.runp-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+  font-size:var(--fs-xs)}
+.runp-live{font-weight:var(--fw-semibold);color:var(--primary-on)}
+.runp-readout{color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.runp-counters{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:var(--fs-xs);
+  color:var(--text-secondary)}
+.runp-count strong{font-variant-numeric:tabular-nums;color:var(--text)}
+.runp-count--ok strong{color:var(--success-on)}
+.runp-count--fail strong{color:var(--error-on)}
+.runp-muted{font-size:var(--fs-xs);color:var(--text-dim)}
+.runp-note{line-height:var(--lh-normal)}
+.runp-err{font-size:var(--fs-xs);color:var(--error-on)}
+.runp-errors{margin:2px 0 0;padding-left:16px;font-size:var(--fs-xs);color:var(--error-on);
+  display:flex;flex-direction:column;gap:2px}
+.runp-errors li{word-break:break-word}
+.runp-stop{align-self:flex-start}
+/* Pulsing dot: the one honest "this is still moving" signal while counts sit still. */
+.runp-dot{width:7px;height:7px;border-radius:50%;background:var(--primary-solid);
+  animation:runpPulse 1.4s var(--ease-out) infinite}
+@keyframes runpPulse{0%,100%{opacity:1}50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.runp-dot{animation:none}}
 
 /* Step 1 reads as a pipeline: source on the left, destination on the right,
    with the direction stated between them instead of as ◀ ▶ glyphs glued to
@@ -805,8 +837,6 @@ button.wiz-step.is-done:hover .wiz-step-token{filter:brightness(1.1)}
 .wiz-section{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;
   flex-wrap:wrap;margin-bottom:14px;flex-shrink:0}
 .wiz-section-main{min-width:0}
-.wiz-section-eyebrow{font-size:var(--fs-xs);font-weight:var(--fw-bold);letter-spacing:.07em;
-  text-transform:uppercase;color:var(--text-dim);line-height:1;margin-bottom:5px}
 .wiz-section-title{font-size:var(--fs-lg);font-weight:var(--fw-bold);color:var(--text);
   line-height:var(--lh-tight)}
 .wiz-section-sub{font-size:var(--fs-sm);color:var(--text-secondary);margin-top:3px}
@@ -839,8 +869,16 @@ button.wiz-step.is-done:hover .wiz-step-token{filter:brightness(1.1)}
 
 /* Read-only facts. Step 5 rendered these as disabled <input>s, which look
    editable and invite a click that does nothing. */
-.wiz-facts{display:flex;flex-direction:column;gap:12px}
+/* Summary facts. Was a single stacked column, which in a full-width review card left
+   ~1200px of dead space to the right while pushing the rest of the step below the fold.
+   Now it FLOWS: as many ~250px columns as fit, so a narrow half-width card keeps one
+   column and the wide Push/Fetch review cards lay the same facts out across the row. */
+.wiz-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));
+  gap:14px 32px;align-items:start}
 .wiz-fact{display:flex;flex-direction:column;gap:3px;min-width:0}
+/* Facts whose value is long (a site URL, a file path) get the whole row rather than
+   wrapping to four lines inside one narrow column. */
+.wiz-fact.is-wide{grid-column:1/-1}
 .wiz-fact-label{font-size:var(--fs-xs);font-weight:var(--fw-semibold);letter-spacing:.05em;
   text-transform:uppercase;color:var(--text-dim)}
 .wiz-fact-value{font-size:var(--fs-base);font-weight:var(--fw-semibold);color:var(--text);

@@ -2524,15 +2524,16 @@ export default function WizardPage() {
               {...(done
                 ? { type: 'button', onClick: () => { setStepDir('back'); setWizardStep(n); },
                     'aria-label': `Go back to step ${n}: ${label}` }
-                : {})}
+                : { 'aria-label': `Step ${n}: ${label}` })}
               className={`wiz-step ${state}`}
               aria-current={n === wizardStep ? 'step' : undefined}
             >
+              {/* The token already shows the number (or ✓), and the footer meter carries
+                  "Step N of 6" — a "STEP N" caption above the label made three places say
+                  the same thing and cost the rail an entire text line. The number survives
+                  for assistive tech via aria-label above. */}
               <span className="wiz-step-token" aria-hidden="true">{done ? '✓' : n}</span>
-              <span className="wiz-step-text">
-                <span className="wiz-step-n">Step {n}</span>
-                <span className="wiz-step-label">{label}</span>
-              </span>
+              <span className="wiz-step-label">{label}</span>
             </Tag>
           );
         })}
@@ -2543,7 +2544,11 @@ export default function WizardPage() {
       <div
         key={wizardStep}
         className={`wizard-content${stepDir === 'back' ? ' is-back' : ''}`}
-        style={{ marginTop: 12, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}
+        // overflowX must be explicit: with overflow-y:auto and overflow-x left at `visible`,
+        // CSS promotes the visible axis to `auto`, so ANY child a pixel too wide added a
+        // page-level horizontal scrollbar under the step. Wide content (preview tables) still
+        // scrolls inside its own `.wiz-table-wrap`, which is where a scrollbar belongs.
+        style={{ marginTop: 12, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto', overflowX: 'hidden' }}
       >
 
         {/* ── Step 1: Select Systems ── */}
@@ -2827,7 +2832,6 @@ export default function WizardPage() {
           <div className="wizard-step active">
             <div className="wiz-section">
               <div className="wiz-section-main">
-                <div className="wiz-section-eyebrow">Step 3</div>
                 <div className="wiz-section-title">
                   {isSpSource(selectedSource) ? 'Select source list & destination table' : 'Choose what to sync'}
                 </div>
@@ -3437,7 +3441,6 @@ export default function WizardPage() {
           <div className="wizard-step active">
             <div className="wiz-section">
               <div className="wiz-section-main">
-                <div className="wiz-section-eyebrow">Step 5</div>
                 <div className="wiz-section-title">Fetch &amp; review</div>
                 <div className="wiz-section-sub">
                   Reads real records and shows them mapped. Nothing is written until Step 6.
@@ -3638,7 +3641,6 @@ export default function WizardPage() {
           <div className="wizard-step active">
             <div className="wiz-section">
               <div className="wiz-section-main">
-                <div className="wiz-section-eyebrow">Step 6</div>
                 <div className="wiz-section-title">Push &amp; sync</div>
                 <div className="wiz-section-sub">
                   Writes the mapped records to <strong>{selectedDest}</strong> and schedules the sync.
@@ -3709,7 +3711,7 @@ export default function WizardPage() {
                     </span>
                   </div>
                   {destCreds.siteUrl && (
-                    <div className="wiz-fact">
+                    <div className="wiz-fact is-wide">
                       <span className="wiz-fact-label">Site</span>
                       <span className="wiz-fact-value is-prose">{destCreds.siteUrl}</span>
                     </div>
