@@ -577,15 +577,19 @@ router.delete('/:id', async (req: Request, res: Response) => {
 
     // Delete associated credential(s) — but ONLY if no other integration references
     // them (clones share credId/destCredId, so blind deletion would orphan the original).
+    //
+    // `srcCredId` MUST be in both lists. It is the generic source-credential bag added with
+    // the "any readable runtime" work, and this cleanup predates it: leaving it out meant every
+    // deleted DB/SOAP/email/file-share source left its encrypted credential row behind forever.
     const fm = existing.fieldMappings as Record<string, string> | null;
-    const credIds = [fm?.credId, fm?.destCredId].filter(Boolean) as string[];
+    const credIds = [fm?.credId, fm?.destCredId, fm?.srcCredId].filter(Boolean) as string[];
     if (credIds.length) {
       const all = await db.select({ id: integrations.integrationId, fm: integrations.fieldMappings }).from(integrations);
       for (const cid of credIds) {
         const referencedElsewhere = all.some((r) => {
           if (r.id === integrationId) return false;
           const f = r.fm as Record<string, string> | null;
-          return f?.credId === cid || f?.destCredId === cid;
+          return f?.credId === cid || f?.destCredId === cid || f?.srcCredId === cid;
         });
         if (!referencedElsewhere) await db.delete(credentials).where(eq(credentials.credId, cid));
       }

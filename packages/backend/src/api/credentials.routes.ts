@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { db } from '../db/client';
-import { credentials, auditLog } from '../db/schema';
+import { credentials, auditLog, integrations } from '../db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import { CredentialService } from '../services/CredentialService';
 import { recordAudit } from '../services/AuditService';
@@ -264,6 +264,54 @@ router.post('/:id/revoke', requireRole('admin'), async (req: Request, res: Respo
     });
 
     res.json({ success: true, data: { credId, status: 'revoked' } });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    res.status(400).json({ success: false, error: message });
+  }
+});
+
+// ─── DELETE /api/credentials/:id — permanently remove an UNUSED credential ───
+// Until this existed there was no way to remove a credential at all: revoke only flips a
+// status flag, so every superseded or test-created row stayed in the vault forever holding
+// its encrypted payload. Guarded — a credential still referenced by any integration
+// (credId / destCredId / srcCredId) returns 409 and is kept, so this can never orphan a
+// live connection. Deleting is audited like revoke.
+router.delete('/:id', requireRole('admin'), async (req: Request, res: Response) => {
+  try {
+    const credId = req.params.id as string;
+    const [cred] = await db.select().from(credentials).where(
+      and(eq(credentials.credId, credId), eq(credentials.orgId, req.actor.orgId)),
+    );
+    if (!cred) {
+      res.status(404).json({ success: false, error: 'Credential not found' });
+      return;
+    }
+
+    const all = await db.select({ fm: integrations.fieldMappings }).from(integrations);
+    const usedBy = all.filter((r) => {
+      const f = r.fm as Record<string, string> | null;
+      return f?.credId === credId || f?.destCredId === credId || f?.srcCredId === credId;
+    }).length;
+    if (usedBy > 0) {
+      res.status(409).json({
+        success: false,
+        error: `Credential is in use by ${usedBy} connection(s). Delete or repoint those first.`,
+      });
+      return;
+    }
+
+    await db.delete(credentials).where(eq(credentials.credId, credId));
+
+    await recordAudit({
+      orgId: req.actor.orgId,
+      userId: req.actor.userId,
+      action: 'delete',
+      entityType: 'credential',
+      entityId: credId,
+      diff: { systemName: cred.systemName },
+    });
+
+    res.json({ success: true, data: { credId, deleted: true } });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     res.status(400).json({ success: false, error: message });

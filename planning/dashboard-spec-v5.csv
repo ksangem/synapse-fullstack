@@ -1,0 +1,950 @@
+#,Department,Phase,KPI / Feature Name,Rationale / Definition,Prototype Status,Dashboard Widget / UX,References,Flyout Detail (Right Panel),Source ? Fields,RAG / Thresholds,Source System & Access,Frequency,Personas,Decision,Prototype Trace,Drill-down Depth,Formula
+?  ORG PULSE — OVERVIEW,,,,,,,,,,,,,,,,,
+  ?  Org Pulse Dashboard,,,,,,,,index.html,,,,,,,,,
+1,Org Pulse,P1,Engineering Summary Card (index.html ? Engineering dept card),Rollup of Engineering unit health visible on Org Pulse home. Entry point to DM dashboard.,Live – v1,"Dept card: RAG badge + 3 capsules (Unit RAG, Avg P360, Escalations). Click?dm-home.html",Built in: Org Pulse | See: P360 Score; Escalation Age (PMO),"Right panel: Unit RAG breakdown by project, Avg P360 score with trend, open escalation list with severity. Links to dm-home.html for full DM view.","P360 SharePoint + Jira ?
+1. composite RAG
+2. avg P360
+3. escalation count",Green: all green | Amber: any amber | Red: any red,"P360 SharePoint/Jira — P360 SharePoint, Jira Read",Daily,"Primary: Leadership | Secondary: DM, PMO",Pending Review,Deferred,—,? Source mapping not yet provided for Org Pulse. Awaiting team's Pulse_Data Mapping update for this department.
+2,Org Pulse,P1,Sales Summary Card (index.html ? Sales dept card),Rollup of Sales pipeline health on Org Pulse home.,Live – v1,"Dept card: RAG badge + 3 capsules (Coverage, Q2 Achievement, Deals M1). Click?sales.html",Built in: Org Pulse | See: Pipeline Funnel (Sales); BOFU (Sales),"Right panel: Pipeline funnel summary, top 3 at-risk deals, Q2 achievement trend. Links to sales.html.","CRM ?
+1. pipeline value
+2. target
+3. deal count by stage","Green: coverage >2×, achievement >80% | Amber: 1.5–2×, 60–80% | Red: below",CRM Read,Weekly,Primary: Leadership | Secondary: Sales Head,Pending Review,Deferred,—,? Source mapping not yet provided for Org Pulse. Awaiting team's Pulse_Data Mapping update for this department.
+3,Org Pulse,P1,HR Summary Card (index.html ? HR dept card),Rollup of HR people health on Org Pulse home.,Live – v1,"Dept card: RAG badge + 3 capsules (Headcount, Attrition YTD, Open Roles). Click?hr.html",Built in: Org Pulse | See: Headcount MoM (HR); Hiring Tracker (HR),"Right panel: Headcount vs plan by dept, attrition trend chart, open roles list. Links to hr.html.","Keka ?
+1. headcount
+2. exits
+3. open JDs","Green: HC ?98% plan, attrition <10% | Amber: HC 95–97%, attrition 10–15% | Red: below",Keka Read,Monthly,Primary: Leadership | Secondary: HR Head,Pending Review,Deferred,—,? Source mapping not yet provided for Org Pulse. Awaiting team's Pulse_Data Mapping update for this department.
+4,Org Pulse,P1,Finance Summary Card (index.html ? Finance dept card),Rollup of financial health on Org Pulse home.,Live – v1,"Dept card: RAG badge + 3 capsules (vs Plan, EBITDA, Overdue Inv.). Click?finance.html",Built in: Org Pulse | See: Revenue vs Plan (Finance); AR Status (Finance),"Right panel: Revenue vs plan trend, top 3 overdue invoices, margin movement. Links to finance.html.","ERP ?
+1. revenue actuals
+2. EBITDA
+3. AR ageing","Green: ?100% plan, EBITDA >20% | Amber: 95–99%, 15–20% | Red: below",ERP Read,Monthly,Primary: Leadership | Secondary: Finance Head,Pending Review,Deferred,—,? Source mapping not yet provided for Org Pulse. Awaiting team's Pulse_Data Mapping update for this department.
+5,Org Pulse,P1,Claude Daily Brief (index.html ? Claude Daily Brief widget),AI-generated morning summary of critical alerts and actions required across all departments.,Live – v1,"Collapsible brief panel: bulleted insights per department, severity-ranked, recommended actions",Built in: Org Pulse | See: All dept metrics,No drill-down flyout — brief is self-contained. Expand/collapse in place. Links to relevant dept screens.,"Claude API (Haiku) ?
+ all dept data sources ? structured brief",N/A — narrative output,Claude API / All Sources — Claude API + all dept data,Daily,Primary: Leadership | Secondary: All DMs,Pending Review,Deferred,—,? Source mapping not yet provided for Org Pulse. Awaiting team's Pulse_Data Mapping update for this department.
+?  ENGINEERING,,,,,,,,,,,,,,,,,
+  ?  Project Progress,,,,,,,,dm-home.html ? Project Progress tab,,,,,,,,,
+6,Engineering,P1,Sprint Health (Project Progress ? Sprint Health),Identifies execution drift within each sprint before carry-forward debt accumulates across multiple sprints and damages release cadence.,Live – v1,"Sprint panel: committed vs completed bar, velocity %, carry-forward count badge, RAG dot per sprint",Built in: Engineering | See: Per-Project Sprint Tile; Active Blockers,"1. Story-level table: each committed story ? Done/In Progress/Not Started
+2. Scope-added list with stories added mid-sprint
+3. Carry-forward list from prior sprint with age in days
+4. 4-sprint velocity trend (bar/line toggle)
+5. Assignee workload split: story points per engineer","Source list: Jira Sprint & Issue API. Fields:
+1. Jira Sprint & Issue API.No of stories (Issue Key) comitted at the beginning of Sprint[] ? sprint.committed_pts (Cleaned)
+2. Jira Sprint & Issue API.No of stories comitted at the ending of Sprint ? sprint.completed_pts (Cleaned)
+3. Jira Sprint & Issue API.issue key in sprint.committed_pts[n] - sprint.committed_pts[n-1] ? sprint.carry_forward (Cleaned)
+4. Jira Sprint & Issue API.issue/{key}/status ? issues[].status (Raw)
+5. Jira Sprint & Issue API.issue/{key}/name ? issues[].assignee (Raw)
+6. Jira Sprint & Issue API ? issues[].story_points.",Green: completion ?80% AND carry-fwd ?20% | Amber: 60–79% OR carry-fwd 20–30% | Red: <60% OR carry-fwd >30% OR scope creep >15%,Jira API credentials; all active project keys,Per sprint,"Primary: Delivery Manager | Secondary: PM, Scrum Master",Pending Review,Deferred,—,No of stories (Issue Key) comitted at the beginning of Sprint[] | No of stories comitted at the ending of Sprint | issue key in sprint.committed_pts[n] - sprint.committed_pts[n-1]
+7,Engineering,P1,Per-Project Sprint Tile (Project Progress ? Per-Project Sprint Tile),RAG-coloured card per active client engagement showing sprint status at a glance. Enables DM to scan all projects and click into the one needing attention.,Live – v1,"Sprint tile grid (2×N): account name, sprint ID, RAG left-border, velocity chip, carry-over badge; clickable",Built in: Engineering | See: Sprint Health; P360 Score,"1. Full delivery drill-down: complete story list with status per story
+2. Blocker list with age and assignee
+3. Assignee workload breakdown
+4. Sprint burn-down chart
+5. Link to Jira project","Source list: Jira. Fields:
+1. Jira.issuekey.name ? project_name (Raw)
+2. Jira.sprint/{id}/issue ? sprint_id (Raw)
+3. Jira ? rag_status
+4. Jira.Sprint_comitted[] / sprint_completed[] ? velocity_pct (Cleaned)
+5. Jira.print_carry_forward ? carryover_count (Cleaned)
+6. Jira.issue_Type ==""Story"" &&  sprint_id == current_sprint ID ? story_list[] (Cleaned).",Per-project RAG: Green/Amber/Red based on sprint completion %,Jira API,Per sprint,Primary: Delivery Manager | Secondary: Account Manager,Pending Review,Deferred,—,"velocity_pct = Sprint_committed[] / sprint_completed[]
+carryover = issue keys in sprint[n].committed ? sprint[n-1].committed"
+8,Engineering,P1,Active Blockers (Project Progress (blocker badge on sprint tile) ? Active Blockers),Unresolved blockers are the most common silent cause of sprint failure. Surfacing them with age forces timely action before they compound.,Live – v1,Red badge on sprint tile showing blocker count; distinct from velocity badge,Built in: Engineering | See: Sprint Health,"1. Blocker table: Issue ID
+2. Summary
+3. Age in days
+4. Assignee
+5. Last Updated
+6. Jira deep-link
+7. Unlogged blocker flag (from meeting transcript) with excerpt
+8. One-click button to create Jira ticket from flyout","Source list: Jira Issue API (status=Blocked), SharePoint Meeting Insights HUB. Fields:
+1. Jira Issue API (status=Blocked) ? issue_id
+2. Jira Issue API (status=Blocked) ? summary
+3. Jira Issue API (status=Blocked) ? age_days
+4. Jira Issue API (status=Blocked) ? assignee
+5. SharePoint Meeting Insights HUB ? transcript_text.",Red: any blocker >5 days OR unlogged blocker flag | Amber: any blocker 2–5 days | Green: no blockers or all <2 days,Jira / SharePoint — Jira API; SharePoint Meeting Insights HUB,Daily,"Primary: Delivery Manager | Secondary: PMO, PM",Pending Review,Deferred,—,"velocity_pct = Sprint_committed[] / sprint_completed[]
+story_list[] = issue_Type=='Story' AND sprint_id==current_sprint_ID"
+  ?  Financials,,,,,,,,"1. dm-home.html ? Financials tab (DM subset
+2. primary data owned by PMO)",,,,,,,,,
+9,Engineering,P1,YTD Billing Forecast (DM View) (Financials tab ? YTD Billing Forecast (DM View)),Revenue actuals vs plan per account for current year at the DM's unit level. DM-level subset of the PMO Financials view. Primary home: PMO ? Financials tab.,Live – v1,Horizontal bar rows per account: invoiced vs plan with gap indicator. Click any account to open flyout.,Built in: Engineering | See: Revenue Projections (PMO); Billing Data Accuracy (PMO),"1. Monthly billing bar chart: actual (green), projected (blue), plan (grey) per month
+2. Invoice table: month, invoiced amount, plan, status
+3. Gap vs plan callout with action owner
+4. YTD summary: total invoiced, total plan, overall gap","Source list: AM-DM Dashboard. Fields:
+1. AM-DM Dashboard.PMO Dashboard ? invoiced_amount (Raw)
+2. AM-DM Dashboard ? plan_amount (Cleaned)
+3. AM-DM Dashboard ? account_name (Cleaned)
+4. AM-DM Dashboard ? month (DM unit filter) (Cleaned).",Green: ?100% vs plan | Amber: 85–99% | Red: <85%,ERP / Finance Read,Monthly,"Primary: Delivery Manager | Secondary: Finance Head, Account Manager",Pending Review,Deferred,—,PMO Dashboard
+10,Engineering,P2,M+1 / M+2 Revenue Outlook (DM View) (Financials tab ? M+1 / M+2 Revenue Outlook (DM View)),Forward 2-month billing projection for the DM's accounts. DM subset of PMO's 3-month horizon view.,Live - v2,"Projection bars: M, M+1, M+2 per account with confidence shade; gap vs plan indicator",Built in: Engineering | See: YTD Billing Forecast; Revenue Projections (PMO),"1. Account-level projection: contracted value, milestone dates, % milestone confirmed, projected invoice amount M+1 and M+2
+2. Scenario toggle: Base / Upside / Downside
+3. Link to full PMO projections view","Source list: Projectons. Fields:
+1. Projectons ? contracted_value (Cleaned)
+2. Projectons ? milestones (Cleaned)
+3. Projectons ? billing_schedule (DM unit filter) (Cleaned).",Green: projected ?95% of plan | Amber: 80–94% | Red: <80%,"ERP / SOW — ERP, SOW Repository",Monthly,Primary: Delivery Manager | Secondary: Finance Head,Approved (built in v2.0),Deferred,—,"Gap = plan_amount ? invoiced_amount
+Gap % = invoiced_amount / plan_amount × 100"
+  ?  Mining & Escalations,,,,,,,,"1. dm-home.html ? Mining & Escalations tab (temporary home
+2. will move to Account Management module)",,,,,,,,,
+11,Engineering,P1,Mining Threads — Active Deliverables (Mining & Escalations ? Mining Threads — Active Deliverables),Swimlane view of active mining and cross-sell opportunities with delivery status per account. Note: permanent home will be Account Management module when built.,Live – v1,"Swimlane: status pills (Late/At Risk/On Track/Done) per account; filter tabs by status; summary banner (Total, Late, At Risk, Done this week)",Built in: Engineering | See: Account Escalations Register,"1. Account-level thread detail: mining thread name, owner, last update date, days since last update, next milestone, notes
+2. Status history timeline
+3. Link to CRM opportunity","Source list: CRM / Pulse. Fields:
+1. CRM / Pulse ? mining_thread_id
+2. CRM / Pulse ? account_name
+3. CRM / Pulse ? status
+4. CRM / Pulse ? owner
+5. CRM / Pulse ? last_updated
+6. CRM / Pulse ? milestone.",Green: all on track | Amber: ?1 at risk | Red: any late or overdue,CRM / Pulse Read,Weekly,"Primary: Delivery Manager | Secondary: Account Manager, Sales",Pending Review,Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+12,Engineering,P1,Account Escalations Register (Mining & Escalations ? Account Escalations Register),"Open escalations across DM's accounts with severity, owner, and age. DM must act within SLA. Note: permanent home will be Account Management module.",Live – v1,"Escalation list: severity badge (Critical/High/Medium), account, open date, age in days, owner; sorted by severity then age",Built in: Engineering | See: Mining Threads; Open Escalation Age (PMO),"1. Escalation detail: full description, severity, account, open date, age, owner
+2. Resolution history timeline with dates and notes
+3. Communication log
+4. Expected resolution date
+5. Escalation SLA status
+6. Action buttons (Reassign / Mark Resolved / Escalate to Leadership)","Source list: CRM / Helpdesk. Fields:
+1. CRM / Helpdesk ? escalation_id
+2. CRM / Helpdesk ? severity
+3. CRM / Helpdesk ? account_name
+4. CRM / Helpdesk ? owner
+5. CRM / Helpdesk ? open_date
+6. CRM / Helpdesk ? status
+7. CRM / Helpdesk ? resolution_notes.",Green: 0 open | Amber: 1–2 open | Red: ?3 open OR any >7 days without update,CRM / Helpdesk Read,Daily,"Primary: Delivery Manager | Secondary: Account Manager, PMO",Pending Review,Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  P360 Performance,,,,,,,,dm-home.html ? P360 Performance tab,,,,,,,,,
+13,Engineering,P1,P360 Score — Composite (P360 Performance (mini tiles); p360-detail.html (full) ? P360 Score — Composite),Weighted composite score across 6 dimensions per engagement. Replaces gut-feel with a consistent multi-dimensional health signal. Mini tiles live in dm-home; full detail in p360-detail.,Live – v1,"Mini score tiles (2×2) in DM Home: score badge, RAG border, 3 dim chips. Click?full flyout.",Built in: Engineering | See: Sprint Health; CSAT (PMO),"1. 6-dimension score bars: Competence (15%), Discipline (25%), Quality Coverage (20%), Quality Consistency (10%), Budget (10%), Visibility (20%) — each RAG-coloured
+2. 4-sprint composite trend chart (bar/line toggle)
+3. Action items linked to this project
+4. Data accuracy flag if P360 entry overdue
+5. Deep link to P360 SharePoint for manual update","Source list: JIRA, P360 SharePoint, PMO Repo. Fields:
+1. JIRA.projectKey ? project_id (Raw)
+2. P360 SharePoint ? composite_score
+3. P360 SharePoint ? dimension_scores[6]
+4. P360 SharePoint ? sprint_history[4]
+5. P360 SharePoint ? data_accuracy_flag
+6. PMO Repo ? TSS score.",Green: ?8.0 | Amber: 6.0–7.9 | Red: <6.0 | Weighted composite across 6 dimensions,P360 SharePoint / Jira — P360 SharePoint; PMO Repo,Monthly,"Primary: Delivery Manager | Secondary: PMO, Account Manager",Pending Review,Deferred,—,projectKey
+14,Engineering,P2,P360 Dimension Detail (p360-detail.html ? P360 Dimension Detail),Drill into each of the 6 P360 dimensions per engagement with sub-criteria and 4-sprint trend.,Live - v2,Clickable dimension chips on P360 tile; each chip highlights and opens dimension detail below,Built in: Engineering | See: P360 Score — Composite,"1. Dimension detail panel: sub-criterion scores with RAG
+2. 4-sprint trend for that dimension
+3. Narrative text from last P360 entry
+4. Recommended action if below threshold
+5. No separate flyout — detail expands inline within the P360 flyout","Source list: P360 SharePoint. Fields:
+1. P360 SharePoint ? dimension-level sub-scores
+2. P360 SharePoint ? narrative_text per project.","Same RAG as composite: ?8 Green, 6–7.9 Amber, <6 Red per dimension",P360 SharePoint,Monthly,Primary: Delivery Manager | Secondary: PMO,Approved (built in v2.0),Deferred,—,composite_score = (Competence×0.15) + (Discipline×0.25) + (Qual_Coverage×0.20) + (Qual_Consistency×0.10) + (Budget×0.10) + (Visibility×0.20)
+  ?  People & Resource,,,,,,,,dm-home.html ? People KPIs tab ? kpi-people.html,,,,,,,,,
+15,Engineering,P1,Golden Ratio (Billable:Non-billable) (Golden Ratio tile ? Golden Ratio (Billable:Non-billable)),Ratio of billable FTEs to total FTEs in the unit. Core efficiency indicator for the DM.,Live – v1,"KPI tile: ratio value (e.g. 1:7.2), RAG top-border, sub-label showing absolute counts; click?flyout",Built in: Engineering | See: Resource Utilization (HR); Team Utilization,"1. Billable vs non-billable headcount breakdown: list of each category with names, role, project
+2. Trend: ratio over last 6 months vs target
+3. Comparison to org-wide target ratio
+4. Action flag if ratio below threshold","Source list: Keka / HRMS. Fields:
+1. Keka / HRMS.employee_id ? employee_id (Raw)
+2. Keka / HRMS.state ? billable_flag (Raw)
+3. Keka / HRMS ? unit
+4. Keka / HRMS.department ? dept (Raw).",Green: ?1:8 | Amber: 1:6–1:7.9 | Red: <1:6,Keka Read,Monthly,"Primary: Delivery Manager | Secondary: HR Head, Finance",Pending Review,Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+16,Engineering,P1,Bench & Utilization (Bench & Utilization tile ? Bench & Utilization),"Unified view of idle capacity (bench) and billable utilization per resource. Color-coding distinguishes bench (grey), optimal (green), over-allocated (red) within a single tile. Eliminates the need for separate bench and utilization cards.",Live – v1,"Utilization gauge tile: each resource shown as a color-coded bar — grey=bench, green=75–100%, amber=60–74% or 100–110%, red=<60% or >110%; bench count badge + over-allocated count badge; click?flyout",Built in: Engineering | See: Resource Projection Gap; Bench Heatmap (PMO); Golden Ratio,"1. Two-section flyout: BENCH — Name
+2. Skills
+3. Days on bench
+4. Last project
+5. Matching open pipeline deals
+6. UTILIZATION — Name
+7. Role
+8. Allocated %
+9. Billed %
+10. Over/Under flag
+11. Forward 4-week utilization per resource
+12. Sort by extremes (longest bench first, then most over-allocated)","Source list: Keka / Resource Management, Resource Management. Fields:
+1. Keka / Resource Management.employee_id ? employee_id (Raw)
+2. Resource Management.Allocation ? allocation_status (Raw)
+3. Resource Management.Updated date Where state == 'bench' ? bench_start_date (Cleaned)
+4. Resource Management.Resource master[Skill set] ? skills[] (Raw)
+5. Resource Management ? project_id (Cleaned)
+6. Resource Management.Assignment ? allocated_hrs (Raw)
+7. Resource Management.Assignment * Bill Rate ? invoiced_hrs (Cleaned)
+8. Resource Management.state ? billable_flag (Raw).",Green: bench ?3 AND utilization 75–100% | Amber: bench 4–6 OR utilization 60–74%/100–110% | Red: bench >6 OR utilization <60%/>110%,Keka / Resource Mgmt — Keka / Resource Management,Weekly,"Primary: Delivery Manager | Secondary: PMO, HR Head",Pending Review,Deferred,—,Golden Ratio = COUNT(billable_flag='billable') / COUNT(ALL employees in unit)
+17,Engineering,P1,Hiring & Attrition (DM View) (Hiring & Attrition tile ? Hiring & Attrition (DM View)),Unit-level open roles and recent exits. Flags talent risk for active engagements.,Live – v1,KPI tile: open roles count + exits count; RAG; click?flyout,Built in: Engineering | See: JR Approval Turnaround (TA); Attrition Early Warning (HR),"1. Two sections in flyout: Open Roles — JD title, days open, stage, target start date
+2. Exits — name (anonymised), exit date, reason category, KT status; Risk flag if exit impacts active project","Source list: Keka, Tara ATS + Keka. Fields:
+1. Keka.TA dashboard ? open_positions_count (Raw)
+2. Tara ATS + Keka.HR (excel/email) ? exits_this_month per unit (Cleaned).",Green: 0 exits AND ?2 open | Amber: 1 exit OR 3–4 open | Red: ?2 exits OR ?5 open,"Tara / Keka — Tara ATS, Keka Read",Weekly,"Primary: Delivery Manager | Secondary: TA Head, HR Head",Pending Review,Deferred,—,"utilization_pct = invoiced_hrs / allocated_hrs × 100
+bench_start_date = Updated date WHERE state == 'bench'"
+18,Engineering,P1,Attendance (Attendance tile ? Attendance),Unit attendance rate. Flags absences that could impact sprint commitment. Data sourced from HR ? Attendance Pattern (HR Workforce Health tab); DM view is a unit-filtered subset.,Live – v1,"KPI tile: attendance %, RAG; click?flyout (borrows HR Attendance Pattern data, filtered to DM unit)",Built in: Engineering | See: Attendance Pattern & WFH (HR),"1. Calendar heat map: each employee's attendance per day for current month
+2. WFH vs office split
+3. Top 5 absentees by days absent
+4. Leave balance warnings
+5. Source: HR Workforce Health ? Attendance Pattern (unit filter applied)","Source list: Keka. Fields:
+1. Keka.HR Dashboard ? employee_id (Raw)
+2. Keka ? date (Raw)
+3. Keka ? attendance_status (Raw)
+4. Keka ? work_location (Raw)
+5. Keka ? leave_balance (unit filter = DM's projects) (Raw).",Green: ?96% | Amber: 92–95% | Red: <92%,Keka,Daily,Primary: Delivery Manager | Secondary: HR Head,Pending Review,hr.html,L2,"open_positions_count from Keka TA dashboard
+exits_this_month = HR (excel/email)"
+19,Engineering,P1,Appraisals (Appraisals tile ? Appraisals),Appraisal completion % for unit staff. Flags overdue manager evaluations during appraisal cycle.,Live – v1,KPI tile: completion %; RAG; click?flyout,Built in: Engineering | See: Appraisal Cycle Adherence (HR),"1. Pending evaluators list: Manager name
+2. Appraisee name
+3. Due date
+4. Days overdue
+5. Status
+6. Escalation flag if >14 days overdue
+7. Summary: completed vs pending counts","Source list: PMS. Fields:
+1. PMS ? manager_id (Raw)
+2. PMS ? appraisee_id (Raw)
+3. PMS ? appraisal_due_date (Raw)
+4. PMS ? submission_status (Raw).",Green: ?90% | Amber: 75–89% | Red: <75%,PMS,Per appraisal cycle,"Primary: Delivery Manager | Secondary: HR Head, Manager",Pending Review,Deferred,—,"attendance_rate = COUNT(attendance_status IN ('Present','WFH')) / COUNT(working_days) × 100"
+20,Engineering,P1,Succession (Succession tile ? Succession),Count of critical roles in unit with no identified successor. Key continuity risk.,Live – v1,KPI tile: gap count; RAG; click?flyout,Built in: Engineering | See: Succession Gap (HR),"1. Critical roles list: Role title
+2. Incumbent
+3. Successor identified (Y/N)
+4. If yes: successor name, readiness level (Ready Now / 1 Year / 2 Year)
+5. Roles with no successor flagged red
+6. Recommended action per gap","Source list: Keka / HR SharePoint Succession Module. Fields:
+1. Keka / HR SharePoint Succession Module ? role_id (Raw)
+2. Keka / HR SharePoint Succession Module ? criticality_flag
+3. Keka / HR SharePoint Succession Module ? successor_id (Raw)
+4. Keka / HR SharePoint Succession Module ? readiness_level (Raw).",Green: 0 gaps | Amber: 1 gap | Red: ?2 gaps,Keka / HR SharePoint — Keka Succession Module,Quarterly,Primary: Delivery Manager | Secondary: HR Head,Pending Review,Deferred,—,"completion_pct = COUNT(submission_status='Submitted') / COUNT(ALL appraisals in unit) × 100
+days_overdue = TODAY() ? appraisal_due_date WHERE submission_status != 'Submitted'"
+21,Engineering,P2,Resource Projection Gap (Planned – v2 (People & Resource expanded view) ? Resource Projection Gap),Delta between resource demand from active + pipeline deals and available supply. Flags hiring need early.,Deferred,Supply vs demand bars for next 4/8/12 weeks per project; portfolio shortfall/surplus summary,Built in: Engineering | See: Team Utilization; Bench Heatmap (PMO),"1. Week-by-week demand vs capacity table per project
+2. Skills gap: which skills are short by how many FTEs
+3. Bench resources with matching skills highlighted
+4. Probability-weighted demand toggle for pipeline deals","Source list: Resource Mgmt Projections, Allocation List. Fields:
+1. Resource Mgmt Projections ? project_id
+2. Resource Mgmt Projections ? forecast_week
+3. Resource Mgmt Projections ? required_FTE
+4. Resource Mgmt Projections ? required_skills[]
+5. Allocation List ? available FTEs by skill.",Red: shortfall >1 FTE for ?2 consecutive weeks | Amber: ?1 FTE gap or single-week gap | Green: demand met,Resource Mgmt — Resource Management Tool,Monthly,"Primary: Delivery Manager | Secondary: PMO, HR Head",Deferred per user (May 2026),Deferred,—,succession_gaps = COUNT(roles WHERE successor_id IS NULL AND criticality_flag = TRUE)
+  ?  DEFERRED — Engineering (out of scope for current build cycle),,,,,,,,,,,,,,,,,
+22,Engineering,P3,Client Sentiment & Risk (— ? Client Sentiment & Risk),NLP-based sentiment scoring from meeting transcripts. Deferred — NLP service and transcript pipeline not yet available.,Deferred,—,Built in: Engineering | See: —,No flyout — deferred item,"Source list: —. Fields:
+1. — ? —.",—,—,—,Primary: — | Secondary: —,Deferred,Deferred,—,
+23,Engineering,P3,Sprint Velocity Trend (8-sprint rolling) (—),8-sprint rolling velocity analysis. Available via Jira export. Excel-only analytical layer.,Deferred,—,Built in: Engineering | See: —,No flyout — deferred item,—,—,—,—,Primary: — | Secondary: —,Deferred,Deferred,—,—
+?  SALES,,,,,,,,,,,,,,,,,
+  ?  Meeting Readiness,,,,,,,,Planned – v2 (Sales Meeting Readiness screen),,,,,Secondary: Planned – v2,,,,
+24,Sales,P1,Battle Cards for Meetings (Planned – v2 (Sales screen)),Tracks meeting preparation quality. Untracked prep creates no accountability and allows reps to walk into high-stakes meetings underprepared.,Live - v2,Readiness card: % meetings with battle card uploaded ?1d before meeting; traffic light per upcoming meeting,Built in: Sales | See: Call Conduct Score,"1. Meeting table: Account
+2. Scheduled Date
+3. Battle Card Upload Date
+4. Days Before Meeting
+5. Status
+6. Flagged if no card or <24h before
+7. Trend: % prep done this month vs prior 2 months
+8. Rep-level accountability breakdown","CRM Appointments ?
+1. meeting_id
+2. account
+3. scheduled_date
+4. rep
+
+CRM Custom ? battle_card_upload_date",Red: no card OR <24h before | Amber: 1–2d before | Green: ?3d before,CRM; battle_card_upload_date field required,Fortnightly,Primary: Sales Head | Secondary: Sales Rep,Approved (built in v2.0),Deferred,—,Not in Schema
+25,Sales,P1,Call Conduct Score (Planned – v2 (Sales screen)),Objective call quality score per rep. Creates feedback loop that systematically improves rep capability.,Live - v2,Avg call score per rep — current month + prior 2 months; trend arrow,Built in: Sales | See: Battle Cards for Meetings,"1. Rep-level score table: Rep
+2. Month
+3. Score
+4. Category breakdown
+5. Calls below threshold highlighted
+6. Coaching flag if 3+ consecutive calls below threshold
+7. 6-month trend chart per rep","CRM Call Logs ?
+1. call_id
+2. rep_name
+3. call_date
+
+CRM Custom ?
+1. call_quality_score
+2. score_categories[]",Red: avg <6/10 | Amber: declining trend ?2 months | Green: ?6 and stable or improving,CRM; call scoring rubric must be defined,Monthly,Primary: Sales Head | Secondary: Sales Rep,Approved (built in v2.0),Deferred,—,Not in Schema
+  ?  Pipeline Activity,,,,,,,,"1. sales.html (Funnel, TOFU, Aging live)
+2. Task Aging planned",,,,,,,,,
+26,Sales,P1,Pipeline Funnel by Stage (sales.html ? Pipeline Funnel card),Deal distribution across pipeline stages. Identifies stage-specific bottlenecks and conversion gaps at a glance.,Live – v1,Funnel chart: deal count and value per stage (Prospect ? Qualified ? Proposal ? Negotiation ? Won/Lost),Built in: Sales | See: Activity Aging on Opportunities; BOFU Stage Duration,"1. Stage drill-down: deal list for selected stage — Account
+2. Value
+3. Rep
+4. Days in Stage
+5. Last Activity
+6. Next Step
+7. Stage conversion rate vs prior month
+8. Click any deal to open CRM record","CRM ?
+1. opp_id
+2. stage
+3. estimated_value
+4. rep_name
+5. stage_entered_date
+6. last_activity_date",Green: BOFU?Won conversion >30% | Amber: 20–30% | Red: <20%,CRM Read,Weekly,"Primary: Sales Head | Secondary: CEO, Sales Rep",Pending Review,Deferred,—,"updated date where status == ""In Progress"""
+27,Sales,P1,New Leads — Top of Funnel (TOFU) (sales.html ? New Leads card),Count of new leads generated this month. Tracks top-of-funnel health and marketing/SDR effectiveness.,Live – v1,"Metric card: lead count, MoM change arrow, source breakdown (inbound/outbound/referral)",Built in: Sales | See: Pipeline Funnel by Stage,"1. Lead list: Account
+2. Source Channel
+3. Assigned Rep
+4. Date Qualified
+5. Current Stage
+6. Status
+7. Source mix pie chart
+8. MoM trend vs target
+9. Rep-level lead count breakdown","CRM ?
+1. lead_id
+2. created_date
+3. source
+4. assigned_rep
+5. qualification_status",Green: ?target | Amber: 80–99% of target | Red: <80%,CRM Read,Monthly,Primary: Sales Head | Secondary: Marketing Head,Pending Review,Deferred,—,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.
+28,Sales,P1,Activity Aging on Opportunities (sales.html ? Stale Pipeline Heatmap card),Stale pipeline is an invisible pipeline. Flags reps with neglected deals before they are silently lost. Widget: heatmap by owner × age bucket.,Live – v1,"Owner × age-bucket heatmap: rows=reps, columns=<30d/30–60d/60–90d/>90d; cell value=deal count; red cells >30d",Built in: Sales | See: Pipeline Funnel by Stage; BOFU Stage Duration,"1. Opportunity detail for selected cell: Account
+2. Stage
+3. Value
+4. Last Activity Date
+5. Days Stale
+6. Rep
+7. Next Step
+8. Sort by days stale descending
+9. Stage distribution of stale deals
+10. Rep accountability: stale count per rep with trend","CRM Opportunity ?
+1. opp_id
+2. stage
+3. value
+4. rep
+
+CRM Activity Log ? last_activity_date per opp",Red: last activity >21 days | Amber: 14–21 days | Green: <14 days,CRM; last_activity_date field — confirm computed or manual,Weekly,Primary: Sales Head | Secondary: Sales Rep,Pending Review,Deferred,—,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.
+29,Sales,P1,Task Aging on Meetings (Planned – v2 (Sales screen)),Promises made in client meetings that go untracked are relationship damage waiting to happen.,Live - v2,Overdue task count per rep; badge on rep summary card,Built in: Sales | See: Activity Aging on Opportunities,"1. Task table: Task Description
+2. Linked Meeting
+3. Due Date
+4. Age in days
+5. Status
+6. Last Updated
+7. Rep
+8. Overdue sorted by age
+9. Inactive tasks (no update >7d) highlighted separately
+10. Rep accountability: overdue count per rep","CRM Task/Activity ?
+1. task_id
+2. linked_meeting_id
+3. description
+4. due_date
+5. last_updated
+6. status
+7. rep",Red: task >14d overdue OR no update >7d | Amber: 7–14d OR no update 4–7d | Green: all within due date,CRM; tasks must be linked to meeting IDs,Daily,Primary: Sales Head | Secondary: Sales Rep,Approved (built in v2.0),Deferred,—,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.
+  ?  Deal Conversion,,,,,,,,sales.html ? Deal Conversion (BOFU only),,,,,Secondary: Planned – v2,,,,
+30,Sales,P2,BOFU Stage Duration & Win Rate (Planned – v2 (Deal Conversion screen)),Time in final pipeline stages is where deals are won or lost. Long BOFU duration indicates indecision or competitor movement.,Live - v2,Dual metric card: BOFU conversion % + avg days in BOFU; MoM trend arrow,Built in: Sales | See: Activity Aging on Opportunities; Pipeline Funnel,"1. BOFU deals table: Account
+2. Value
+3. Days in BOFU
+4. Rep
+5. Last Action
+6. Next Step
+7. Deals >threshold flagged red
+8. Win/loss reason breakdown if available
+9. Conversion trend: BOFU?Won this month vs prior 2 months","CRM Opportunity ?
+1. opp_id
+2. stage
+3. stage_entered_date
+4. value
+
+CRM Stage History ? entry/exit timestamps",Red: conversion <20% OR any deal in BOFU >30d | Amber: 20–30% OR deal 15–30d | Green: >30% AND all <15d,CRM; stage history timestamps required,Monthly,Primary: Sales Head | Secondary: CEO,Approved (built in v2.0),Deferred,—,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.
+  ?  DEFERRED — Sales (out of scope for current build cycle),,,,,,,,,,,,,,,,,
+31,Sales,P3,Win / Loss Trend (—),Deferred Sales metric: Win / Loss Trend.,Deferred,—,Built in: Sales | See: —,No flyout — deferred,CRM,—,CRM,Monthly,Primary: Sales Head | Secondary: —,Deferred,Deferred,—,
+32,Sales,P3,Sales Cycle (Days) (—),Deferred Sales metric: Sales Cycle (Days).,Deferred,—,Built in: Sales | See: —,No flyout — deferred,CRM,—,CRM,Monthly,Primary: Sales Head | Secondary: —,Deferred,Deferred,—,
+?  TALENT ACQUISITION (TA),,,,,,,,,,,,,,,,,
+  ?  Requisition Management,,,,,,,,Planned – v2 (TA module),,,,,,,,,
+33,Talent Acquisition (TA),P1,Hiring & Attrition — DM Summary (Hiring & Attrition tile ? Hiring & Attrition — DM Summary),Entry point: unit-level open roles and exits visible on the People KPIs screen. Journey starts here.,Live – v1,KPI tile: open roles count + exits count; RAG; click?flyout,Built in: Talent Acquisition (TA) | See: JR Approval Turnaround; Time to Hire,"1. Open roles section: JD title, days open, current stage, target start date, sourcing channel
+2. Exits section: role, exit date, reason category, KT status
+3. Risk flag if exit impacts active project
+4. Link to full TA module","Source list: Tara ATS + Keka. Fields:
+1. Tara ATS + Keka.No of opening(Requisitions) ? open_positions_count (Raw)
+2. Tara ATS + Keka.exit portal sharepoint ? exits_this_month per unit (Raw).",Green: 0 exits AND ?2 open | Amber: 1 exit OR 3–4 open | Red: ?2 exits OR ?5 open,"Tara / Keka — Tara ATS, Keka",Weekly,"Primary: Delivery Manager | Secondary: TA Head, HR Head",Pending Review,Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+34,Talent Acquisition (TA),P1,JR Approval Turnaround (Planned – v2 (TA Dashboard) ? JR Approval Turnaround),Delays in JR approval are the biggest controllable bottleneck in hiring. Tracking stage age forces accountability at each approver.,Live - v2,JR pipeline: approval stage bar per requisition with age and SLA flag,Built in: Talent Acquisition (TA) | See: Time to Hire vs Target,"1. JR table: Role
+2. Level
+3. Raised By
+4. Current Approval Stage
+5. Stage Age in days
+6. Approver name
+7. SLA status (On Track/Breached)
+8. Sorted by stage age descending
+9. One-click escalation to next approver from flyout","Source list: Tara / HR System. Fields:
+1. Tara / HR System.Requisition ID(Requisitions) ? jr_id (Raw)
+2. Tara / HR System.Job Title(Requisitions) ? role_title (Raw)
+3. Tara / HR System.Created on (Requisitions) ? raise_date (Raw)
+4. Tara / HR System.PMO Status(Requisitions) - UAT ? approval_stage (Raw)
+5. Tara / HR System.If approval_stage == ""Approved"" then approver =""PMO"" ? approver (Cleaned).",Green: approval <3 days | Amber: 3–5 days | Red: >5 days at any stage,Tara / HR System — Tara ATS / HR System,Daily,"Primary: TA Head | Secondary: HR Head, DM",Approved (built in v2.0),Deferred,—,"If approval_stage == ""Approved"" then approver =""PMO"""
+  ?  Sourcing & Screening,,,,,,,,Planned – v2 (TA module),,,,,Secondary: Planned – v2,,,,
+35,Talent Acquisition (TA),P1,Screening-to-Schedule Rate (Planned – v2 (TA Dashboard) ? Screening-to-Schedule Rate),Measures how efficiently screened profiles convert to scheduled interviews. Low rates signal poor sourcing quality or misaligned JD expectations.,Live - v2,Funnel metric: screened ÷ scheduled %; trend vs prior 2 months; source breakdown,Built in: Talent Acquisition (TA) | See: Interview Velocity; Funnel Conversion Rate,"1. Source breakdown: conversion rate by sourcing channel (job portal/referral/LinkedIn/agency)
+2. JD-level drill: screen-to-schedule rate per open role
+3. Top reject reasons summary
+4. Recruiter-level conversion rate","Source list: Tara ATS. Fields:
+1. Tara ATS.Candidate ID(Candidates) ? profile_id (Raw)
+2. Tara ATS.Job ID(Candidates) ? jd_id (Raw)
+3. Tara ATS.Status (Candidates) ? screen_status (Raw)
+4. Tara ATS ? interview_scheduled_flag (Raw)
+5. Tara ATS.event start (Interviews) ? screen_date (Raw)
+6. Tara ATS.Sourced (Candidate Overview) ? source_channel (Raw).",Green: ?60% | Amber: 40–59% | Red: <40%,Tara ATS,Weekly,Primary: TA Head | Secondary: TA Recruiter,Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+36,Talent Acquisition (TA),P2,Call Quality Score (TA) (Planned – v2 (TA Dashboard) ? Call Quality Score (TA)),Quality of recruiter screening calls against a structured rubric. Drives consistency in candidate experience.,Live - v2,Score per recruiter per call; avg this month vs prior 2M; trend arrow,Built in: Talent Acquisition (TA) | See: Screening-to-Schedule Rate,"1. Call-level table: Recruiter
+2. JD
+3. Call Date
+4. Score
+5. Category breakdown (Opening/Probing/Pitch/Close)
+6. Calls below threshold highlighted
+7. Coaching flag if 3+ consecutive calls below threshold
+8. 6-month trend per recruiter","Source list: Call recording / HRMS. Fields:
+1. Call recording / HRMS ? call_id
+2. Call recording / HRMS ? recruiter
+3. Call recording / HRMS ? candidate
+4. Call recording / HRMS ? jd_id
+5. Call recording / HRMS ? status.",Red: avg <6/10 | Amber: declining trend | Green: ?6/10 and stable or improving,Call Recording / HRMS — Call recording system; scoring rubric,Monthly,Primary: TA Head | Secondary: HR Head,Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  Interview Pipeline,,,,,,,,Planned – v2 (TA module),,,,,Secondary: Planned – v2,,,,
+37,Talent Acquisition (TA),P1,Interview Velocity (Planned – v2 (TA Dashboard) ? Interview Velocity),Days between interview stages indicate scheduling bottlenecks. Long gaps lose candidates to competitor offers.,Live - v2,Average days per stage funnel; breach count badge; candidates stalled >7d flagged,Built in: Talent Acquisition (TA) | See: Screening-to-Schedule Rate; Funnel Conversion Rate,"1. Candidate-level table: Name
+2. JD
+3. Current Stage
+4. Days Since Last Stage
+5. Next Interviewer
+6. Status
+7. Stalled candidates (>7d) at top
+8. One-click reschedule prompt from flyout","Source list: Tara ATS. Fields:
+1. Tara ATS.Candidate ID(Candidates) ? candidate_id (Raw)
+2. Tara ATS.Job ID(Candidates) ? jd_id (Raw)
+3. Tara ATS.only status == ""interview"" ? interview_stage
+4. Tara ATS.event start (Interviews) ? stage_date[] (Raw)
+5. Tara ATS.Interviewer(Interviews) ? interviewer (Raw).",Green: avg <3d per stage | Amber: 3–5d | Red: >5d OR any candidate stalled >7d,Tara ATS,Daily,Primary: TA Head | Secondary: TA Recruiter,Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+38,Talent Acquisition (TA),P1,Funnel Conversion Rate (Planned – v2 (TA Dashboard) ? Funnel Conversion Rate),End-to-end conversion from JD-open to offer accepted. Shows exactly where the funnel is leaking.,Live - v2,Funnel visual: Applied ? Screened ? Interviewed ? Offered ? Accepted with % at each stage drop,Built in: Talent Acquisition (TA) | See: Interview Velocity; Offer Pipeline,"1. Stage-wise conversion table per JD
+2. Source-wise breakdown: which channels convert best
+3. Time-in-stage average per stage
+4. Comparison vs prior quarter
+5. JD-level drill into worst-performing funnels","Source list: Tara ATS. Fields:
+1. Tara ATS.Candidate(Interview) ? candidate_id (Raw)
+2. Tara ATS.Job(Interview) ? jd_id (Raw)
+3. Tara ATS ? outcome (Raw).",Green: offer acceptance ?70% | Amber: 50–69% | Red: <50%,Tara ATS,Monthly,Primary: TA Head | Secondary: HR Head,Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  Offer Management,,,,,,,,Planned – v2 (TA module),,,,,Secondary: Planned – v2,,,,
+39,Talent Acquisition (TA),P1,Offer Pipeline & Communication Aging (Planned – v2 (TA Dashboard) ? Offer Pipeline & Communication Aging),Offers without timely follow-up go cold. Aging tracker ensures no offer sits without a status update past the agreed response window.,Live - v2,"Offer pipeline list: candidate, role, offer date, age, last contact, response status; >3d flagged red",Built in: Talent Acquisition (TA) | See: Budget vs Offer; Time to Hire,"1. Offer detail per candidate: Compensation offered vs band
+2. Negotiation notes and history
+3. Counter-offer flag
+4. Acceptance deadline
+5. Days since last contact
+6. Recommended next action
+7. One-click log communication from flyout","Source list: Tara ATS, Excel. Fields:
+1. Tara ATS.Candidate ID(Candidate overview) ? candidate_id (Raw)
+2. Excel ? offer_date (Raw)
+3. Excel ? offer_amount (Raw)
+4. Tara ATS.Status = ""active Slipthrough"" (Candidate Overview) ? response_status (Raw).",Green: all offers responded within 3d | Amber: 3–5d | Red: >5d without response,Tara ATS,Daily,Primary: TA Head | Secondary: HR Head,Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+40,Talent Acquisition (TA),P2,Budget vs Offer vs Saving (Planned – v2 (TA Dashboard) ? Budget vs Offer vs Saving),Tracks whether offers are within approved budget bands and computes per-hire savings.,Live - v2,"Table per closed hire: approved band, offer made, delta, saving; dept rollup",Built in: Talent Acquisition (TA) | See: Offer Pipeline; Compensation Band (HR),"1. Hire-level detail: Candidate
+2. Role
+3. JD approved band (min/mid/max)
+4. Offer made
+5. Variance %
+6. Saving vs ceiling
+7. Approver sign-off status
+8. Dept-level saving summary
+9. Trend vs prior quarter","Source list: Tara ATS + Finance/HRMS, Finance/HRMS. Fields:
+1. Tara ATS + Finance/HRMS.Requisition ID(Requisitions) ? jd_id (Raw)
+2. Finance/HRMS.Sharepoint - Planned Budget ? approved_band (Raw)
+3. Finance/HRMS.Sharepoint - offered salary ? offer_amount (Raw)
+4. Finance/HRMS.Sharepoint - offer roll out ? hire_date (Raw).",Green: offer ?90% of band | Amber: 90–100% | Red: above band or unapproved,"Tara / HRMS — Tara ATS, Finance/HRMS",Monthly,Primary: TA Head | Secondary: Finance Head,Approved (built in v2.0),Deferred,—,
+  ?  Hiring Outcomes,,,,,,,,Planned – v2 (TA module),,,,,Secondary: Planned – v2,,,,
+41,Talent Acquisition (TA),P1,Time to Hire vs Target (Planned – v2 (TA Dashboard) ? Time to Hire vs Target),Days from JR approval to offer acceptance vs agreed SLA per seniority band. Persistent misses indicate systemic bottlenecks.,Live - v2,Gauge per seniority band: actual vs target days; colour-coded hit/miss; 6-month trend,Built in: Talent Acquisition (TA) | See: JR Approval Turnaround; Funnel Conversion Rate,"1. JD-level table: Role
+2. Seniority Band
+3. JR Raised Date
+4. Offer Accepted Date
+5. Total Days
+6. SLA Target
+7. Delta days
+8. Which stage consumed most time (stage time breakdown bar)
+9. Trend: avg time to hire per quarter","Source list: Tara ATS. Fields:
+1. Tara ATS.Requisition ID(Requisitions) ? jr_id (Raw)
+2. Tara ATS ? jr_raised_date (Raw)
+3. Tara ATS.mail ? offer_accepted_date (Raw).",Green: ?target | Amber: target+1 to target+5 days | Red: >target+5 days,Tara ATS,Monthly,Primary: TA Head | Secondary: HR Head,Approved (built in v2.0),Deferred,—,
+42,Talent Acquisition (TA),P2,Slip Through Rate (Planned – v2 (TA Dashboard) ? Slip Through Rate),% of hires who exit within 90 days. Indicates poor screening or JD-role misalignment.,Live - v2,% exits <90d from join date; MoM trend; breakdown by sourcing channel and JD,Built in: Talent Acquisition (TA) | See: Time to Hire; Attrition Early Warning (HR),"1. Exit list: Name (anonymised)
+2. JD
+3. Join Date
+4. Exit Date
+5. Tenure in days
+6. Source Channel
+7. Exit Reason
+8. KT completed flag
+9. Comparison: slip-through rate by source channel (which channels produce unstable hires)","Source list: Keka, Keka/TARA, Tara. Fields:
+1. Keka.employee_id ? employee_id (Raw)
+2. Keka.Date of Joining ? join_date (Raw)
+3. Keka.exit portal sharepoint ? exit_date (Raw)
+4. Keka/TARA.date of joining - offrer date/created date ? tenure_days (cleaned)
+5. Tara.Sourced (Candidate Overview) ? source_channel (Raw).",Green: <5% | Amber: 5–10% | Red: >10%,"Keka / Tara — Keka, Tara",Monthly,Primary: TA Head | Secondary: HR Head,Approved (built in v2.0),Deferred,—,date of joining - offrer date/created date
+?  HUMAN RESOURCES (HR),,,,,,,,,,,,,,,,,
+  ?  Overview,,,,,,,,hr.html (Headcount & Attrition chart + Hiring Tracker),,,,,,,,,
+43,Human Resources (HR),P1,Headcount & Attrition — Month on Month (Headcount & Attrition card ? Headcount & Attrition — Month on Month),Tracks headcount movement and attrition together per department MoM. Combined chart shows the net workforce health picture. Training and satisfaction are in their own tabs.,Live – v1,"Combined bar + line chart: headcount bars per dept per month, attrition % line overlay; 3-month view",Built in: Human Resources (HR) | See: Attrition Early Warning Score; Resource Utilization,"1. Dept-level drill: headcount table (Dept
+2. Current
+3. Prior Month
+4. Joiners
+5. Exits
+6. Net Change
+7. Attrition %)
+8. Joiners list with role and start date
+9. Exits list with role, exit reason category
+10. Plan vs actual headcount gap
+11. Trend: 6-month headcount and attrition trajectory per dept","Source list: Keka, HR Plan. Fields:
+1. Keka.employee_id ? employee_id (Raw)
+2. Keka.Department ? dept (Raw)
+3. Keka.Date of Joining ? join_date (Raw)
+4. Keka.exit portal sharepoint ? exit_date (Raw)
+5. Keka.status ? status (Raw)
+6. HR Plan.Resource management ? planned_headcount per dept (Raw).",Green: actual ?98% plan AND attrition <10% | Amber: 95–97% OR attrition 10–15% | Red: below,"Keka, HR Plan access",Monthly,"Primary: HR Head | Secondary: Finance Head, DM",Pending Review,Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+44,Human Resources (HR),P1,Hiring Tracker — Open Positions (Hiring Tracker card ? Hiring Tracker — Open Positions),Live tracker of all open positions with pipeline fill status. Flags roles at risk of missing target start dates.,Live – v1,Table: Role | Target | Hired | In Pipeline | % Filled; RAG on pipeline gap per role,Built in: Human Resources (HR) | See: JR Approval Turnaround (TA); Headcount MoM,"1. Role-level drill: Role title
+2. Days open
+3. Sourcing channel
+4. Candidate count per stage
+5. Target start date
+6. Days until target start
+7. Risk flag if pipeline empty with <30 days to target
+8. Link to Tara ATS for role detail","Source list: Tara ATS. Fields:
+1. Tara ATS.TA dashboard ? role_title (Raw)
+2. Tara ATS ? target_count (Raw)
+3. Tara ATS ? hired_count (Raw)
+4. Tara ATS ? in_pipeline_count (Raw)
+5. Tara ATS ? jd_open_date (Raw)
+6. Tara ATS ? target_start_date (Raw).",Green: in pipeline ?(target?hired) | Amber: partially filled | Red: no pipeline OR overdue,Tara ATS,Weekly,Primary: HR Head | Secondary: TA Head,Pending Review,Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  Onboarding & Exits,,,,,,,,Planned – v2 (HR module),,,,,Secondary: Planned – v2,,,,
+45,Human Resources (HR),P1,Onboarding Completion Rate (Planned – v2 (HR Onboarding screen) ? Onboarding Completion Rate),% of joiners completing all onboarding steps within agreed window. Incomplete onboarding delays productivity and creates compliance risk.,Live - v2,Completion gauge per new joiner batch; overdue steps listed with owner and age,Built in: Human Resources (HR) | See: BGV Status; Exit Interview & KT,"1. Per-joiner checklist: Step name
+2. Due date
+3. Completion date
+4. Responsible party
+5. Status
+6. Steps flagged if >3d overdue
+7. Summary: completed vs pending step counts across all current joiners
+8. Joiner list with overall completion %","Source list: Sharepoint - initiate onboarding. Fields:
+1. Sharepoint - initiate onboarding.Sharepoint - initiate onboarding (name) == keka(name) where emp_id ? employee_id (cleaned; formula: initiate onboarding (name) == keka(name) where emp_id)
+2. Sharepoint - initiate onboarding.Sharepoint - initiate onboarding - Status ? onboarding_status (Raw)
+3. Sharepoint - initiate onboarding.Sharepoint - initiate onboarding - DOJ ? due_date (Raw)
+4. Sharepoint - initiate onboarding.Sharepoint - initiate onboarding - DOJ ? completion_date (Raw)
+5. Sharepoint - initiate onboarding.Sharepoint - initiate onboarding - Created By ? responsible (Raw).",Green: 100% steps complete within window | Amber: 1–2 steps overdue | Red: >2 steps OR any >7d overdue,HRMS / Onboarding Tool,Weekly,Primary: HR Head | Secondary: DM,Approved (built in v2.0),Deferred,—,initiate onboarding (name) == keka(name) where emp_id
+46,Human Resources (HR),P1,BGV Status (Planned – v2 (HR Onboarding screen) ? BGV Status),Tracks background verification completion for new joiners. Flags cases at risk of exceeding 30-day SLA.,Live - v2,"BGV pipeline per joiner: vendor stage, age, expected completion; overdue count badge",Built in: Human Resources (HR) | See: Onboarding Completion Rate,"1. Per-joiner BGV status: Name
+2. Join Date
+3. BGV Vendor
+4. Current Stage
+5. Age in days
+6. Expected Completion
+7. Blocker if any
+8. Adverse finding flag (red)
+9. Overall: % complete within SLA vs overdue","Source list: Sharepoint - initiate BGV, BGV Vendor / HRMS. Fields:
+1. Sharepoint - initiate BGV.Sharepoint - initiate BGV (name) == keka(name) where emp_id ? employee_id (Raw)
+2. Sharepoint - initiate BGV.Sharepoint - initiate BGV BGV initiate ? bgv_stage (Raw)
+3. Sharepoint - initiate BGV.Sharepoint - initiate BGV modified date when BGV initiat ==Yes ? bgv_start_date (Raw)
+4. BGV Vendor / HRMS.ADAMA - third prty portal ? bgv_completion_date (Raw)
+5. BGV Vendor / HRMS.ADAMA - third prty portal ? adverse_flag (Raw).",Green: complete ?30d | Amber: 30–45d | Red: >45d OR adverse finding,"BGV Vendor / HRMS — BGV Vendor API, HRMS",Daily,Primary: HR Head | Secondary: HR Exec,Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+47,Human Resources (HR),P1,Attrition Early Warning Score (Planned – v2 (HR Onboarding & Exits screen) ? Attrition Early Warning Score),"Composite flight-risk score per employee based on tenure pattern, engagement, 1-on-1 adherence, and leave spikes. Enables proactive retention action.",Live - v2,Risk score tiles per high-risk employee; dept-level risk distribution heatmap,Built in: Human Resources (HR) | See: Exit Interview & KT; Engagement Participation,"1. High-risk employee list: Name
+2. Dept
+3. Risk Score
+4. Score components (tenure weight, engagement score, 1on1 missed, leave spike)
+5. Trend: score MoM
+6. Recommended manager action
+7. Privacy note: visible to HR Head and DM only","Source list: Sharepoint - 1on1, Keka + Survey + Calendar. Fields:
+1. Sharepoint - 1on1.Sharepoint ? 1on1 _ score (Raw)
+2. Keka + Survey + Calendar.Sharepoint ? 1on1_missed_count (Cleaned)
+3. Keka + Survey + Calendar.keka ? leave_spike_flag (Cleaned).",Green: score <5 | Amber: 5–7 | Red: ?8 out of 10,"Keka / Survey / Calendar — Keka, Survey Tool, Calendar",Monthly,Primary: HR Head | Secondary: DM (for their team),Approved (built in v2.0),Deferred,—,keka
+48,Human Resources (HR),P1,Exit Interview & KT Completion (Planned – v2 (HR Onboarding & Exits screen) ? Exit Interview & KT Completion),Ensures all exits have a recorded interview (attrition intelligence) and completed KT (protects delivery). Tracks both completion rates.,Live - v2,"Exit checklist per departing employee: exit interview done, KT plan signed off, access revoked",Built in: Human Resources (HR) | See: Attrition Early Warning Score; Slip Through Rate (TA),"1. Per-exit checklist: Employee
+2. Last Working Day
+3. Exit Interview: Done/Pending
+4. KT Assignee
+5. KT Completion Date
+6. System Access Revoked
+7. Risk flag if KT not complete by LWD-3
+8. Exit reason summary across all exits this month","Source list: exit portal and email. Fields:
+1. exit portal and email ? kt_completion_flag (Raw)
+2. exit portal and email ? kt_assignee (Raw)
+3. exit portal and email ? last_working_day (Raw).",Green: both complete before LWD | Amber: either overdue <3d | Red: either missing at LWD,HRMS,Per exit,"Primary: HR Head | Secondary: DM, Manager",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  Engagement & Culture,,,,,,,,Planned – v2 (HR module),,,,,Secondary: Planned – v2,,,,
+49,Human Resources (HR),P1,1-on-1 Adherence (Planned – v2 (HR Engagement screen) ? 1-on-1 Adherence),% of manager–reportee 1-on-1s held as scheduled. Low adherence is a leading indicator of disengagement.,Live - v2,Adherence % per manager; trend bar; non-compliant managers flagged,Built in: Human Resources (HR) | See: Engagement Participation & Feedback,"1. Manager-level breakdown: Manager
+2. Scheduled this month
+3. Held
+4. Missed
+5. Last held date
+6. Adherence %
+7. Missed sessions list with employee name and date
+8. Trend: adherence % over last 3 months per manager","Source list: Sharepoint 1on1 Feedback tab. Fields:
+1. Sharepoint 1on1 Feedback tab.meeting_id ? meeting_id (Raw)
+2. Sharepoint 1on1 Feedback tab.organizer (manager) ? organizer (manager) (Raw)
+3. Sharepoint 1on1 Feedback tab.attendee (reportee) ? attendee (reportee) (Raw)
+4. Sharepoint 1on1 Feedback tab.status ? status (Raw)
+5. Sharepoint 1on1 Feedback tab.date ? date (Raw).",Green: ?90% held | Amber: 75–89% | Red: <75%,Calendar / HRMS — Calendar API / HRMS,Monthly,"Primary: HR Head | Secondary: DM, Manager",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+50,Human Resources (HR),P1,Engagement Participation & Feedback (Planned – v2 (HR Engagement screen) ? Engagement Participation & Feedback),% of employees participating in engagement surveys and average score. Satisfaction signal lives here (moved from Overview card).,Live - v2,Participation % gauge + avg score gauge; dept-level breakdown table,Built in: Human Resources (HR) | See: 1-on-1 Adherence; Attrition Early Warning Score,"1. Dept-level breakdown: Dept
+2. Participation %
+3. Avg Score
+4. Top 3 concern themes from open-text responses
+5. Score trend vs prior quarter
+6. Non-participating employee count per dept
+7. Action recommendations based on low scores","Source list: Excel. Fields:
+1. Excel ? employee_id (Raw)
+2. Excel ? survey_id (Raw)
+3. Excel ? participation_flag (Raw)
+4. Excel ? score (Raw).",Green: participation ?80% AND score ?7/10 | Amber: 60–79% OR 5–6.9 | Red: <60% OR <5,Survey Tool,Quarterly,"Primary: HR Head | Secondary: CEO, DM",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  L&D,,,,,,,,Planned – v2 (HR module),,,,,Secondary: Planned – v2,,,,
+51,Human Resources (HR),P1,L&D Completion vs Assignment (Planned – v2 (HR L&D screen) ? L&D Completion vs Assignment),% of assigned learning modules completed per employee and team. Training signal (moved from Overview QoQ card). Tracks mandatory compliance and role-specific upskilling.,Live - v2,Completion % bars per dept; overdue mandatory training count badge (red),Built in: Human Resources (HR) | See: KPI & OKR Alignment; Appraisal (merged),"1. Employee-level drill: Employee
+2. Assigned modules list
+3. Completion status per module
+4. Due date
+5. Score if applicable
+6. Overdue mandatory modules flagged red
+7. Dept summary: assigned vs completed counts
+8. Trend: completion rate MoM","Source list: LMS. Fields:
+1. LMS.Sharepoint LMS portal ? employee_id (Raw)
+2. LMS.Sharepoint LMS portal ? course_id (Raw)
+3. LMS.Sharepoint LMS portal ? course_type (mandatory/optional) (Raw)
+4. LMS.Sharepoint LMS portal ? assigned_date (Raw)
+5. LMS.Sharepoint LMS portal ? completion_date (Raw)
+6. LMS.Sharepoint LMS portal ? score (Raw).",Green: ?90% complete AND 0 mandatory overdue | Amber: 75–89% | Red: <75% OR any mandatory overdue,LMS (Learning Management System),Monthly,"Primary: HR Head | Secondary: DM, Manager",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  Performance & Compensation,,,,,,,,"1. Planned – v2 (HR module)
+2. Appraisals tile Live-v1 on kpi-people.html",,,,,Secondary: Planned – v2,,,,
+52,Human Resources (HR),P1,KPI & OKR Alignment + Health Grid (Planned – v2 (HR Performance screen); KPI Health Grid was on hr.html (Live-v1) ? KPI & OKR Alignment + Health Grid),% of employees with documented KPIs/OKRs linked to dept objectives. Merged with KPI Health Grid by Department (cross-dept RAG view of KPI health).,Live – v1,Alignment % per dept; grid overlay showing RAG per dept × KPI category,Built in: Human Resources (HR) | See: Appraisal (merged); L&D Completion,"1. Two views in flyout: Alignment view — employees missing KPIs, flagged with manager name
+2. Grid view — dept × KPI category (Salary/Benefits/Training/Utilisation/Performance) with RAG symbol; click any cell to see underlying metric value and recommended action","Source list: PMS. Fields:
+1. PMS.employee name(id) ? employee_id (Raw)
+2. PMS.KPI Approval -DM && KPI approval - HR ? kpi_set_flag (Raw)
+3. PMS.OKR Approval -DM && OKR approval - HR ? okr_linked_flag (Raw).",Green: ?95% aligned | Amber: 85–94% | Red: <85%,"PMS / Keka / LMS — PMS, Keka, LMS, Finance Read",Quarterly,"Primary: HR Head | Secondary: CEO, DM",Pending Review,Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+53,Human Resources (HR),P1,Appraisal Cycle Adherence (Appraisals tile (Live-v1); full view Planned-v2 ? Appraisal Cycle Adherence),Merged metric: manager submission rate (Appraisal Cycle Adherence) + overall completion % (Appraisals Completion HR View from kpi-people.html). Single view of appraisal health.,Live – v1,KPI tile: overall completion %; click?flyout with manager-level breakdown,Built in: Human Resources (HR) | See: KPI & OKR Alignment; Manager Input Submission (removed — absorbed here),"1. Manager-level pending list: Manager
+2. Appraisee count
+3. Due Date
+4. Submitted count
+5. Overdue count
+6. Days overdue
+7. Overdue managers sorted by age
+8. Cycle comparison: this cycle vs prior year same period
+9. Escalation flag for managers >14d overdue","Source list: Excel. Fields:
+1. Excel.automated n testing phase ? manager_id (Raw)
+2. Excel ? appraisee_id (Raw)
+3. Excel ? appraisal_due_date (Raw)
+4. Excel ? submission_date (Raw)
+5. Excel ? status (Raw).",Green: ?95% submitted by due date | Amber: 85–94% | Red: <85%,PMS,Per appraisal cycle,"Primary: HR Head | Secondary: DM, Manager",Pending Review,Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+54,Human Resources (HR),P2,Compensation Band Adherence (Planned – v2 (HR Compensation screen) ? Compensation Band Adherence),% of employees compensated within approved salary band. Out-of-band compensation creates equity issues and budget overruns.,Live - v2,Adherence % per dept; out-of-band employees listed with delta vs band,Built in: Human Resources (HR) | See: Budget vs Offer (TA); Resource Utilization,"1. Employee-level detail: Employee (anonymised for privacy)
+2. Current CTC
+3. Band (Min/Mid/Max)
+4. Delta vs mid
+5. Approval status
+6. Unapproved exceptions flagged red
+7. Dept summary: in-band vs exceptions count
+8. Trend vs prior review cycle","Source list: Excel. Fields:
+1. Excel ? employee_id (Raw)
+2. Excel ? current_ctc (Raw)
+3. Excel ? approved_band_min (Raw)
+4. Excel ? approved_band_max (Raw)
+5. Excel ? dept (Raw).",Green: 100% within band | Amber: 1–2 exceptions with approval | Red: any unapproved exception,"HRMS / Finance — HRMS, Finance Read",Quarterly,Primary: HR Head | Secondary: Finance Head,Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  Workforce Health,,,,,,,,"1. Planned – v2
+2. Golden Ratio + Attendance Live-v1 on kpi-people.html",,,,,,,,,
+55,Human Resources (HR),P1,Golden Ratio (Golden Ratio tile (unit); hr.html Workforce view (org-level Planned-v2) ? Golden Ratio),Ratio of billable to total FTEs organisation-wide. HR-level view (vs Engineering's unit-level view on kpi-people.html).,Live – v1,KPI tile at unit level (Live); org-level ratio card (Planned-v2),Built in: Human Resources (HR) | See: Team Utilization (Engineering); Resource Utilization,"1. Org-level breakdown: billable vs non-billable count per dept
+2. Trend: ratio over last 6 months
+3. Comparison to target ratio
+4. Depts below threshold highlighted
+5. Action: which depts need rebalancing","Source list: Keka, Resource Management / Keka. Fields:
+1. Keka.employee id ? employee_id (Raw)
+2. Resource Management / Keka.state ? billable_flag (Raw)
+3. Keka.department ? dept (Raw).",Green: ?1:8 | Amber: 1:6–1:7.9 | Red: <1:6,Keka,Monthly,"Primary: HR Head | Secondary: DM, Finance",Pending Review,Deferred,—,employee id | state | department
+56,Human Resources (HR),P1,Attendance Pattern & WFH Productivity (Attendance tile (unit); hr.html org view Planned-v2 ? Attendance Pattern & WFH Productivity),Daily attendance rate. Detects chronic absenteeism and flags WFH days correlating with lower output.,Live – v1,KPI tile: attendance %; click?detailed calendar heat map,Built in: Human Resources (HR) | See: 1-on-1 Adherence; Engagement Participation,"1. Calendar heat map: attendance per employee per day for current month
+2. Colour: Present/WFH/Leave/Absent
+3. Top 5 absentees by days absent
+4. WFH vs office split per dept
+5. Chronic absenteeism flag if >3 unplanned absences in a month","Source list: Keka. Fields:
+1. Keka.employee id ? employee_id (Raw)
+2. Keka.DATE ? date (Raw)
+3. Keka.attendance[] ? attendance_status (Raw)
+4. Keka.location ? work_location (Raw).",Green: ?96% | Amber: 92–95% | Red: <92%,Keka,Daily,Primary: HR Head | Secondary: DM,Pending Review,Deferred,—,employee id | DATE | attendance[]
+57,Human Resources (HR),P2,Resource Utilization (Over/Under) (Planned – v2 (HR Workforce Health screen) ? Resource Utilization (Over/Under)),% of capacity used on billable work per employee and team. Flags both over-utilization (burnout) and under-utilization (revenue leakage).,Live - v2,Utilization gauge per team; over/under distribution bar; individual alerts for >110% or <60%,Built in: Human Resources (HR) | See: Golden Ratio; Team Utilization (Engineering); Bench Heatmap (PMO),"1. Employee-level table: Name
+2. Dept
+3. Allocated hrs
+4. Billed hrs
+5. Utilization %
+6. Over/Under flag
+7. Sort by utilization extremes (highest and lowest)
+8. Team average comparison
+9. Forward 4-week utilization projection","Source list: Resource Management / Keka. Fields:
+1. Resource Management / Keka.employee id ? employee_id (Raw)
+2. Resource Management / Keka.Assignment ? allocated_hrs (Raw)
+3. Resource Management / Keka.Assignment * Bill Rate ? billed_hrs (Raw)
+4. Resource Management / Keka.Department ? dept (Raw).",Green: 75–100% | Amber: 60–74% or 100–110% | Red: <60% or >110%,"Resource Mgmt / Keka — Resource Management, Keka",Weekly,"Primary: HR Head | Secondary: Finance Head, DM",Approved (built in v2.0),Deferred,—,employee id | Assignment | Assignment * Bill Rate
+  ?  DEFERRED — Human Resources (HR) (out of scope for current build cycle),,,,,,,,,,,,,,,,,
+58,Human Resources (HR),P3,Succession Gap (—),Moved to deferred — requires succession planning process to be formalised first.,Deferred,—,Built in: Human Resources (HR) | See: —,No flyout — deferred,Not mapped in Pulse HR_Done.,—,HRMS,Quarterly,Primary: HR Head | Secondary: —,Deferred,Deferred,—,
+59,Human Resources (HR),P3,Probation Review Completion (—),Moved to deferred — will add when onboarding process is standardised.,Deferred,—,Built in: Human Resources (HR) | See: —,No flyout — deferred,Not mapped in Pulse HR_Done.,—,HRMS,Quarterly,Primary: HR Head | Secondary: —,Deferred,Deferred,—,
+60,Human Resources (HR),P3,Policy Acknowledgement Completion (—),Moved to deferred — compliance baseline to be established first.,Deferred,—,Built in: Human Resources (HR) | See: —,No flyout — deferred,Not mapped in Pulse HR_Done.,—,HRMS,Quarterly,Primary: HR Head | Secondary: —,Deferred,Deferred,—,
+61,Human Resources (HR),P3,Career Progression Plan Coverage (—),Requires structured career framework to exist first.,Deferred,—,Built in: Human Resources (HR) | See: —,No flyout — deferred,Not mapped in Pulse HR_Done.,—,HRMS,Quarterly,Primary: HR Head | Secondary: —,Deferred,Deferred,—,
+62,Human Resources (HR),P3,Skip-level Feedback Coverage (—),Low signal-to-effort ratio at current org maturity.,Deferred,—,Built in: Human Resources (HR) | See: —,No flyout — deferred,Not mapped in Pulse HR_Done.,—,HRMS,Quarterly,Primary: HR Head | Secondary: —,Deferred,Deferred,—,
+?  PMO,,,,,,,,,,,,,,,,,
+  ?  Engagement Health,,,,,,,,Planned – v2 (PMO module),,,,,Secondary: Planned – v2,,,,
+63,PMO,P1,"Engagement Health — P360 Portfolio (Engagement Health ? P360 Portfolio Avg, P360 Portfolio)",PMO-level aggregation of P360 scores across all accounts and DMs. Enables PMO to identify systemic quality issues cutting across units. Data sourced from Engineering P360.,Live - v2,Portfolio P360 heatmap: accounts as rows × 6 dimensions as columns; composite score per account; RAG per cell,Built in: PMO | See: P360 Score — Composite (Engineering); CSAT Overdue Nudge,"1. Account-level drill: composite score with 6-dimension bars
+2. 4-sprint trend
+3. DM responsible
+4. Last updated date
+5. Data accuracy flag
+6. Action items from last P360
+7. Link to Engineering dm-home for DM-level detail","Source list: Engineering Department. Fields:
+1. Engineering Dept ? P360 Portfolio Avg (Cleaned: Avg of scores across accounts)
+2. Engineering Dept ? P360 Portfolio (composite & dimension scores, full portfolio, no unit filter).",Green: portfolio avg ?8 | Amber: 7–7.9 | Red: <7 OR any account <6,P360 SharePoint Read,Monthly,"Primary: PMO Head | Secondary: CEO, DM",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+64,PMO,P1,Engagement Health — CSAT (Engagement Health ? CSAT),"Actionable nudge: shows which accounts have CSAT surveys overdue and by how many days. PMO acts on it — not a score report, a call to action.",Live - v2,"Overdue list with account name, milestone date, days CSAT overdue, and responsible DM; sorted by days overdue descending",Built in: PMO | See: P360 Score Portfolio; At-Risk Account Flag,"1. Account-level CSAT status: Account
+2. Milestone
+3. CSAT Due Date
+4. Days Overdue
+5. DM Responsible
+6. Last CSAT Score (for context)
+7. Action buttons: Send Reminder to DM / Mark Triggered / Escalate
+8. Historical CSAT response rate per account","Source list: SharePoint — CSAT List. Fields:
+1. CSAT List.Client ? Client
+2. CSAT List.Project ? Project
+3. CSAT List.Score/Status ? CSAT Score/Status
+4. CSAT List.Nudges ? AM Reminders (Raw — nudges trigger reminder runs for AM).",Green: ?95% triggered within SLA | Amber: 85–94% | Red: <85% OR any trigger >7d late,"CRM / Survey — CRM, Survey Tool",Per milestone,"Primary: PMO Head | Secondary: Account Manager, DM",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+65,PMO,P1,Engagement Health — SOW Coverage (Engagement Health ? SOW Coverage),"% of active engagements backed by a current, signed SOW. Hygiene guardrail — unbacked engagements create revenue recovery risk and legal exposure.",Live - v2,Coverage % gauge; list of engagements without active SOW; days since last SOW expiry,Built in: PMO | See: Billing Data Accuracy; Revenue Projections,"1. Engagement list: SOW ID
+2. Account
+3. Signed Date
+4. Expiry Date
+5. Days Until Expiry (or days expired)
+6. Value
+7. Renewal Status
+8. DM Responsible
+9. Action: initiate renewal from flyout
+10. Engagements with no SOW flagged red at top","Source list: not yet mapped in Pulse PMO_Done (Insight row exists but Source/Exact column blank). Placeholder fields from original spec: 1. SOW Repository ?
+ sow_id, 2. ? engagement_id, 3. ? signed_date, 4. ? expiry_date, 5. ? renewal_status.",Green: 100% coverage | Amber: 1 engagement without SOW | Red: ?2 or any expired >7d,SOW Repository / Legal,Monthly,"Primary: PMO Head | Secondary: Legal, Finance",Approved (built in v2.0),pmo.html,L2,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+66,PMO,P1,Mining & Escalations — All (Mining and escalations ? All),Portfolio-level view of all open escalations by age. Temporary home in Engineering (DM view); PMO sees full portfolio. Permanent home: Account Management module.,Live - v2,"Escalation age distribution: count by age bucket (<7d, 7–14d, >14d); sorted by age descending",Built in: PMO | See: At-Risk Account Flag; Account Escalations Register (Engineering),"1. Escalation list: Account
+2. Severity
+3. Open Date
+4. Age in days
+5. DM Responsible
+6. Last Update
+7. Resolution ETA
+8. Escalations >14d without update flagged critical
+9. Filter by severity
+10. Export to action log","Source list: Account Management Tab 1 (Pulse mapping defers to AM module). Fields:
+1. Account Risk Register.Account ? Account
+2. Account Risk Register.Escalation ? Escalation
+3. Account Risk Register.AM ? AM
+4. Account Risk Register.Due date ? Due date
+5. Account Risk Register.Status ? Status.",Green: 0 open >14d | Amber: any 7–14d | Red: any >14d OR unupdated >7d,CRM / Helpdesk Read,Daily,"Primary: PMO Head | Secondary: Account Manager, CEO",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+67,PMO,P1,Engagement Health — At Risk Accounts (Engagement Health ? At risk accounts),"Single composite risk flag per account — red if any one of P360, CSAT, SOW, or escalation is in red state. PMO's early warning list requiring proactive action.",Live - v2,Risk count tile: number of at-risk accounts; clicking opens list sorted by risk severity,Built in: PMO | See: P360 Portfolio; CSAT Nudge; SOW Coverage; Open Escalation Age,"1. At-risk accounts list: Account
+2. Risk factors (which indicators are red)
+3. Overall risk level
+4. DM Responsible
+5. Recommended action
+6. Days since last PMO review of this account
+7. No additional flyout — the list IS the detail view","Source list: composite (Pulse Source/Exact column blank for this Insight). Derived from: 1. Engineering Dept ?
+ P360 score, 2. SharePoint CSAT List ? CSAT status, 3. SOW Repository ? SOW status, 4. Account Risk Register ? open escalations. Logic: Red if any indicator red; Amber if any amber; else Green.",Red account: any one indicator in red state | Amber: any indicator in amber | Green: all indicators green,"All PMO Sources — P360 SharePoint, CRM, SOW Repository",Daily,"Primary: PMO Head | Secondary: CEO, DM",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  Financials,,,,,,,,"1. PMO owns this data
+2. Engineering Financials tab shows DM-level subset",,,,,Secondary: Planned – v2,,,,
+68,PMO,P1,Financials — YTD Billing (Financials ? YTD Billing; Engagement Health ? Financial Outlook),Full portfolio YTD billing vs plan across all DMs and accounts. Primary home of billing data. Engineering Financials tab calls a DM-level subset from here.,Live - v2,"Portfolio billing table: all accounts, invoiced vs plan, gap; sorted by gap (largest negative first)",Built in: PMO | See: Revenue Projections M+1/M+2/M+3; Billing Data Accuracy,"1. Account-level YTD detail: Account
+2. DM
+3. Invoiced YTD
+4. Plan YTD
+5. Gap
+6. % of Plan
+7. Monthly bar chart
+8. Invoice table with status
+9. Action owner for gap accounts
+10. Portfolio summary: total invoiced, total plan, overall gap","Source list: AM-DM Dashboard. Fields:
+1. AM-DM Dashboard.Actuals ? YTD Billing (Cleaned: Sum of actuals till YTD)
+2. AM-DM Dashboard.Actuals ? Financial Outlook (Cleaned: Sum of actuals till YTD).",Green: portfolio ?100% vs plan | Amber: 95–99% | Red: <95%,ERP / Finance Read,Monthly,"Primary: PMO Head | Secondary: Finance Head, CEO",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+69,PMO,P1,"Financials — Portfolio Forecast & Trend (M+1 / M+2 / M+3) (Financials ? M+1 Forecast, M+2 Forecast, M+3 Forecast, Trend, Portfolio forecast)",3-month forward revenue projection by account. Monthly buckets on a rolling 3-month horizon. Enables early detection of future billing shortfalls.,Live - v2,"3-column projection table: M+1, M+2, M+3 per account; confidence shade per cell; portfolio total row",Built in: PMO | See: YTD Billing Forecast; SOW Coverage,"1. Account-level projection: Contracted value
+2. Milestone dates and confirmation status
+3. % milestone confirmed
+4. Projected invoice M+1/M+2/M+3
+5. Scenario toggle: Base/Upside/Downside
+6. Confidence level per account
+7. DM responsible
+8. Alert if M+1 projection <80% of plan","Source list: Projections, AM-DM Dashboard, Allocation. Fields:
+1. Projections.Projection Amount ? M+1 Forecast (Cleaned: Sum of amount for M+1)
+2. Projections.Projection Amount ? M+2 Forecast (Cleaned: Sum of amount for M+2)
+3. Projections.Projection Amount ? M+3 Forecast (Cleaned: Sum of amount for M+3)
+4. AM-DM Dashboard.Targets ? Trend.Plan (Cleaned: Sum of Targets YTD)
+5. AM-DM Dashboard.Actuals ? Trend.Actual (Cleaned: Sum of actuals till YTD)
+6. Allocation.Resource Cost ? Trend.COGS (Cleaned: Sum of resource cost)
+7. Projections.Projection Amount ? Trend.Forecast (Cleaned)
+8. Projections.Client ? Portfolio forecast.Account (Raw)
+9. AM-DM Dashboard.Targets ? Portfolio forecast.YTD Plan (Cleaned: Sum of Targets YTD)
+10. AM-DM Dashboard.[Targets, Actuals] ? Portfolio forecast.YTD Variance (Formula: YTD Targets ? YTD Actuals)
+11. Projections.Projection Amount ? Portfolio forecast.M+1
+12. Projections.Projection Amount ? Portfolio forecast.M+2
+13. Projections.Projection Amount ? Portfolio forecast.M+3.",Green: projected ?95% of plan | Amber: 80–94% | Red: <80%,"ERP / SOW / Resource — ERP, SOW Repository, Resource Management",Monthly,"Primary: PMO Head | Secondary: Finance Head, DM",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+70,PMO,P1,Financials — Billing Data Accuracy (Financials ? Billing Data Accuracy (NOT mapped in Pulse PMO_Done)),"% of invoices issued without errors in rate, hours, or missing PO. Inaccurate billing damages client trust and delays cash collection.",Live - v2,Accuracy % gauge; flagged invoice count with error type badge,Built in: PMO | See: YTD Billing Forecast; SOW Coverage; AR Status (Finance),"1. Invoice-level errors: Invoice ID
+2. Account
+3. Error Type (rate mismatch/hours mismatch/missing PO/wrong entity)
+4. Invoice Amount
+5. Resolution Status
+6. Responsible party
+7. Days open
+8. Resolution trend: errors per month
+9. DM responsible per flagged account","Source list: not in Pulse PMO_Done. Placeholder fields from original spec: 1. ERP/Finance ?
+ invoice_id, 2. ? account, 3. ? invoiced_amount, 4. ? approved_rate, 5. ? logged_hrs, 6. Resource Mgmt ? contracted_rate.",Green: ?99% accuracy | Amber: 97–98% | Red: <97% OR any disputed invoice,"ERP / Finance, Resource Management",Monthly,Primary: PMO Head | Secondary: Finance Head,Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  Bench & Resource,,,,,,,,Planned – v2 (PMO module),,,,,Secondary: Planned – v2,,,,
+71,PMO,P1,"Utilization — On Bench, Utilized, Over Utilized (Utilization ? On Bench, On bench, Utilized, Over Utilized)","Current-state view of all bench resources: who is idle, how long they have been on bench, and their skill sets. Replaces the old Bench Strength gauge metric.",Live - v2,"Heatmap: employees as rows, bench duration buckets as columns (<1wk, 1–2wk, 2–4wk, >4wk); colour intensity = skill demand score; filter by skill set",Built in: PMO | See: Upcoming Roll-offs; Bench (Engineering People & Resource),"1. Per-person profile card: Name
+2. Skills (tagged)
+3. Days on bench
+4. Last project
+5. Last project end date
+6. Potential matching open positions (from pipeline)
+7. DM responsible
+8. Action: initiate redeployment conversation from flyout","Source list: Allocation, All+ Projection, Resource Master. Fields:
+1. Allocation.Status ? On Bench count (Cleaned: Sum where Status = Bench)
+2. All+ Projection.Emp ID ? emp ID (Clean: filter Status = Bench+Buffer for On bench / Billed for Utilized / Billed & Assignment>100% for Over Utilized)
+3. All+ Projection.Resource Name ? emp Name (same filters)
+4. Resource Master.Skills ? Skill (same filters)
+5. All+ Projection.Assignment ? Client Util (Clean)
+6. All+ Projection.Cost Assignment ? Internal Util (Clean)
+7. derived ? days on bench
+8. All+ Projection.Notes ? Notes (Clean).",Green: bench ?5% of workforce AND avg <14d | Amber: 5–10% or avg 14–21d | Red: >10% or avg >21d,"Keka / Resource Mgmt — Keka, Resource Management",Weekly,"Primary: PMO Head | Secondary: HR Head, Finance",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+72,PMO,P1,"Utilization — Offers Rolled (30 / 60 / 90) & Roll off (Utilization ? Offers rolled - 30, Offers rolled - 60, Offers rolled - 90, Roll off)","Forward-looking view of who comes off their current projects in the next 30, 60, and 90 days. Enables PMO to start redeployment before bench happens.",Live - v2,Timeline view: 3 columns (30d/60d/90d); each column lists people rolling off with skill tags; count badge per column,Built in: PMO | See: Bench Heatmap; Resource Projection Gap (Engineering),"1. Per-person roll-off detail: Name
+2. Current Project
+3. Project End Date
+4. Days Until Roll-off
+5. Skills
+6. Utilization % on current project
+7. Open pipeline deals needing these skills
+8. Recommended action: Internal redeployment / New deal pitch / Extension conversation","Source list: not yet mapped in Pulse PMO_Done (all 4 Insight rows exist but Source/Exact column blank). Placeholder fields from original spec: 1. Resource Mgmt ?
+ Employee, 2. ? Project, 3. ? Roll off date, 4. Resource Master.Skills ? Skill, 5. Resource Mgmt ? Reallocation status. Plus Offers Rolled 30/60/90 — counts of offers rolled in those windows.",Informational — no RAG threshold; flag if >20% of workforce rolling off in any 30d window,"Resource Mgmt / CRM — Resource Management, CRM Read",Weekly,"Primary: PMO Head | Secondary: HR Head, DM",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  DEFERRED — PMO (out of scope for current build cycle),,,,,,,,,,,,,,,,,
+73,PMO,P3,Financials — Revenue at Risk (Deferred) (—),Deferred PMO metric: Revenue at Risk.,Deferred,—,Built in: PMO | See: —,No flyout — deferred,— (Deferred KPI; not in Pulse PMO_Done),—,—,—,Primary: PMO Head | Secondary: —,Deferred,Deferred,—,
+?  FINANCE,,,,,,,,,,,,,,,,,
+  ?  Revenue,,,,,,,,"1. finance.html ? Revenue vs Plan card (Live-v1)
+2. Revenue Variance Planned-v2",,,,,,,,,
+74,Finance,P1,"Revenue vs Plan (YTD) (Finance ? Revenue - KPI Cards, Revenue - Graph)",YTD revenue actuals versus plan. Primary financial health indicator for Finance Head and leadership.,Live – v1,Bar chart: YTD actual vs plan with gap annotation; account-level breakdown below,Built in: Finance | See: Revenue Variance MoM; YTD Billing Forecast (PMO),"1. Account-level YTD drill: Account
+2. Invoiced YTD
+3. Plan YTD
+4. Gap
+5. % of Plan
+6. Trend vs prior 2 quarters
+7. Root cause toggle: Delivery shortfall vs Billing delay
+8. DM responsible per account
+9. Portfolio total summary row","Source list: AM-DM Dashboard, Projections. Fields:
+1. AM-DM Dashboard.Actuals ? YTD Revenue
+2. AM-DM Dashboard.Actuals ? MOM
+3. Projections.Projected amount ? Qrtr Forecast
+4. AM-DM Dashboard.Actuals ? Top account
+5. AM-DM Dashboard ? Revenue vs Planned.",Green: actual ?100% of plan | Amber: 95–99% | Red: <95%,ERP / Finance Read,Monthly,"Primary: Finance Head | Secondary: CEO, PMO",Pending Review,Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+75,Finance,P2,Revenue Variance — Month on Month (Finance ? Revenue - Portfolio forecast - Table),Month-by-month revenue variance vs budget. Distinguishes between delivery shortfall and billing delays to identify the correct intervention.,Live - v2,"Variance table: account × month with actual, budget, variance %; RAG per cell; trend line",Built in: Finance | See: Revenue vs Plan YTD; Billing Data Accuracy (PMO),"1. Account-month drill: Invoice details for that period
+2. Delivery milestone status
+3. Billing delay root cause if applicable
+4. Variance classification: Delivery / Billing / Scope / Other
+5. Action owner
+6. Trend: consecutive months in negative variance flagged","Source list: Projections, AM DM Dashboard. Fields:
+1. Projections.Client Name ? Account
+2. Projections ? AM
+3. AM DM Dashboard ? YTD - Plan
+4. Projections ? YTD Var
+5. Projections.Month, Projected Amount ? M+1
+6. Projections.Month, Projected Amount ? M+2
+7. Projections.Month, Projected Amount ? M+3.",Green: variance ?2% | Amber: 2–5% | Red: >5%,"ERP / Finance — ERP, Finance Planning Tool",Monthly,"Primary: Finance Head | Secondary: PMO, CEO",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  Cost,,,,,,,,"1. finance.html ? OpEx Variance card (Live-v1)
+2. others Planned-v2",,,,,,,,,
+76,Finance,P1,Budget vs Actuals — Department Heatmap (Finance ? Department Spent (M / M+1 / M+2)),Cross-dept budget vs actual spend in a heatmap. Enables Finance Head to spot which departments are running over budget at a glance. User requested dept-wise visibility.,Live – v1,Heatmap: dept rows × cost category columns (Headcount/Infra/T&E/Training/Other); RAG per cell; click any cell?drill,Built in: Finance | See: OpEx Variance YTD; Gross Margin Deviation,"1. Department drill: Dept name
+2. Cost category
+3. Approved budget
+4. Actual YTD
+5. Remaining
+6. Projected full-year
+7. Variance %
+8. Budget owner
+9. Unapproved spend flagged red
+10. Export to Finance report","Source list: Projections, Team HC. Fields:
+1. Projections.State, ResourceCost ? Billed Cost
+2. Projections.State, ResourceCost ? Bench Cost
+3. Projections.State, ResourceCost ? Buffer Cost
+4. Projections.State, ResourceCost ? Contractor Cost
+5. Team HC ? All teams.",Green: actual ?100% of budget per cell | Amber: 100–105% | Red: >105%,"ERP / Finance, Budget Tool",Monthly,"Primary: Finance Head | Secondary: CEO, Dept Heads",Pending Review,Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+77,Finance,P1,"OpEx Variance (YTD) (Finance ? Opex By Category, Cost - KPI Cards (OPEX))",YTD operating expenditure vs approved budget. Flags cost lines running over budget before full-year overshoot is unrecoverable.,Live – v1,Variance bar per cost category: Headcount/Infra/T&E/Training/Other; over-budget bars highlighted red,Built in: Finance | See: Budget vs Actuals Heatmap; Gross Margin Deviation,"1. Cost line-item drill: Line item
+2. Approved budget
+3. Actual YTD
+4. Remaining
+5. Projected full-year
+6. Variance %
+7. Owner
+8. Corrective action logged
+9. Sort by variance (highest overage first)","Source list: Expense Master. Fields:
+1. Expense Master ? OPEX
+2. Expense Master ? Opex By Category.",Green: actual ?100% | Amber: 100–105% | Red: >105%,ERP / Finance Read,Monthly,"Primary: Finance Head | Secondary: CEO, Dept Heads",Pending Review,Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+78,Finance,P2,"Gross Margin Deviation (Finance ? Cost - KPI Cards (GM, EBIT, Variances))","Project-level gross margin versus SOW target margin. Persistent negative deviation indicates pricing, scope, or cost management failure.",Live - v2,Margin % per project vs target; waterfall chart showing where margin was lost,Built in: Finance | See: Revenue Variance; OpEx Variance; Billing Data Accuracy (PMO),"1. Project-level P&L drill: Project
+2. Revenue
+3. Direct costs
+4. GM %
+5. SOW target margin
+6. Variance
+7. Top cost drivers
+8. Trend: GM % over last 4 quarters
+9. DM responsible
+10. Action: margin recovery options","Source list: Expense Master, Allocations, Allocations + Expense master, Team HC, Allocations - Formulaized. Fields:
+1. Expense Master ? OPEX
+2. Allocations ? GM
+3. Allocations + Expense master ? EBIT
+4. Team HC ? HC COST
+5. Allocations - Formulaized ? GM Variance
+6. Allocations + Expense master ? EBIT Variance.",Green: actual GM ?SOW target | Amber: 1–3% below | Red: >3% below,"ERP / Finance — ERP, SOW Repository, Resource Management",Monthly,"Primary: Finance Head | Secondary: PMO, CEO",Approved (built in v2.0),Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  AR & Receivables,,,,,,,,finance.html ? AR Ageing + Overdue cards merged (Live-v1),,,,,,,,,
+79,Finance,P1,"AR & Receivables Status (Finance ? AR & Receivables, AR graph, AR details, AR Aging table, Vendor Payments)",Merged metric: AR Ageing Waterfall + Top Overdue Invoices + bad debt exposure lens. Single tile covering the full receivables picture. Overdue list is the drill-down of the ageing waterfall.,Live – v1,Waterfall / stacked bar: receivables by ageing bucket (Current/30d/60d/90d/90d+); overdue invoice list below; bad debt exposure = 90d+ bucket value shown as risk callout,Built in: Finance | See: Revenue vs Plan YTD; Billing Data Accuracy (PMO),"1. Invoice-level table: Account
+2. Invoice Date
+3. Invoice Amount
+4. Days Overdue
+5. PO Status
+6. Chase Log last entry
+7. Escalation flag
+8. Sort by days overdue descending
+9. Bad debt exposure summary: total value in 90d+ with account names
+10. Action buttons: Log chase / Escalate to leadership / Mark dispute","Source list: Customer Fact payments, Projections. Fields:
+1. (source blank in Pulse) ? Vendor Name
+2. (source blank in Pulse) ? Amount
+3. (source blank in Pulse) ? Paid on
+4. (source blank in Pulse) ? Due since
+5. Customer Fact payments.Amount ? Total AR
+6. Customer Fact payments ? 90+
+7. Customer Fact payments ? Collection rate
+8. Projections.Amount ? M+1 Forecast
+9. Customer Fact payments.Amount ? 0, 30, 60 , 90
+10. Customer Fact payments.Account ? Account
+11. Customer Fact payments.Month ? Month
+12. Customer Fact payments ? Invoice
+13. Customer Fact payments.Amount ? Amount
+14. Customer Fact payments.Account ? Account
+15. Customer Fact payments.DM ? Manager
+16. Customer Fact payments.Amount ? AR
+17. Customer Fact payments.Amount ? 30-60-90
+18. Customer Fact payments ? Invoice
+19. Customer Fact payments ? Amount
+20. Customer Fact payments.Payment Terms ? Days
+21. Customer Fact payments.Status ? Status.",Green: ?90% in Current bucket | Amber: >10% in 30–60d | Red: any amount in 90d+ bucket,ERP / Finance Read,Monthly,"Primary: Finance Head | Secondary: PMO, Account Manager",Pending Review,Deferred,—,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+  ?  DEFERRED — Finance (out of scope for current build cycle),,,,,,,,,,,,,,,,,
+80,Finance,P3,Headcount Accuracy & Variance (—),Deferred Finance metric: Headcount Accuracy & Variance.,Deferred,—,Built in: Finance | See: —,No flyout — deferred,Deferred Finance metric — not mapped in Pulse Finance_Done (Pulse covers Overview/Revenue/Cost/AR live tabs only).,—,ERP / Finance — ERP Read,Monthly,Primary: Finance Head | Secondary: —,Deferred,Deferred,—,
+81,Finance,P3,Margin Movement MoM (—),Deferred Finance metric: Margin Movement MoM.,Deferred,—,Built in: Finance | See: —,No flyout — deferred,Deferred Finance metric — not mapped in Pulse Finance_Done (Pulse covers Overview/Revenue/Cost/AR live tabs only).,—,ERP / Finance — ERP Read,Monthly,Primary: Finance Head | Secondary: —,Deferred,Deferred,—,
+82,Finance,P3,Cost Variance (COGS + OpEx) (—),Deferred Finance metric: Cost Variance (COGS + OpEx).,Deferred,—,Built in: Finance | See: —,No flyout — deferred,Deferred Finance metric — not mapped in Pulse Finance_Done (Pulse covers Overview/Revenue/Cost/AR live tabs only).,—,ERP / Finance — ERP Read,Monthly,Primary: Finance Head | Secondary: —,Deferred,Deferred,—,
+83,Finance,P3,Incentive Accuracy Deviation (—),Deferred Finance metric: Incentive Accuracy Deviation.,Deferred,—,Built in: Finance | See: —,No flyout — deferred,Deferred Finance metric — not mapped in Pulse Finance_Done (Pulse covers Overview/Revenue/Cost/AR live tabs only).,—,ERP / Finance — ERP Read,Monthly,Primary: Finance Head | Secondary: —,Deferred,Deferred,—,
+84,Finance,P3,Vendor Payment SLA Breach (—),Deferred Finance metric: Vendor Payment SLA Breach.,Deferred,—,Built in: Finance | See: —,No flyout — deferred,Deferred Finance metric — not mapped in Pulse Finance_Done (Pulse covers Overview/Revenue/Cost/AR live tabs only).,—,ERP / Finance — ERP Read,Monthly,Primary: Finance Head | Secondary: —,Deferred,Deferred,—,
+85,Finance,P3,Revenue per Employee (—),Deferred Finance metric: Revenue per Employee.,Deferred,—,Built in: Finance | See: —,No flyout — deferred,Deferred Finance metric — not mapped in Pulse Finance_Done (Pulse covers Overview/Revenue/Cost/AR live tabs only).,—,ERP / Finance — ERP Read,Monthly,Primary: Finance Head | Secondary: —,Deferred,Deferred,—,
+86,Finance,P3,Cost per Employee (—),Deferred Finance metric: Cost per Employee.,Deferred,—,Built in: Finance | See: —,No flyout — deferred,Deferred Finance metric — not mapped in Pulse Finance_Done (Pulse covers Overview/Revenue/Cost/AR live tabs only).,—,ERP / Finance — ERP Read,Monthly,Primary: Finance Head | Secondary: —,Deferred,Deferred,—,
+,,,,,,,,,,,,,,,,,
+?  ACCOUNT MANAGEMENT,,,,,,,,,,,,,,,,,
+  ?  Account Management Dashboard,,,,,,,,account-management.html,,,,,,,,,
+AM-1,Account Management,P1,"Top Card — YTD Revenue & P-360 Score (AM-DM Dashboard ? Top Card ? YTD Revenue, P-360 Score)",Rollup of AM portfolio health on Org Pulse home. Entry point to account-management.html.,Live – v2,Dept card: RAG badge + 3 KPI strip (Open Escalations / Mining Active / Portfolio value). Click ? account-management.html,,"Click card ? Overview tab with AM cards, Mining swimlane, Escalations table. Source: account-management.html.","Source list: AM-DM Dashboard, Engineering. Fields:
+1. AM-DM Dashboard.Actuals ? YTD Revenue (Cleaned: Sum of actuals)
+2. Engineering ? P-360 Score (Cleaned).",Amber: any open esc | Red: overdue esc,,Daily,Primary: Leadership,Pending Review,org-pulse.html ? Account Mgmt dept card,2,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+AM-2,Account Management,P1,Overview — KPI Card (AM-DM Dashboard ? Overview ? KPI Card),"One-glance per-AM view showing account count, pipeline, mining, escalation, P360, and billing.",Live – v2,Horizontal AM card: avatar + name + BU + accounts. Pill badges: Mining RAG / Esc RAG / P360 avg / Portfolio $. Click to filter.,,Click card ? filters Mining + Escalations sections below to selected AM. Click again to clear.,"Source list: AM-DM Dashboard, Engineering. Fields:
+1. AM-DM Dashboard.AM ? AM name (Raw)
+2. AM-DM Dashboard.Client ? Account count (Raw)
+3. AM-DM Dashboard.Actuals ? YTD Revenue (Raw: Sum of actuals)
+4. Engineering ? P-360 avg (Cleaned: filtered on account_manager name).","Green: 0 esc, P360>8 | Amber: 1 esc or P360 6–8 | Red: >1 esc or P360<6",,Daily,"Primary: Account Manager, Leadership",Pending Review,account-management.html ? Overview,2,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+AM-3,Account Management,P1,"Mining Threads — Cards & Details (Account Mining Update ? Mining Threads ? Cards, Details)",Visual swimlane of all mining opportunities by status — On Track / At Risk / Late.,Live – v2,"Three-column swimlane: On Track (green) / At Risk (amber) / Late (red). Each card shows deal name, value, due date, AM.",,Click row ? mining thread flyout: current deliverable / history / next action / add action item.,"Source list: Account Mining Update (SP List: https://mynalashaa.sharepoint.com/sites/ResourceManagement/Lists/Account%20Mining%20Update/AllItems.aspx). Fields:
+1. Account Mining Update.Account ? Client name (Raw)
+2. Account Mining Update.Anticipated Value ? Anticipated value (Raw)
+3. Account Mining Update.Due date ? Due date (Raw)
+4. Account Mining Update.Owner ? Owner (Raw)
+5. Account Mining Update.Current activities ? Current activities (Raw)
+6. Account Mining Update.Vlookup last date done activities ? History activities (Cleaned: Vlookup past due-date activities)
+7. Account Mining Update.Action item ? Action Item (Raw)
+8. Account Mining Update.Due date ? Due date (Raw)
+9. Account Mining Update.Owner ? Owner (Raw).",Green: due_date>today | Amber: due_date within 7d | Red: overdue,,Weekly,"Primary: Account Manager, Leadership",Pending Review,account-management.html ? Overview,2,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+AM-4,Account Management,P1,Account Escalation — Table (Account Risk Register ? Account Escalation ? Table),AM-owned escalation register. AMs are primary owners; DMs derive escalation context from here.,Live – v2,Table: Account | Escalation | AM | Next Action | Resolution Date | Status badge.,,"Click row ? escalation flyout: severity/age/owner header, last update card, next action card, timeline, + Add Action Item form.","Source list: Account Risk Register (currently Excel; can create an online escalation tracker SP List). Fields:
+1. Account Risk Register.Account ? Account (Raw)
+2. Account Risk Register.Escalation ? Escalation (Raw)
+3. Account Risk Register.AM ? AM (Raw)
+4. Account Risk Register.Due date ? Due date (Raw)
+5. Account Risk Register.Status ? Status (Raw).",Red: Overdue | Amber: In Progress | Green: Monitoring/Closed,,Daily,"Primary: Account Manager, Leadership",Pending Review,account-management.html ? Overview,2,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+AM-5,Account Management,P1,Account Escalation — Details (Account Risk Register ? Account Escalation ? Details),Horizontal billing bars per account with AM persona filter and M+1/2/3 forward outlook.,Live – v2,Horizontal bar per account: actual billed vs plan (RAG-coloured fill). M+1/M+2/M+3 cells colour-coded. AM persona filter buttons (All/AM names).,,Click account bar ? billing flyout: monthly chart + invoice table + gap action owner.,"Source list: Account Risk Register. Fields:
+1. Account Risk Register.Action item ? Next action item (Raw)
+2. Account Risk Register.Anticipated Risk ? Revenue risk (Raw).",Green: ?100% plan | Amber: 85–99% | Red: <85%,,Monthly,"Primary: Account Manager, Finance Head, Leadership",Pending Review,account-management.html ? Financials,2,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+,,,,,,,,,,,,,,,,,
+?  SOLUTIONS (BA UNIT),,,,,,,,,,,,,,,,,
+  ?  Solutions Dashboard,,,,,,,,solutions.html / solutions-detail.html,,,,,,,,,
+SOL-1,Solutions,P1,Solutions Summary Card (Solutions ? Main KPI Cards),Rollup of BA unit artefact health on Org Pulse home. Entry point to solutions.html.,Live – v2,Dept card: RAG badge + 3 KPI strip (BRD Coverage % / Sprint Churn / Presales Covered). Click ? solutions.html,,Click card ? BA overview with unit ribbon + BA card list.,"Source list: SP - Allocations, SP, AP - AM DM Dashboard. Fields:
+1. SP - Allocations.Project name ? Projects
+2. SP.Folder - BRD , FSD Present ? Coverage
+3. (source blank in Pulse).Need More Info ? Churn
+4. AP - AM DM Dashboard.Actuals ? YTD.","Green: BRD?90%, churn<5 | Amber: BRD 75–90%, churn 5–10 | Red: BRD<75% or churn>10",,Daily,"Primary: Leadership, Solutions Head",Pending Review,org-pulse.html ? Solutions dept card,2,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+SOL-2,Solutions,P1,"BA Cards — Unit Overview (Solutions ? YTD BILLING, Unit Utilization)","Per-BA card showing artefact coverage, quality, and billing at a glance.",Live – v2,"BA card: name + unit + RAG. Ribbon tiles: BRD/FSD/Story coverage %, churn, AC gaps, version count, kick-off days, YTD billing.",,Click card ? solutions-detail.html for that BA (Artifact Health tab default).,"Source list: AM-DM Dashboard, Allocation Projection. Fields:
+1. AM-DM Dashboard.Months ? Months
+2. AM-DM Dashboard.Actuals Sum ? Revenue
+3. Allocation Projection.Months ? Months
+4. Allocation Projection.Cost Assignmet ? Overall  Team Utilization
+5. Allocation Projection.Assignment ? Overall Client Utilization.",Per-BA composite RAG from worst tile,,Daily,"Primary: Solutions Head, Leadership",Pending Review,solutions.html,2,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+SOL-3,Solutions,P1,Artifact Health — Project Tiles (Solutions ? Respective BA KPI Card),"Per-project artefact health tiles showing document presence, story count, and alert flags.",Live – v2,4-column tile grid. Compact card: name+account (left) / stories+BRD+FSD+No-AC (right). Alert tags below. Footer: score + sprint + status.,,"Click tile ? flyout: sprint view (current/past/next sprints), sign-off status, doc age, insights.","Source list: SP - Engineering, JIRA, JIRA - Active Aprint, JIRA Backlog. Fields:
+1. SP - Engineering.BRD present -> X Date - Refer utilization and go to all project folders ? BRD Coverage
+2. SP - Engineering.FSD Present -> X Date - Refer utilization and go to all project folders ? FSD Coverage
+3. JIRA.Story Points - Task type - Refer utilization and go to all project folders ? User stories
+4. (source blank in Pulse).Not sure how we can compute this ? Template Adoption
+5. JIRA - Active Aprint.Current sprint user stories and details - Refer utilization and go to all project folders ? Current and Next sprints
+6. JIRA Backlog.No of User stories in Todo -Refer utilization and go to all project folders ? (field blank).","Green: all docs present, no AC gaps | Amber: FSD draft or AC gaps | Red: missing BRD or FSD",,Per sprint,"Primary: Solutions Head, BA",Pending Review,solutions-detail.html ? Artifact Health tab,2,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+SOL-4,Solutions,P1,Requirements Quality — Project Cards (Solutions ? Main KPI Cards (Churn)),"Per-project requirements quality showing churn, AC gaps, and FSD version count.",Live – v2,Compact req card: name+account (left) / churn count + No-AC count | version (right). RAG border.,,"Click card ? flyout: epic-level story table, churn root cause, 6-sprint sparkline, + add action item.","Source list: partial — Pulse marks Churn as 'Need More Info' and Template Adoption as 'Not sure how we can compute this'. Fields:
+1. SP.Folder (BRD, FSD Present) ? Coverage
+2. (Churn, source blank) ? 'Need More Info' (unresolved in Pulse)
+3. (Template Adoption, source blank) ? 'Not sure how we can compute this' (unresolved in Pulse).","Green: 0 churn, 0 AC gaps | Amber: churn 1–2 or AC gaps 1–3 | Red: churn>2 or AC gaps>3",,Per sprint,"Primary: Solutions Head, BA",Pending Review,solutions-detail.html ? Requirements Quality tab,2,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+SOL-5,Solutions,P2,Capacity & Presales (Solutions ? Unit Utilization),BA utilization and active presales pursuit visibility.,Planned – v2,"BA utilization summary + presales pursuit cards (deal name, account, value, stage, days since last meeting).",,Click presales card ? flyout: activity log + last call notes.,"Source list: Allocation Projection. Fields:
+1. Allocation Projection.Months ? Months
+2. Allocation Projection.Cost Assignmet ? Overall  Team Utilization
+3. Allocation Projection.Assignment ? Overall Client Utilization. Note: Presales pursuit fields not present in Pulse Solutions_Done.",Amber: presales uncovered or days_since_last_meeting > 7,,Weekly,"Primary: Solutions Head, Account Manager",Pending Review,solutions-detail.html ? Capacity & Presales tab,2,"? Source fields documented (Col J) but no computation formula specified. Please define the calculation equation — e.g. how to derive this metric from the mapped fields. Without this, the backend aggregation cannot be built."
+,,,,,,,,,,,,,,,,,
+?  SALES — INSIDE SALES TAB (ADDITIONS),,,,,,,,,,,,,,,,,
+  ?  Inside Sales — Tab 1,,,,,,,,sales.html ? Inside Sales tab,,,,,,,,,
+IS-1,Sales,P1,Calls This Week (sales.html ? Inside Sales),Total outbound calls across all BDEs for the current week. WoW % change trend arrow.,Live – v2,KPI tile: value + WoW % arrow + BDE count sub-label.,,Click tile ? drill flyout: per-BDE call count table sorted descending.,"CRM/Dialler ?
+ calls[bde, date, count]",Green: ?target | Amber: 80–99% of target | Red: <80%,,Weekly,Primary: Sales Head,Pending Review,sales.html ? Inside Sales,2,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.
+IS-2,Sales,P1,Contact Rate (sales.html ? Inside Sales),% of outbound calls that result in an interaction (conversation with decision-maker).,Live – v2,KPI tile: % value + source label.,,Click tile ? flyout: per-BDE contact rate table.,"CRM/Dialler ?
+ interactions / calls",Green: ?30% | Amber: 20–29% | Red: <20%,,Weekly,Primary: Sales Head,Pending Review,sales.html ? Inside Sales,2,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.
+IS-3,Sales,P1,Conversion Rate (sales.html ? Inside Sales),% of interactions that convert to a scheduled meeting.,Live – v2,KPI tile: % value.,,Click tile ? flyout: per-BDE conversion table.,"CRM ?
+ meetings_scheduled / interactions",Green: ?35% | Amber: 25–34% | Red: <25%,,Weekly,Primary: Sales Head,Pending Review,sales.html ? Inside Sales,2,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.
+IS-4,Sales,P1,Meetings Scheduled (sales.html ? Inside Sales),Count of meetings scheduled this week across all BDEs vs weekly target.,Live – v2,KPI tile: count + vs-target sub-label.,,"Click tile ? flyout: meeting list with account, rep, date, outcome.","CRM ?
+ meetings[bde, date, account, status]",Green: ?target | Amber: 80–99% | Red: <80%,,Weekly,Primary: Sales Head,Pending Review,sales.html ? Inside Sales,2,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.
+IS-5,Sales,P1,Opp Worthy Rate (sales.html ? Inside Sales),% of held meetings qualifying as sales opportunities (last 30 days).,Live – v2,KPI tile: % value + last-30d label.,,Click tile ? flyout: meeting-to-opp conversion list.,"CRM ?
+ opp_created / meetings_held (last 30d)",Green: ?30% | Amber: 20–29% | Red: <20%,,Monthly,Primary: Sales Head,Pending Review,sales.html ? Inside Sales,2,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.
+IS-6,Sales,P1,BDE Performance Chart (sales.html ? Inside Sales),Overlapping horizontal bar per BDE: calls / interactions / meetings / opp-worthy in descending call-volume order.,Live – v2,Overlapping horizontal bar chart. Click any BDE bar to open rep flyout.,,Rep flyout: WoW history table + call quality score + opp conversion trend.,"CRM/Dialler ?
+ per_bde[calls, interactions, meetings, opp_worthy] for current week",Bar width scaled to max calls in team,,Weekly,Primary: Sales Head,Pending Review,sales.html ? Inside Sales,2,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.
+IS-7,Sales,P1,Week-on-Week Trend (sales.html ? Inside Sales),"Dual-axis chart showing 4-week rolling trend: calls (bar, left axis) + meetings scheduled (line, right axis) + opp-worthy count (secondary bar).",Live – v2,Dual-axis combo chart. 4 weeks history.,,No separate flyout — chart is interactive (hover tooltips per week).,"CRM/Dialler ?
+ weekly_totals[calls, meetings, opp_worthy] last 4 weeks",Trend indicators only — no RAG threshold,,Weekly,Primary: Sales Head,Pending Review,sales.html ? Inside Sales,2,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.
+IS-8,Sales,P1,Meeting Outcome Distribution (sales.html ? Inside Sales),100% stacked bar chart by month showing outcome breakdown: Held / No-show / Rescheduled / Closed-Won Next Steps.,Live – v2,100% stacked bar. BDE chip filter above chart. 6 months history.,,No flyout — chart is filterable by BDE via chip selector.,"CRM ?
+ meetings[month, outcome, bde]",Target: Held ?70% of scheduled,,Monthly,Primary: Sales Head,Pending Review,sales.html ? Inside Sales,2,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.
+IS-9,Sales,P1,Proposals Awaited (sales.html ? Inside Sales),Opportunities in Proposal or Negotiation stage where commercial action is pending — CRM action required view.,Live – v2,Table: Account | Opportunity | Rep | Stage | Value | Proposal Status | Awaited (days) | Action Required. Sorted by Awaited descending.,,"Click row ? deal detail flyout: full opportunity history, activity log, contact list, next step.","CRM ?
+ opportunities[account, name, rep, stage, value, proposal_status, last_action_date]",Red: Awaited >30d or Proposal Status = Not Sent | Amber: Awaited 14–30d | Green: <14d,,Daily,"Primary: Sales Head, Account Manager",Pending Review,sales.html ? Inside Sales,2,? Source mapping not yet provided for Sales. Awaiting team's Pulse_Data Mapping update for this department.

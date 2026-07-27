@@ -299,7 +299,17 @@ describe('E2E: GET /api/runs/:runId', () => {
 // 6. Credentials CRUD
 // ═══════════════════════════════════════════════════════
 
+// Every credential this block creates is recorded here and deleted in afterAll. Without it
+// each `npm test` left 3 rows behind in the shared dev database — 117 of them had piled up.
+const throwawayCredIds: string[] = [];
+
 describe('E2E: POST /api/credentials — create', () => {
+  afterAll(async () => {
+    for (const id of throwawayCredIds) {
+      await api(`/api/credentials/${id}`, { method: 'DELETE' });
+    }
+  });
+
   it('stores an encrypted credential', async () => {
     const res = await api('/api/credentials', {
       method: 'POST',
@@ -339,6 +349,7 @@ describe('E2E: POST /api/credentials — create', () => {
     });
     expect(res.status).toBe(200);
     expect(res.data.success).toBe(true);
+    throwawayCredIds.push(res.data.data.credId);
   });
 
   it('rejects credential with empty systemName', async () => {
@@ -367,6 +378,7 @@ describe('E2E: POST /api/credentials — create', () => {
     // The untrusted body orgId is ignored; creation succeeds under the actor's org.
     expect(res.status).toBe(200);
     expect(res.data.success).toBe(true);
+    throwawayCredIds.push(res.data.data.credId);
   });
 });
 
@@ -913,13 +925,20 @@ describe('E2E: Cleanup test data', () => {
     expect(res.status).toBe(404);
   });
 
-  // Clean up test credential
-  it('deletes the test credential via a fresh integration cleanup', async () => {
+  // Clean up test credential. This used to only assert the credential still existed and then
+  // deliberately leak it ("no DELETE endpoint for credentials"). There is one now, so actually
+  // remove it — otherwise every run added another row to the shared dev vault.
+  it('deletes the test credential', async () => {
     if (!createdCredentialId) return;
-    // Direct credential cleanup — the credential we created isn't tied to the deleted integration
-    // Just verify it still exists, then leave it (no DELETE endpoint for credentials)
-    const res = await api(`/api/credentials/${createdCredentialId}/decrypt`);
-    expect(res.ok).toBe(true);
+    const before = await api(`/api/credentials/${createdCredentialId}/decrypt`);
+    expect(before.ok).toBe(true);
+
+    const del = await api(`/api/credentials/${createdCredentialId}`, { method: 'DELETE' });
+    expect(del.ok).toBe(true);
+    expect(del.data.success).toBe(true);
+
+    const after = await api(`/api/credentials/${createdCredentialId}/decrypt`);
+    expect(after.status).toBe(404);
   });
 });
 

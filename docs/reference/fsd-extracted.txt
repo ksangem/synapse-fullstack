@@ -1,0 +1,952 @@
+
+SYNAPSE INTEGRATION PLATFORM
+Functional Specification Document
+Module 1: Connector Studio
+
+Version 1.0  |  June 2026  |  Nalashaa Digital
+Prepared for: Synapse Engineering Team
+Status: DRAFT — Pending Architect Review
+
+1. Document Control
+Field
+Details
+Document Title
+FSD — Connector Studio Module
+Module
+Connector Studio (T-15 in Project Plan)
+Version
+1.0 DRAFT
+Date
+June 2026
+Author
+Synapse Product Team / AI-assisted
+Reviewers
+Kiran Suvarna, Ananthu (Dev A), Rag (Dev B)
+Status
+Draft — Awaiting architect sign-off before sprint start
+Parent Documents
+Synapse BRD v1.0, Developer Guide v2.4.1, Project Plan v4
+
+1.1 Change Log
+Version
+Date
+Author
+Change
+1.0
+Jun 2026
+Product Team
+Initial draft from BRD §7.1 + docx inputs
+
+2. Module Overview
+2.1 Purpose
+Connector Studio is the design-time workspace where a Designer onboards a new external system into the Synapse platform. It is a one-time activity per system type. Once a connector template is published, Operators can create unlimited integration instances without Designer involvement.
+
+The current implementation (StudioPage.jsx) renders the UI shell with all action buttons disabled (line 86). This FSD defines the full functional behaviour required to make the module production-ready.
+
+2.2 Personas
+Persona
+Role
+Primary Actions in Studio
+Designer
+Integration Engineer / Developer
+Create, configure, test, publish connector templates
+Administrator
+IT Admin / Platform Owner
+View published connectors, manage versions, deprecate
+Operator
+Business Analyst / Team Lead
+Read-only: browse published connectors in Registry only
+
+2.3 Sub-flows
+System Registration — Select category, name the connector, provide base config
+Authentication Configuration — Define auth method and credential schema
+Operation Selection — Choose/discover available operations (read/write/both)
+Entity Modelling — Group raw fields into labelled entities, link to Master Catalog
+Test &amp; Validate — Run live test call with sample credentials
+Publish &amp; Version — Clone-on-publish, immutable past versions
+
+3. System Categories
+The Studio must support all categories below. Categories marked ★ Missing are not in the current BRD/docx scope and are recommended additions for completeness.
+
+#
+Category
+Trigger for Use
+BRD/Plan Status
+1
+REST API
+Any system with an HTTP/JSON API (Jira, Dynamics 365, Keka, TARA, Ahrefs, GSC, Google Ads)
+Defined in BRD
+2
+Database
+Direct DB access — Postgres, MySQL, MSSQL, Oracle, SQLite
+Defined in BRD
+3
+File Share / Storage
+SharePoint files, SFTP, S3, local filesystem, Google Drive
+Defined in BRD
+4
+SaaS Application
+Pre-built connectors for specific SaaS platforms with proprietary APIs (Salesforce, HubSpot, Keka HR, etc.)
+Defined in BRD
+5
+Message Queue / Event Bus
+Kafka, RabbitMQ, Azure Service Bus, AWS SQS/SNS, Redis Pub/Sub
+Defined in BRD
+6
+Webhook / Event Receiver
+Incoming webhooks — system pushes data to Synapse endpoint
+Defined in BRD
+7
+Web Scraping
+Apify cloud actors or Playwright self-hosted — fallback when no API exists
+Defined in BRD §7.12
+8 ★
+GraphQL API
+Systems exposing GraphQL schema (GitHub API v4, Shopify, Contentful)
+MISSING — add to BRD
+9 ★
+SOAP / XML Web Service
+Legacy enterprise systems (SAP, older Dynamics AX, TFS SOAP)
+MISSING — add to BRD
+10 ★
+Email / IMAP / SMTP
+Ingest data from email (Outlook, Gmail) as a source connector
+MISSING — add to BRD
+11 ★
+FTP / SFTP / SCP
+File-based data exchange with legacy systems
+MISSING — should be sub-type of File Share
+12 ★
+ERP / Flat File (CSV / XLSX / JSON)
+Batch file ingestion — Excel uploads, CSV exports from ERP
+Partially in BRD (Excel source) — needs Studio treatment
+
+4. Authentication Configuration per Category
+The authentication sub-form renders dynamically based on the selected system category and auth method. The table below defines all supported auth methods per category.
+
+Category
+Supported Auth Methods
+Credential Fields Required
+REST API
+API Key, Bearer Token, Basic Auth, OAuth 2.0 (Auth Code / Client Credentials), No Auth
+baseUrl, apiKey / token / clientId + clientSecret + scopes + tokenUrl
+Database
+Username + Password + Host, Connection String, IAM (AWS RDS), Azure AD (Managed Identity)
+host, port, database, username, password, ssl (toggle), connectionString (override)
+File Share / Storage
+SharePoint (OAuth2 Client Credentials), AWS S3 (Access Key + Secret), SFTP (user + key/password), Google Drive (service account JSON)
+Per provider: tenantId + clientId + clientSecret, or accessKeyId + secretAccessKey + region, or host + port + username + privateKey
+SaaS Application
+OAuth 2.0 (PKCE or Client Credentials), API Key, Basic Auth — varies per SaaS
+SaaS-specific; dynamically rendered from connector template definition
+Message Queue
+SASL/SCRAM (Kafka), AMQP credentials (RabbitMQ), Connection String (Azure SB), Access Key (SQS)
+brokerUrl / connectionString, username, password, topicName / queueName
+Webhook
+HMAC Signature Verification, Bearer Token Validation, No Auth (open endpoint)
+webhookSecret, signingAlgorithm (sha256/sha512), headerName
+Web Scraping
+Apify API Token, No Auth (Playwright self-hosted)
+apifyToken, targetUrl, selectorConfig (JSON)
+GraphQL ★
+Bearer Token, API Key, OAuth 2.0
+endpointUrl, token/apiKey, headers (custom)
+SOAP ★
+WS-Security (UsernameToken), Basic Auth, Client Certificate
+wsdlUrl, username, password, clientCert (PEM)
+Email ★
+OAuth 2.0 (Gmail / Outlook), IMAP + App Password
+host, port, username, password/token, mailbox, filter
+
+5. Connector Configuration Fields per Category
+Every connector type has a base set of registration fields (Section 5.1) and a category-specific set that renders dynamically (Sections 5.2–5.12). All fields are stored in app.connectors and versioned via connector_versions.
+
+5.1 Universal Base Fields (All Categories)
+Field
+Type
+Required
+Description
+Connector Name
+Text
+Yes
+Human-readable name shown in Registry (e.g. &apos;Jira Cloud - ACME Corp&apos;)
+System Category
+Dropdown
+Yes
+REST API / Database / File Share / SaaS / Message Queue / Webhook / Web Scraping / GraphQL / SOAP / Email
+Direction
+Radio
+Yes
+Source only / Destination only / Bidirectional
+Description
+Textarea
+No
+Internal note for Designers explaining purpose and data shape
+Icon / Logo
+Image upload
+No
+PNG/SVG ≤100KB; shown in Registry cards
+Tags
+Multi-select chip
+No
+Free-text tags for filtering (department, system, team)
+Version Label
+Text (auto)
+Auto
+Semantic version auto-incremented on publish (1.0.0, 1.0.1, etc.)
+Visibility
+Toggle
+Yes
+Public (all Operators) / Restricted (named roles or teams only)
+
+5.2 REST API
+Field
+Type
+Required
+Notes
+Base URL
+URL input
+Yes
+e.g. https://api.example.com/v2 — validated on input
+OpenAPI / Swagger Spec
+File upload or URL
+One of
+Accepts OAS 3.0 (JSON/YAML). Auto-discovers operations on upload.
+Manual Endpoint Entry
+Repeatable form
+One of
+Fallback if no spec available — method, path, description, params
+Default Headers
+Key-value pairs
+No
+Static headers sent on every request (e.g. X-App-ID)
+Rate Limit (req/min)
+Number
+No
+Throttle outgoing requests; enforced by BullMQ worker
+Timeout (ms)
+Number
+No
+Default 10000; per-operation override available
+Pagination Style
+Dropdown
+No
+None / Offset-Limit / Cursor / Page-Number / Link Header
+SSL / TLS Verify
+Toggle
+Yes
+Default ON; disable only for self-signed internal APIs
+Proxy URL
+URL input
+No
+Route requests through corporate proxy if required
+
+5.3 Database
+Field
+Type
+Required
+Notes
+Engine
+Dropdown
+Yes
+PostgreSQL / MySQL / SQL Server / Oracle / SQLite / MongoDB
+Host
+Text
+Yes
+Hostname or IP; validated on Test Connection
+Port
+Number
+Yes
+Auto-populated per engine (PG=5432, MySQL=3306, MSSQL=1433, etc.)
+Database Name
+Text
+Yes
+Target database / schema name
+Username
+Text
+Yes
+DB user with appropriate READ/WRITE grants
+Password
+Password
+Yes
+Stored via Credential Vault (AES-256-GCM); never echoed
+Connection String (override)
+Text
+No
+Full JDBC/ADO.NET string; overrides individual fields when provided
+SSL Mode
+Dropdown
+No
+Disable / Require / Verify-CA / Verify-Full
+Schema Filter
+Text / Multi-select
+No
+Restrict introspection to specific schemas (default: public)
+Table Whitelist
+Multi-select (post-connect)
+No
+Only expose selected tables to Operators
+Read-only Mode
+Toggle
+No
+Prevents any INSERT/UPDATE/DELETE operations; enforced at query layer
+Connection Pool Size
+Number
+No
+Default 5; max 20
+
+5.4 File Share / Storage
+Field
+Type
+Required
+Notes
+Storage Provider
+Dropdown
+Yes
+SharePoint / AWS S3 / Azure Blob / Google Drive / SFTP / Local FS
+SharePoint: Site URL
+URL
+If SP
+e.g. https://tenant.sharepoint.com/sites/MySite
+SharePoint: Library / List Name
+Text
+If SP
+Document library or list name
+S3: Bucket Name
+Text
+If S3
+AWS S3 bucket name
+S3: Region
+Dropdown
+If S3
+AWS region (us-east-1, eu-west-1, etc.)
+S3: Key Prefix (path filter)
+Text
+No
+Only process objects under this prefix
+SFTP: Host + Port
+Text + Number
+If SFTP
+Hostname and port (default 22)
+SFTP: Remote Path
+Text
+If SFTP
+Starting directory for file discovery
+Supported File Types
+Multi-select
+No
+CSV, XLSX, JSON, XML, Parquet — filter by extension
+Encoding
+Dropdown
+No
+UTF-8 / UTF-16 / ISO-8859-1 — for text file parsing
+Header Row (CSV/XLSX)
+Toggle + Row #
+No
+Treat first N rows as header; maps to entity fields
+Polling Interval (minutes)
+Number
+No
+How often to check for new/modified files; default 60
+Archive on Ingest
+Toggle + Path
+No
+Move processed files to archive folder after successful ingest
+
+5.5 SaaS Application
+Field
+Type
+Required
+Notes
+SaaS Platform
+Dropdown / Search
+Yes
+Select from pre-built catalog: Jira, Salesforce, HubSpot, Keka, Dynamics 365, TARA, Ahrefs, GSC, Google Ads, TFS/Azure DevOps, Holiday Tracker, etc.
+Instance / Tenant URL
+URL
+Varies
+Required for multi-tenant SaaS (e.g. Jira: https://company.atlassian.net)
+Auth Method
+Auto-populated
+Yes
+Driven by selected SaaS platform — Designers cannot override
+Scopes / Permissions
+Multi-select
+Yes
+Required OAuth scopes; shown as friendly labels with explanations
+API Version
+Dropdown
+No
+Pin to a specific API version; default = latest stable
+Custom Fields Mapping
+Key-value
+No
+Map SaaS-specific custom field IDs to canonical entity field names
+Webhook Registration
+Toggle
+No
+Register Synapse endpoint as webhook listener in the SaaS platform
+Data Residency Region
+Dropdown
+No
+For GDPR-sensitive SaaS — pin data to EU/US/APAC region
+
+5.6 Message Queue / Event Bus
+Field
+Type
+Required
+Notes
+Queue Technology
+Dropdown
+Yes
+Kafka / RabbitMQ / Azure Service Bus / AWS SQS / AWS SNS / Redis Pub-Sub
+Broker / Connection URL
+Text
+Yes
+Broker URL (Kafka: broker:9092) or full connection string
+Topic / Queue / Exchange Name
+Text
+Yes
+Source or destination topic/queue name
+Consumer Group ID
+Text
+If Kafka
+Consumer group for offset tracking
+Message Format
+Dropdown
+Yes
+JSON / Avro / Protobuf / Plain Text / XML
+Schema Registry URL
+URL
+If Avro/Proto
+Confluent Schema Registry or equivalent
+Dead Letter Queue
+Text
+No
+DLQ topic/queue name for failed messages; enables auto-retry
+Max Retry Attempts
+Number
+No
+Default 5; 0 = no retry
+Offset Reset Policy
+Dropdown
+If Kafka
+earliest / latest / none
+Batch Size
+Number
+No
+Messages consumed per poll cycle; default 100
+TLS / SSL
+Toggle + Cert upload
+No
+Enable TLS with optional client certificate
+
+5.7 Webhook / Event Receiver
+Field
+Type
+Required
+Notes
+Auto-generated Endpoint URL
+Read-only text + copy
+Auto
+Synapse assigns a unique URL: /api/webhooks/{connectorId}/{token}
+Signing Secret
+Auto-generated or manual
+Yes
+HMAC signing secret; shown once on creation, stored in vault
+Signature Header Name
+Text
+No
+Default: X-Hub-Signature-256; configurable for Stripe/GitHub variants
+Signature Algorithm
+Dropdown
+Yes
+SHA-256 / SHA-512
+Payload Format
+Dropdown
+Yes
+JSON / XML / Form-urlencoded
+IP Allowlist
+CIDR list
+No
+Restrict webhook delivery to known sender IPs
+Retry / Replay
+Toggle + Window
+No
+Buffer webhook payloads for replay; retention window (hours)
+Event Type Filter
+Key-value pattern
+No
+Only process events matching type field (e.g. event.type = &apos;issue.created&apos;)
+Response Code
+Number
+No
+HTTP status to return to sender; default 200
+
+5.8 Web Scraping
+Field
+Type
+Required
+Notes
+Scraping Engine
+Radio
+Yes
+Apify Cloud / Playwright Self-hosted / Both (fallback chain)
+Target URL(s)
+Textarea (one per line)
+Yes
+Entry point URL(s) for the scrape
+Apify Actor ID
+Text
+If Apify
+Apify actor ID or name (e.g. apify/web-scraper)
+Apify Actor Input (JSON)
+Code editor (JSON)
+If Apify
+Actor input configuration; validated as JSON on save
+CSS / XPath Selectors
+Repeatable form
+If Playwright
+Field name → CSS/XPath selector pairs to extract
+Playwright Script (advanced)
+Code editor (JS)
+No
+Custom Playwright script for complex interaction flows
+User Agent
+Text
+No
+Override default UA string; default rotates from common browsers
+Request Delay (ms)
+Number
+No
+Inter-request delay for anti-detection; default 1000
+Max Pages
+Number
+No
+Crawl depth limit; default 1 (single page)
+Screenshot on Failure
+Toggle
+Yes
+Default ON — stores failure screenshot for diff alerting
+Schedule
+Cron expression
+No
+Independent scrape schedule; integrates with BullMQ scheduler
+Output Schema
+Auto-inferred / Manual
+Yes
+Field names and types of the extracted data — becomes entity definition
+
+5.9 GraphQL API ★ (Recommended Addition)
+GraphQL is used by GitHub API v4, Shopify, Contentful, Hasura, and many modern SaaS platforms. A dedicated category avoids trying to model introspection queries as REST operations.
+
+Field
+Type
+Required
+Notes
+GraphQL Endpoint URL
+URL
+Yes
+e.g. https://api.github.com/graphql
+Introspection
+Toggle + Button
+Yes
+Auto-discover schema via introspection query; generates operation list
+Queries / Mutations
+Multi-select (post-introspect)
+Yes
+Pick which operations to expose; tag as Read/Write
+Variables Template (JSON)
+Code editor
+No
+Default variables injected into every query; supports placeholders
+Persisted Queries
+Toggle
+No
+Use APQ (Automatic Persisted Queries) to reduce payload size
+Custom Headers
+Key-value
+No
+Static headers appended to every request
+
+5.10 SOAP / XML Web Service ★
+Required for legacy SAP, TFS SOAP endpoints, and older Dynamics AX integrations referenced in the BRD roadmap.
+
+Field
+Type
+Required
+Notes
+WSDL URL or Upload
+URL / File upload
+Yes
+Parses WSDL to discover operations and message schemas
+Service / Port
+Dropdown (post-parse)
+Yes
+Select from discovered services in the WSDL
+Operations
+Multi-select (post-parse)
+Yes
+Exposed operations; tagged Read/Write/Both
+SOAP Version
+Radio
+Yes
+SOAP 1.1 / SOAP 1.2
+Custom Namespace Prefix
+Key-value
+No
+Override namespace prefix aliases for cleaner field names
+WS-Security Header
+Toggle + sub-form
+No
+UsernameToken (plain/digest) or Timestamp token
+
+5.11 Email / IMAP ★
+Field
+Type
+Required
+Notes
+Email Provider
+Dropdown
+Yes
+Outlook 365 / Gmail / Generic IMAP
+IMAP Host + Port
+Text + Number
+If generic
+Host and port (default 993 for IMAP SSL)
+Mailbox / Folder
+Text
+Yes
+Inbox, or custom folder path (e.g. Synapse-Ingest)
+Filter Rules
+Repeatable form
+No
+From / Subject contains / Has attachment / Date range
+Attachment Handling
+Toggle + type filter
+No
+Extract and parse attachments as CSV/XLSX/PDF
+Mark as Read on Ingest
+Toggle
+Yes
+Default ON — prevents re-processing
+Delete After Ingest
+Toggle
+No
+Default OFF — irreversible, requires admin permission
+
+5.12 Flat File / ERP Export ★
+Field
+Type
+Required
+Notes
+File Format
+Dropdown
+Yes
+CSV / XLSX / JSON / XML / Parquet / Fixed-Width
+Delimiter (CSV)
+Text
+If CSV
+Default comma; supports tab, pipe, semicolon
+Sheet Name (XLSX)
+Text
+If XLSX
+Target sheet; default = first sheet
+Header Row Number
+Number
+No
+Row that contains column names; default 1
+Skip Rows
+Number
+No
+Rows to skip before header (e.g. report title rows)
+Date Format
+Text
+No
+strftime pattern for date parsing (e.g. %d/%m/%Y)
+Null Value Representation
+Text
+No
+String treated as null (e.g. &apos;N/A&apos;, &apos;-&apos;, empty)
+Encoding
+Dropdown
+No
+UTF-8 / UTF-16 / ISO-8859-1 / Windows-1252
+Source Location
+Dropdown
+Yes
+Upload on Wizard run / SharePoint path / SFTP path / S3 key
+
+6. Operation Selection &amp; Tagging
+After authentication is configured and a successful Test Connection is made, the Studio presents the discovered or manually-entered operations.
+
+Field / Control
+Behaviour
+Operation List
+Auto-populated from OpenAPI spec / DB introspection / WSDL parse / GraphQL introspection. Manual entry available as fallback.
+Direction Tag
+Each operation tagged Read, Write, or Both. Controls whether it appears as a Source operation, Destination operation, or either in the Wizard.
+Operator Visibility
+Toggle per operation. Hidden operations are excluded from the Wizard but remain available to Designers for testing.
+Entity Assignment
+Link each operation to an Entity defined in Section 7. Required before publish.
+Sample Data Preview
+For Read operations: fetch up to 5 real records to preview field names and data types. Required for Mapping Canvas to auto-suggest.
+Rate / Quota Notes
+Free-text annotation Designer adds to warn Operators (e.g. &apos;API quota: 1000 req/day&apos;).
+
+7. Entity Modelling
+Entity Modelling groups raw operation response fields into human-friendly, reusable entities that live in the Master Entity Catalog and drive the Mapping Canvas.
+
+Step
+Action
+Detail
+1
+Auto-infer schema
+From sample data fetch (§6) or spec, infer field names, data types, and nullability.
+2
+Rename fields
+Designer maps technical field names to human labels (e.g. issue_key → Ticket ID).
+3
+Group into entity
+Drag fields into a named entity (e.g. &apos;Jira Issue&apos;, &apos;Sprint&apos;, &apos;Project&apos;).
+4
+Assign canonical type
+Map each field to a canonical type: string / number / boolean / datetime / json / rich_text / attachment.
+5
+Link to Master Catalog
+Optionally link this entity to an existing Master Entity Catalog entry, or create a new entry.
+6
+Mark required fields
+Flag fields that must be mapped for an integration to be valid (blocks Wizard Publish if unmapped).
+7
+Set PK / Natural Key
+Designate the field used as the natural key for upsert deduplication (e.g. jira_key, ticket_id).
+
+8. Test &amp; Validate
+A connector cannot be published until at least one successful test call completes. The test sub-screen is shown inline within the Studio flow.
+
+Check
+Pass Criteria
+Fail Behaviour
+Auth / Connectivity
+HTTP 2xx or DB ping succeeds within timeout
+Show error message + raw response; block publish
+Operation Execution
+At least one Read operation returns ≥1 record
+Show raw response; warn but allow publish with override
+Schema Match
+Inferred fields match operation response structure
+Highlight mismatched fields in yellow; warn Designer
+Rate Limit Probe
+No 429 received during test
+Annotate estimated safe polling interval
+SSL / TLS
+Certificate valid and not expired
+Warn if self-signed; block if expired
+
+9. Publish &amp; Version
+Publish creates an immutable snapshot stored in connector_versions (clone-on-publish pattern).
+Version number auto-increments: MAJOR.MINOR.PATCH. Designer can override MAJOR on breaking changes.
+Existing integration instances pinned to prior version; Operators see &apos;Upgrade available&apos; badge.
+Deprecation: Designer marks a version deprecated with a sunset date; running instances show warning.
+Rollback: Administrator can revert published version to any prior version; triggers re-test gate.
+
+10. Backend API Reference
+Method
+Path
+Description
+POST
+/api/connectors
+Create new connector (draft)
+GET
+/api/connectors
+List all connectors (filter by category, status, version)
+GET
+/api/connectors/:id
+Get connector config + current version
+PUT
+/api/connectors/:id
+Update draft (before publish)
+DELETE
+/api/connectors/:id
+Soft-delete (marks deprecated; does not break running instances)
+POST
+/api/connectors/:id/discover
+Trigger auto-discovery (OpenAPI parse / DB introspect / WSDL parse / GraphQL introspect)
+POST
+/api/connectors/:id/test
+Run test call against live system; returns pass/fail + sample data
+POST
+/api/connectors/:id/publish
+Clone-on-publish; creates connector_versions record; returns new version
+GET
+/api/connectors/:id/versions
+List all published versions for this connector
+POST
+/api/connectors/:id/versions/:vId/rollback
+Revert to a prior version
+POST
+/api/connectors/:id/clone
+Clone existing connector template as new draft
+POST
+/api/connectors/import-spec
+Upload / URL-fetch OpenAPI / WSDL / GraphQL SDL; returns parsed operations
+
+11. Database Schema Changes
+Table
+Schema
+Purpose
+New?
+connectors
+app
+Connector template registry — now activated and extended
+Existing (activate)
+connector_versions
+app
+Immutable published snapshots per connector
+NEW
+connector_operations
+app
+Operations/endpoints per connector version
+NEW
+entity_definitions
+app
+Entity → field mappings linked to connector
+NEW
+entity_fields
+app
+Field-level metadata: canonical type, label, required, PK
+NEW
+connector_test_runs
+app
+Log of test call results (pass/fail, latency, sample)
+NEW
+
+12. Project Plan Impact — Revised Task Breakdown
+The current plan has a single task T-15 (Connector Studio, 12h, Ananthu, S3) for the entire module. Based on this FSD, the work breaks into at least 7 tasks across S3 and S4.
+
+New Task ID
+Task
+Owner
+Effort (h)
+Sprint
+Depends On
+Justification
+T-15a
+DB schema: connector_versions, connector_operations, entity_definitions, entity_fields, connector_test_runs tables (Drizzle)
+Ananthu
+6
+S3
+T-03
+5 new tables; schema must land before backend routes
+T-15b
+Backend API: POST /connectors, PUT, DELETE + import-spec (OpenAPI/WSDL/GraphQL parser service)
+Ananthu
+12
+S3
+T-15a
+Core CRUD + parser lib integration (swagger-parser / node-graphql)
+T-15c
+Backend: /discover + /test endpoints — live connectivity + schema introspection per category
+Ananthu
+10
+S3
+T-15b
+Per-category adapter logic (DB introspect, OpenAPI parse, GraphQL introspect)
+T-15d
+Backend: /publish + /versions + /rollback + /clone — versioning engine
+Ananthu
+8
+S3
+T-15b
+Clone-on-publish immutability; version number logic
+T-15e
+Frontend: System Registration form + category-dynamic auth sub-form (all 8 production categories)
+Ananthu
+12
+S4
+T-15b
+Complex dynamic form; one sub-form schema per category
+T-15f
+Frontend: Operation selection list + entity modelling drag-group UI
+Ananthu
+10
+S4
+T-15c, T-15e
+Field grouping drag-drop; canonical type mapping
+T-15g
+Frontend: Test &amp; Validate screen + Publish modal + Version history panel + Clone / Import Spec buttons
+Ananthu
+8
+S4
+T-15d, T-15f
+Enable all 3 disabled buttons; publish flow + version list
+
+Summary
+Value
+Original estimate (T-15)
+12h
+Revised total estimate
+66h (6+12+10+8+12+10+8)
+Underestimate factor
+5.5×
+Original sprint
+S3 only
+Revised sprints
+S3 (backend, 36h) + S4 (frontend, 30h)
+Risk if not re-planned
+T-15 as written would deliver only 1–2 backend routes with no UI; Connector Studio would remain a stub
+
+13. Acceptance Criteria (Definition of Done)
+Selecting REST API + uploading OAS 3.0 spec auto-discovers all endpoints and lists them as selectable operations with direction tags.
+Selecting Database + connection string introspects the schema and lists tables and columns.
+Selecting GraphQL endpoint + introspection query discovers schema and generates operation list.
+Each operation can be tagged Read / Write / Both and toggled visible/hidden for Operators.
+Connector cannot be published until Test Connection returns pass; Publish button remains disabled otherwise.
+Publish creates an immutable connector_versions record; version number increments correctly.
+Updating a published connector creates a new version; running integration instances stay on prior version with an upgrade badge shown.
+Clone Template creates a new draft connector pre-populated with all fields of the source.
+Import Spec accepts OAS 3.0 JSON/YAML, WSDL URL, and GraphQL SDL file.
+All 8 production categories render their correct dynamic auth sub-form with the fields defined in §5.
+Entity Modelling: fields can be renamed, grouped, typed, and linked to Master Catalog entities.
+Connector Studio page loads with all 3 action buttons (New Connector, Import Spec, Clone Template) functional.
+
+14. Open Questions &amp; Decisions
+#
+Question
+Options
+Recommended
+Decide By
+OQ-1
+Which OpenAPI parser library?
+swagger-parser (npm), openapi-types, @apidevtools/swagger-parser
+@apidevtools/swagger-parser — most maintained, supports OAS 3.1
+S3 start
+OQ-2
+GraphQL introspection approach?
+graphql-js getIntrospectionQuery, @graphql-tools/introspection
+graphql-js — already a standard; lightweight
+S3 start
+OQ-3
+WSDL parser library?
+node-soap, easy-soap-request, strong-soap
+node-soap — most stars, actively maintained
+S3 start (only if SOAP in scope for Phase 2)
+OQ-4
+Is SOAP in Phase 2 scope?
+Yes (TFS SOAP is in BRD) / Defer to Phase 3
+Defer SOAP to Phase 3 — TFS REST API is preferred; reduces S3 scope risk
+Before S3 kickoff
+OQ-5
+Connector visibility model — is team/role restriction enough or do we need per-org?
+Role-based only / Org + Role / Tag-based
+Role-based for Phase 2; extend to org+role in Phase 3 with multi-tenancy
+S3 start
+OQ-6
+Entity field canonical type for attachments / binary?
+Treat as URL string / Binary blob / Skip
+URL string pointing to a pre-signed URL — avoids binary storage complexity
+S3 entity modelling
+
+— End of Document —

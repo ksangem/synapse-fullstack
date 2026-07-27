@@ -25,9 +25,11 @@ Thumbs.db
 # Excel temp/lock files
 ~$*
 
-# Personal work log (kept local, never pushed)
-Synapse_Work_Log.xlsx
-_build_worklog.py
+# Personal work log (kept local, never pushed). Paths follow the 2026-07-27 move into
+# planning/ — these were root-anchored names, so leaving them would have started
+# committing the personal log.
+planning/work-log.xlsx
+planning/generators/build-worklog.py
 
 # Local verification screenshots
 verify-*.png

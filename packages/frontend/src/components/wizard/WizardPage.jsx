@@ -952,7 +952,9 @@ export default function WizardPage() {
       setDestCreds(prev => ({
         ...prev,
         connectionName: intg.name,
-        host: dbc.host || fm.pgHost || 'localhost',
+        // No 'localhost' fallback: an unset host must stay visibly empty so the operator fills
+        // it in, rather than silently pointing this connection at whatever runs on their own box.
+        host: dbc.host || fm.pgHost || '',
         port: String(dbc.port || fm.pgPort || connectorMeta[destType]?.runtimeConfig?.defaultPort || ''),
         database: dbc.database || fm.pgDatabase || '',
         schema: dbc.schema || fm.pgSchema || connectorMeta[destType]?.runtimeConfig?.defaultSchema || '',
@@ -1257,13 +1259,23 @@ export default function WizardPage() {
     setQuickView(null);
     try {
       const cfg = dbCfg(selectedDest);
+      // NO credential fallbacks. These used to default to localhost/synapse_db/synapse/synapse,
+      // so a half-filled form silently read the DEVELOPER's local database and showed those rows
+      // as if they were the operator's target table. Missing connection details are now an error.
+      // (port/schema still fall back to the CONNECTOR REGISTRY's defaults — those are per-engine
+      // metadata, not credentials.)
+      const missing = ['host', 'database', 'username', 'table'].filter((k) => !destCreds[k]);
+      if (missing.length) {
+        setQuickViewError(`Cannot preview — missing ${missing.join(', ')}. Fill in the destination connection first.`);
+        return;
+      }
       const apiFn = (body) => api.call(cfg?.handlers?.quickView, body);
       const res = await apiFn({
-        host: destCreds.host || 'localhost',
+        host: destCreds.host,
         port: Number(destCreds.port) || cfg.defaultPort,
-        database: destCreds.database || 'synapse_db',
-        username: destCreds.username || 'synapse',
-        password: destCreds.password || 'synapse',
+        database: destCreds.database,
+        username: destCreds.username,
+        password: destCreds.password ?? '',
         schema: cfg.hasSchema ? (destCreds.schema || cfg.defaultSchema) : undefined,
         table: destCreds.table,
         limit: 50,
