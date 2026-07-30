@@ -147,21 +147,42 @@ export async function publishRecords(input: PublishRecordsInput): Promise<Publis
     else published++;
   }
 
-  await finishRun(runId, published);
+  await finishRun(runId, published, { recordsRead: records.length });
 
   return { runId, records: records.length, published, duplicate, destinationConnectorId };
 }
 
+/**
+ * How a run ended, in the terms an operator actually asks about. Without this the UI
+ * could only say "Finished", which reads as success even for a run that errored — and
+ * said nothing at all about the common case of a re-run whose records were every one
+ * of them unchanged (`no-new-records`).
+ */
+export type RunOutcome =
+  | 'running'
+  | 'delivered'          // everything that was published landed
+  | 'partial'            // some delivered, some failed
+  | 'failed'             // the run errored, or every delivery failed
+  | 'stopped'            // operator cancelled
+  | 'no-source-records'  // the source returned nothing
+  | 'no-new-records';    // source had rows, but all were already delivered unchanged
+
 export interface RunStatus {
   runId: string;
   status: string;
-  recordsIn: number;
+  /** Rows the source produced this run. */
+  recordsRead: number;
+  /** Deliveries this run should produce (published × live targets) — the progress denominator. */
+  expectedOut: number;
+  /** Read but suppressed at the inbox as an unchanged duplicate of an earlier run. */
+  duplicates: number;
   delivered: number;
   failed: number;
   /** Settled without a fresh delivery: no matching subscription, or duplicate/idempotency-suppressed. */
   skipped: number;
   pending: number;
   finished: boolean;
+  outcome: RunOutcome;
   /** Sample of recent failure reasons (from the dead-letter queue) when failed > 0. */
   errors?: string[];
 }
@@ -185,11 +206,15 @@ export async function getRunStatus(runId: string): Promise<RunStatus | null> {
     else delivered++;
   }
 
-  const recordsIn = run.recordsIn ?? 0;
+  // recordsIn is the run's EXPECTED delivery count (published × live targets) — the
+  // progress denominator. recordsRead is what the SOURCE produced; the two differ by
+  // however many records the inbox suppressed as unchanged duplicates.
+  const recordsRead = run.recordsRead ?? 0;
+  const expectedOut = run.recordsIn ?? 0;
   // 'skipped' is a terminal outcome (matched no subscription / duplicate-suppressed),
   // so it counts toward "settled" just like delivered/failed — otherwise a run whose
   // records had no destination would sit at pending forever (the "164 queued" hang).
-  const pending = Math.max(0, recordsIn - delivered - failed - skipped);
+  const pending = Math.max(0, expectedOut - delivered - failed - skipped);
   // Finished when EITHER:
   //   • normal completion — source closed (status not 'running'/'pending') and every
   //     published record reached a terminal state (delivered/failed/skipped); OR
@@ -215,5 +240,48 @@ export async function getRunStatus(runId: string): Promise<RunStatus | null> {
     } catch { /* best-effort — never block status on the error sample */ }
   }
 
-  return { runId, status: run.status, recordsIn, delivered, failed, skipped, pending, finished, errors };
+  // Duplicates are what the source read but the inbox suppressed as unchanged. Only
+  // meaningful once the source is done reading, hence the `finished` guard — mid-run the
+  // gap between read and published is just work still in flight.
+  const duplicates = finished ? Math.max(0, recordsRead - expectedOut) : 0;
+
+  return {
+    runId,
+    status: run.status,
+    recordsRead,
+    expectedOut,
+    duplicates,
+    delivered,
+    failed,
+    skipped,
+    pending,
+    finished,
+    outcome: classifyOutcome({ status: run.status, finished, expectedOut, recordsRead, delivered, failed }),
+    errors,
+  };
+}
+
+/**
+ * Reduce a run's raw counters to the one thing an operator wants to know. Exported so
+ * the classification is testable without a database.
+ */
+export function classifyOutcome(r: {
+  status: string;
+  finished: boolean;
+  expectedOut: number;
+  recordsRead: number;
+  delivered: number;
+  failed: number;
+}): RunOutcome {
+  if (!r.finished) return 'running';
+  if (r.status === 'cancelled') return 'stopped';
+  // A run whose SOURCE threw is 'error' even though no individual record failed —
+  // reporting that as a plain "Finished" is how a broken run passed for a clean one.
+  if (r.status === 'error') return 'failed';
+  if (r.failed > 0) return r.delivered > 0 ? 'partial' : 'failed';
+  // Nothing was published. Which of the two reasons applies is the whole point of
+  // tracking recordsRead separately: an empty source is a source problem, an unchanged
+  // source is a no-op re-run and entirely expected.
+  if (r.expectedOut === 0) return r.recordsRead > 0 ? 'no-new-records' : 'no-source-records';
+  return 'delivered';
 }

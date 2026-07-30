@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   pgSchema,
@@ -11,6 +12,7 @@ import {
   date,
   pgEnum,
   unique,
+  index,
 } from 'drizzle-orm/pg-core';
 
 // ═══════════════════════════════════════════════════════
@@ -137,7 +139,15 @@ export const connectorVersions = appSchema.table('connector_versions', {
   // ── FSD §9 deprecation lifecycle ──
   deprecatedAt: timestamp('deprecated_at'),
   sunsetDate: date('sunset_date'),
+  /* Where the author was when they stopped: { step, panel, savedAt, … }. Studio autosaves
+     the DESIGN into the columns above and the PLACE here, so reopening a draft resumes at
+     the stage it was abandoned on instead of restarting the flow. Never holds credentials
+     — the save path rejects those keys outright. */
+  draftState: jsonb('draft_state'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
+  /* Bumped on every draft edit. Drives "edited 4 minutes ago" in the drafts rail and the
+     stale-write check that stops two tabs silently overwriting each other. */
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => [
   unique('uq_connector_version_semver').on(table.connectorId, table.semver),
 ]);
@@ -227,7 +237,13 @@ export const runs = appSchema.table('runs', {
   startedAt: timestamp('started_at').defaultNow().notNull(),
   finishedAt: timestamp('finished_at'),
   status: runStatusEnum('status').notNull().default('pending'),
+  /** Rows the SOURCE produced. Differs from recordsIn when the inbox suppresses
+   *  unchanged duplicates — the difference is what makes a no-op re-run legible. */
+  recordsRead: integer('records_read').default(0),
+  /** Deliveries this run should produce (published × live targets) — the denominator
+   *  that `settleRun` and `getRunStatus` count settled out-messages against. */
   recordsIn: integer('records_in').default(0),
+  /** Deliveries that succeeded; maintained by `settleRun` as out-messages land. */
   recordsOut: integer('records_out').default(0),
   errorLog: jsonb('error_log'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -241,7 +257,12 @@ export const runMessages = appSchema.table('run_messages', {
   payloadHash: varchar('payload_hash', { length: 64 }),
   status: varchar('status', { length: 50 }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
-});
+}, (table) => [
+  /* Every delivery settles its run by tallying its siblings, and the Wizard polls the
+     same tally while a push runs — both filtered by exactly this pair, over a table that
+     grows by one row per record ever moved. */
+  index('idx_run_messages_run_direction').on(table.runId, table.direction),
+]);
 
 export const alerts = appSchema.table('alerts', {
   alertId: uuid('alert_id').primaryKey().defaultRandom(),
@@ -368,6 +389,11 @@ export const inboxEntries = appSchema.table('inbox_entries', {
   sequenceNo: integer('sequence_no').notNull(),
   checksum: varchar('checksum', { length: 64 }).notNull(),
   envelopeJson: jsonb('envelope_json').notNull(),
+  /* The envelope's run id, lifted out of the payload at write time. The Message
+     Monitor needs it to tell which CONNECTION a message belongs to; reading it
+     from envelope_json instead detoasts every stored payload on every query. The
+     bus does not write this column — Postgres derives it. */
+  runId: varchar('run_id', { length: 64 }).generatedAlwaysAs(sql`envelope_json->'headers'->>'runId'`),
   status: envelopeStatusEnum('status').notNull().default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   processedAt: timestamp('processed_at', { withTimezone: true }),
@@ -382,6 +408,8 @@ export const outboxEntries = appSchema.table('outbox_entries', {
   messageId: uuid('message_id').notNull(),
   destConnectorId: varchar('dest_connector_id', { length: 100 }).notNull(),
   envelopeJson: jsonb('envelope_json').notNull(),
+  /** Derived, as on inboxEntries above — see the note there. */
+  runId: varchar('run_id', { length: 64 }).generatedAlwaysAs(sql`envelope_json->'headers'->>'runId'`),
   status: envelopeStatusEnum('status').notNull().default('pending'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   dispatchedAt: timestamp('dispatched_at', { withTimezone: true }),

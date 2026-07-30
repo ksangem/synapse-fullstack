@@ -208,6 +208,23 @@ router.put('/:id/versions/:versionId', async (req: Request, res: Response) => {
   }
 });
 
+/* PATCH /api/connectors/:id/versions/:versionId/draft-state — save WHERE the author is.
+   Studio calls this on every stage change, so it stays a one-column write; the design
+   itself goes through the PUT above. Body: { draftState, expectedUpdatedAt? }. */
+router.patch('/:id/versions/:versionId/draft-state', async (req: Request, res: Response) => {
+  try {
+    const { draftState, expectedUpdatedAt } = req.body ?? {};
+    const saved = await connectorAuthoringService.saveDraftState(
+      req.params.versionId as string,
+      draftState ?? null,
+      expectedUpdatedAt,
+    );
+    res.json({ success: true, data: saved });
+  } catch (err) {
+    fail(res, err, 400);
+  }
+});
+
 // POST /api/connectors/:id/versions/:versionId/publish — freeze a draft (test-gated)
 router.post('/:id/versions/:versionId/publish', async (req: Request, res: Response) => {
   try {
@@ -247,6 +264,17 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const category = typeof req.query.category === 'string' ? req.query.category : undefined;
     const rows = await connectorService.listConnectors(undefined, category);
+    res.json({ success: true, data: rows });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+/* GET /api/connectors/drafts — unfinished authoring work, newest edit first.
+   MUST stay above `GET /:id`, or Express matches 'drafts' as a connector id. */
+router.get('/drafts', async (_req: Request, res: Response) => {
+  try {
+    const rows = await connectorAuthoringService.listDrafts();
     res.json({ success: true, data: rows });
   } catch (err) {
     fail(res, err);

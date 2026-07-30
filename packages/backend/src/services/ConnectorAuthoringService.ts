@@ -60,6 +60,44 @@ function mapDbType(dataType: string): string {
   return 'string';
 }
 
+/* Studio's resume pointer. It is a UI bookmark — which stage, which panel — and nothing
+   else, so it is capped and screened rather than trusted. Credentials in particular must
+   never reach it: the author's sample credentials live in memory for the length of a test
+   and are deliberately not part of what gets saved. */
+const DRAFT_STATE_MAX_BYTES = 32 * 1024;
+const DRAFT_STATE_FORBIDDEN = ['testCreds', 'creds', 'credentials', 'secrets', 'password', 'apiToken', 'clientSecret'];
+
+function sanitizeDraftState(input: unknown): Record<string, unknown> | null {
+  if (input === null) return null;
+  if (typeof input !== 'object' || Array.isArray(input)) {
+    throw { status: 400, message: 'draftState must be an object' };
+  }
+  const obj = input as Record<string, unknown>;
+  const banned = Object.keys(obj).filter((k) => DRAFT_STATE_FORBIDDEN.includes(k));
+  if (banned.length) {
+    throw { status: 400, message: `draftState must not carry credentials (${banned.join(', ')})` };
+  }
+  if (JSON.stringify(obj).length > DRAFT_STATE_MAX_BYTES) {
+    throw { status: 400, message: 'draftState is too large — it holds the resume point, not the design' };
+  }
+  return obj;
+}
+
+/* Optimistic concurrency. Compared to the second, because that is the resolution Postgres
+   timestamps round-trip through JSON with; a same-second double save is the client's own
+   autosave debounce, not a competing author. */
+function assertNotStale(current: Date | null, expected?: string | Date): void {
+  if (!expected || !current) return;
+  const want = new Date(expected).getTime();
+  if (Number.isNaN(want)) return;
+  if (Math.floor(want / 1000) !== Math.floor(current.getTime() / 1000)) {
+    throw {
+      status: 409,
+      message: 'This draft changed in another session since you opened it — reload it before saving.',
+    };
+  }
+}
+
 export class ConnectorAuthoringService {
   private async uniqueKey(base: string, orgId: string): Promise<string> {
     let key = base;
@@ -332,10 +370,17 @@ export class ConnectorAuthoringService {
   async updateVersion(versionId: string, patch: {
     credentialSchema?: unknown; runtimeConfig?: unknown; entities?: EntityInput[]; changelog?: string;
     operations?: Array<{ key: string; name: string; kind?: string; hidden?: boolean; httpMethod?: string; pathTemplate?: string }>;
+    draftState?: unknown;
+    /* Optimistic concurrency for Studio autosave: the client sends the `updatedAt` it last
+       read, and a mismatch means someone else (another tab, another author) saved in
+       between. Rejecting is the only honest answer — silently overwriting loses their work.
+       Omitted by callers that legitimately do not care (the manual Save Draft button). */
+    expectedUpdatedAt?: string | Date;
   }) {
     const [v] = await db.select().from(connectorVersions).where(eq(connectorVersions.versionId, versionId));
     if (!v) throw new Error('Version not found');
     if (v.status === 'published') throw { status: 409, message: 'Published versions are immutable — create a new version' };
+    assertNotStale(v.updatedAt, patch.expectedUpdatedAt);
     // If switched to a built-in runtime (sharepoint/database), inject its working config.
     const newRc = patch.runtimeConfig as { runtimeKind?: string; engine?: string } | undefined;
     const newKind = newRc?.runtimeKind;
@@ -354,6 +399,8 @@ export class ConnectorAuthoringService {
       credentialSchema: patch.credentialSchema ?? v.credentialSchema,
       runtimeConfig: patch.runtimeConfig ?? v.runtimeConfig,
       changelog: patch.changelog ?? v.changelog,
+      draftState: patch.draftState === undefined ? v.draftState : sanitizeDraftState(patch.draftState),
+      updatedAt: new Date(),
     }).where(eq(connectorVersions.versionId, versionId)).returning();
     if (patch.entities) await this.setEntities(versionId, patch.entities);
     if (patch.operations) {
@@ -371,6 +418,54 @@ export class ConnectorAuthoringService {
       }
     }
     return updated;
+  }
+
+  /**
+   * Save ONLY the resume point. Separate from updateVersion because it fires on every
+   * stage change: rewriting the whole design (credential schema, runtime config, entities,
+   * operations) to record "the author is on step 3" would make a navigation click as
+   * expensive — and as risky — as a full save.
+   */
+  async saveDraftState(versionId: string, draftState: unknown, expectedUpdatedAt?: string | Date) {
+    const [v] = await db.select().from(connectorVersions).where(eq(connectorVersions.versionId, versionId));
+    if (!v) throw { status: 404, message: 'Version not found' };
+    if (v.status === 'published') throw { status: 409, message: 'Published versions are immutable' };
+    assertNotStale(v.updatedAt, expectedUpdatedAt);
+    const [updated] = await db.update(connectorVersions)
+      .set({ draftState: sanitizeDraftState(draftState), updatedAt: new Date() })
+      .where(eq(connectorVersions.versionId, versionId))
+      .returning();
+    return { versionId, draftState: updated?.draftState ?? null, updatedAt: updated?.updatedAt ?? null };
+  }
+
+  /**
+   * Every unfinished draft, newest edit first — what the Studio's "Continue building" rail
+   * reads. Joined to the connector head so a card can show the name and icon without a
+   * request per draft.
+   */
+  async listDrafts(orgId: string = DEFAULT_ORG) {
+    const rows = await db
+      .select({
+        connectorId: connectors.connectorId,
+        name: connectors.name,
+        icon: connectors.icon,
+        category: connectors.category,
+        runtimeKind: connectors.runtimeKind,
+        isSystem: connectors.isSystem,
+        versionId: connectorVersions.versionId,
+        semver: connectorVersions.semver,
+        draftState: connectorVersions.draftState,
+        createdAt: connectorVersions.createdAt,
+        updatedAt: connectorVersions.updatedAt,
+      })
+      .from(connectorVersions)
+      .innerJoin(connectors, eq(connectors.connectorId, connectorVersions.connectorId))
+      .where(and(eq(connectorVersions.orgId, orgId), eq(connectorVersions.status, 'draft')));
+    // Sorted here rather than in SQL so a null updatedAt (a row that predates the column)
+    // falls back to when it was created instead of sinking to the bottom forever.
+    return rows
+      .map((r) => ({ ...r, touchedAt: r.updatedAt ?? r.createdAt }))
+      .sort((a, b) => new Date(b.touchedAt).getTime() - new Date(a.touchedAt).getTime());
   }
 
   /** Freeze a draft → published, snapshot entities, point the head at it. */

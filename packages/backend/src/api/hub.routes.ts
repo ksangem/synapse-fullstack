@@ -4,6 +4,7 @@
 
 import { Router, type Request, type Response } from 'express';
 import { DbSchemaDiffCalculator } from '../integrations/database/DbSchemaDiffCalculator';
+import { recordAudit } from '../services/AuditService';
 import { PostgresWriter } from '../integrations/database/writers/PostgresWriter';
 import { SqlServerWriter } from '../integrations/database/writers/SqlServerWriter';
 import { MySqlWriter } from '../integrations/database/writers/MySqlWriter';
@@ -365,6 +366,23 @@ router.post('/apply-ddl', async (req: Request, res: Response) => {
     await writer.connect(connection);
     try {
       await writer.applyDdl(ddlStatements);
+      /* The one write in the product that is deliberately NOT on the bus — it changes
+         the SHAPE of a customer's table rather than moving data — and so the one with
+         no message ledger behind it. The statements are recorded verbatim: they are
+         column names and types, never data or credentials, and after an unexpected
+         ALTER this row is the only account of what was run and by whom. */
+      await recordAudit({
+        orgId: req.actor.orgId,
+        userId: req.actor.userId,
+        action: 'apply_ddl',
+        entityType: 'destination_table',
+        diff: {
+          engine: connection.engine,
+          host: connection.host,
+          database: connection.database,
+          statements: ddlStatements,
+        },
+      });
       res.json({ success: true, data: { applied: ddlStatements.length } });
     } finally {
       await writer.disconnect();

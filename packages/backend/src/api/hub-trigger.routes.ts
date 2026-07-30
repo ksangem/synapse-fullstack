@@ -19,6 +19,7 @@ import { startRun, finishRun, cancelRun } from '../hub/run-recorder';
 import { publishRecords, getRunStatus } from '../hub/records-delivery';
 import { registerRunController, clearRunController, isRunCancelled, markRunCancelled } from '../hub/run-cancellation';
 import { validateRecipe } from '../hub/validate-recipe';
+import { recordAudit } from '../services/AuditService';
 import { applyRichMappings, applyRichMappingsByTarget, type MappingEntry } from '../services/MappingEngine';
 import { normalizeTargets } from '../hub/integration-targets';
 import { registeredSourceKinds, registeredDestinationKinds } from '../hub/connector-registry';
@@ -187,16 +188,22 @@ async function executeIntegrationRun(integration: Integration): Promise<RunOutco
   } catch (err) {
     // An aborted source read is the expected outcome of a stop — not a failure.
     if (controller.signal.aborted || isRunCancelled(runId)) cancelled = true;
-    else throw err;
+    else {
+      // A source that throws mid-read used to leave the run row at 'running' until the
+      // watchdog swept it minutes later — so the card polled a phantom in-flight run.
+      // Settle it as 'error' now, keeping whatever was published before the failure.
+      await finishRun(runId, published * liveTargets, { recordsRead: records, status: 'error' });
+      throw err;
+    }
   } finally {
     if (runId) clearRunController(runId);
   }
 
   if (cancelled) {
-    await cancelRun(runId, published * liveTargets);
+    await cancelRun(runId, published * liveTargets, records);
     return { ok: true, result: { integrationId: integration.integrationId, records, published, duplicate, targets: liveTargets, runId, cancelled: true, warnings: recipe.warnings } };
   }
-  await finishRun(runId, published * liveTargets);
+  await finishRun(runId, published * liveTargets, { recordsRead: records });
   return { ok: true, result: { integrationId: integration.integrationId, records, published, duplicate, targets: liveTargets, runId, warnings: recipe.warnings } };
 }
 
@@ -214,6 +221,24 @@ router.post('/run-integration/:id', async (req: Request, res: Response) => {
       res.status(outcome.status).json({ success: false, error: outcome.error, data: outcome.data });
       return;
     }
+    /* Who moved the data. Counts are the PUBLISH tally — delivery settles later and is
+       the run ledger's job (runs + run_messages, keyed by the runId recorded here), so
+       this entry deliberately does not claim what landed. */
+    await recordAudit({
+      orgId: req.actor.orgId,
+      userId: req.actor.userId,
+      action: 'run',
+      entityType: 'integration',
+      entityId: integration.integrationId,
+      diff: {
+        name: integration.name,
+        runId: outcome.result.runId,
+        recordsRead: outcome.result.records,
+        published: outcome.result.published,
+        targets: outcome.result.targets,
+        ...(outcome.result.cancelled ? { cancelled: true } : {}),
+      },
+    });
     res.status(202).json({ success: true, data: outcome.result });
   } catch (err) {
     const e = err as { message?: string };
@@ -270,6 +295,22 @@ router.post('/run-group/:groupId', async (req: Request, res: Response) => {
       }
     }
     const skipped = results.filter((r) => r.skipped).length;
+    /* One entry for the group, not one per member: the operator performed a single act
+       and each member's own run row carries its detail. The per-member runIds are listed
+       so the group can be reconstructed from the ledger. */
+    await recordAudit({
+      orgId: req.actor.orgId,
+      userId: req.actor.userId,
+      action: 'run_group',
+      entityType: 'entity_group',
+      diff: {
+        groupId,
+        members: results.length,
+        skipped,
+        failed: results.filter((r) => r.error).length,
+        runIds: results.map((r) => r.runId).filter(Boolean),
+      },
+    });
     res.status(202).json({ success: true, data: { groupId, count: results.length, skipped, results } });
   } catch (err) {
     const e = err as { message?: string };
@@ -355,6 +396,23 @@ router.post('/publish-records', async (req: Request, res: Response) => {
       event,
       integrationId: integrationId ? String(integrationId) : undefined,
     });
+    /* Metadata only — the records themselves are the customer's data and the creds are
+       secrets; neither belongs in an audit row. Where it was written and how much is
+       what makes the entry useful. */
+    await recordAudit({
+      orgId: req.actor.orgId,
+      userId: req.actor.userId,
+      action: 'publish',
+      entityType: 'integration',
+      entityId: integrationId ? String(integrationId) : null,
+      diff: {
+        destinationKind: String(destination.kind),
+        destTable: destTable ? String(destTable) : undefined,
+        records: records.length,
+        naturalKeyColumn: naturalKeyColumn ? String(naturalKeyColumn) : undefined,
+        runId: (result as { runId?: string | null })?.runId ?? null,
+      },
+    });
     res.status(202).json({ success: true, data: result });
   } catch (err) {
     const e = err as { message?: string };
@@ -406,6 +464,15 @@ router.post('/cancel-run/:runId', async (req: Request, res: Response) => {
     const runId = String(req.params.runId);
     markRunCancelled(runId);
     await cancelRun(runId);
+    /* A stop leaves a partial write behind, so "who stopped this, and when" is the
+       question asked afterwards about every half-loaded table. */
+    await recordAudit({
+      orgId: req.actor.orgId,
+      userId: req.actor.userId,
+      action: 'cancel_run',
+      entityType: 'run',
+      diff: { runId },
+    });
     res.json({ success: true, data: { runId, status: 'cancelled' } });
   } catch (err) {
     const e = err as { message?: string };

@@ -13,7 +13,12 @@ export type AuditAction =
   | 'reveal' | 'copy' | 'rotate' | 'revoke' | 'create' | 'delete'
   | 'pause' | 'resume' | 'clone'
   | 'login' | 'role_change' | 'deactivate' | 'activate'
-  | 'client_register' | 'client_revoke';
+  | 'client_register' | 'client_revoke'
+  /* Data movement. Until these existed the log could say who READ a credential but not
+     who moved data with it: a push that wrote 27 rows into a customer's table, a DDL
+     that altered its shape, and a DLQ replay that re-delivered messages all happened
+     unattributed. The run/DLQ ledgers record WHAT moved; these record WHO asked. */
+  | 'run' | 'run_group' | 'publish' | 'cancel_run' | 'apply_ddl' | 'replay';
 
 export interface AuditEntry {
   orgId: string;

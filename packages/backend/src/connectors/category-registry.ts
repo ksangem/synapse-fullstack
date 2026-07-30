@@ -204,7 +204,7 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
       { key: 'targetUrls', label: 'Base / login URL', type: 'text', required: true, help: 'The starting URL (e.g. https://portal.example.com). The Recorder captures login, navigation and fields.' },
       { key: 'loginMethod', label: 'Login Method', type: 'select', required: true, options: ['No Auth', 'Username & Password', 'Recorded Session (2FA)'], help: 'No Auth: public site. Username & Password: mark the login fields; each operator enters their own creds. Recorded Session: each operator logs in once (handles 2FA) and their session is saved.' },
       { key: 'browserEngine', label: 'Browser', type: 'select', options: ['Chromium', 'Firefox', 'WebKit'], help: 'Engine the crawl runs in (recording preview is always Chromium).' },
-      { key: 'advanced', label: 'Advanced — configure the crawl by hand (skip the recorder)', type: 'checkbox' },
+      { key: 'advanced', label: 'Advanced', type: 'checkbox', help: 'Configure the crawl by hand and skip the recorder: selectors, pagination, rendering and limits are set here instead of being captured from a live browser.' },
       // ── Everything below is hidden unless "Advanced" is ticked ──
       { key: 'engine', label: 'Scraping Engine', type: 'select', options: ['Playwright Self-hosted', 'Apify Cloud', 'Both (fallback)'], showWhen: { field: 'advanced', in: [true] } },
       { key: 'apifyActorId', label: 'Apify Actor ID', type: 'text', showWhen: { field: 'engine', in: ['Apify Cloud', 'Both (fallback)'] } },
@@ -212,7 +212,7 @@ export const CATEGORY_REGISTRY: CategorySpec[] = [
       { key: 'rowSelector', label: 'Row selector (list scraping — one record per match)', type: 'text', help: 'e.g. div.quote — leave blank for one record per page.', showWhen: { field: 'advanced', in: [true] } },
       { key: 'selectors', label: 'Field Selectors (field → CSS, relative to the row; @attr for attributes; a || b for fallbacks)', type: 'keyvalue', showWhen: { field: 'advanced', in: [true] } },
       // ── Two-phase (list → open each item → extract full detail) ──
-      { key: 'twoPhase', label: 'Two-phase crawl — open each list item for its full detail page', type: 'checkbox', showWhen: { field: 'advanced', in: [true] }, help: 'e.g. Jira project issue list → each issue page. Pairs with Row selector (the list rows).' },
+      { key: 'twoPhase', label: 'Two-phase crawl', type: 'checkbox', showWhen: { field: 'advanced', in: [true] }, help: 'Open each list item for its full detail page — e.g. a Jira project issue list → each issue page. Pairs with Row selector (the list rows).' },
       { key: 'linkSelector', label: 'Detail link selector (per row → the item URL, e.g. a@href)', type: 'text', showWhen: { field: 'twoPhase', in: [true] } },
       { key: 'detailSelectors', label: 'Detail page fields — JSON {"name":"selector"} ( || for fallbacks, @attr for attributes )', type: 'code', showWhen: { field: 'twoPhase', in: [true] } },
       { key: 'detailWaitForSelector', label: 'Detail: wait for selector (SPA pages)', type: 'text', showWhen: { field: 'twoPhase', in: [true] } },

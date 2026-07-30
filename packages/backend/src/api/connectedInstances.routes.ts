@@ -66,7 +66,14 @@ function computeLastRun(
 router.get('/', async (req: Request, res: Response) => {
   try {
     const orgId = req.actor.orgId;
-    const allIntegrations = await db.select().from(integrations).where(eq(integrations.orgId, orgId));
+    // Newest connection first. Without an ORDER BY, Postgres returns heap order, which is
+    // arbitrary and reshuffles as rows are updated — the list appeared to jump around.
+    // integrationId breaks ties so the order is stable across requests.
+    const allIntegrations = await db
+      .select()
+      .from(integrations)
+      .where(eq(integrations.orgId, orgId))
+      .orderBy(desc(integrations.createdAt), desc(integrations.integrationId));
 
     // "My Connections" lists real source → destination connections only. Hide internal
     // artifacts that are NOT operator-created connections:

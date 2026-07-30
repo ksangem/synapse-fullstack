@@ -22,6 +22,20 @@
       "when": 1782214994127,
       "tag": "0002_aromatic_vivisector",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785221103675,
+      "tag": "0003_watery_serpent_society",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785312000000,
+      "tag": "0004_run_ledger_settlement",
+      "breakpoints": true
     }
   ]
 }
