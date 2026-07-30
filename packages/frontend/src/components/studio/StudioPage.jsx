@@ -10,8 +10,16 @@ import Button from '../ui/Button';
 import CrawlRecorder from './CrawlRecorder';
 import StatStrip from '../ui/StatStrip';
 import Icon from '../ui/Icon';
+import InfoHint from '../ui/InfoHint';
 import { useGrowFrom, originRect } from '../../hooks/useGrowFrom';
 import { clickable } from '../../utils/clickable';
+import { useAutosave } from '../../hooks/useAutosave';
+import { useHorizontalScroll } from '../../hooks/useHorizontalScroll';
+import { useAuth } from '../../hooks/useAuth';
+import {
+  readSession, writeSession, clearSession, isFresh,
+  readSeed, writeSeed, clearSeed, sinceLabel, sinceShort,
+} from '../../services/studioSession';
 
 /* Connector Studio — design-time authoring over the real connector registry.
    Data-driven from the backend category registry (GET /api/connectors/meta/categories,
@@ -60,44 +68,80 @@ const STATUS_BADGE = {
 };
 
 // ── Generic config-field renderer (FSD §5 per-category fields) ──
-function FieldInput({ field, value, onChange }) {
+function FieldInput({ field, value, onChange, id }) {
   const v = value ?? '';
   switch (field.type) {
     case 'checkbox':
-      return <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} />;
+      return <input id={id} type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} />;
     case 'select':
       return (
-        <select value={v} onChange={(e) => onChange(e.target.value)}>
+        <select id={id} value={v} onChange={(e) => onChange(e.target.value)}>
           <option value="">—</option>
           {(field.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
       );
     case 'textarea':
-      return <textarea value={v} onChange={(e) => onChange(e.target.value)} style={{ width: '100%', minHeight: 60, fontSize: 'var(--fs-sm)' }} />;
+      return <textarea id={id} value={v} onChange={(e) => onChange(e.target.value)} style={{ width: '100%', minHeight: 60, fontSize: 'var(--fs-sm)' }} />;
     case 'code':
-      return <textarea value={v} onChange={(e) => onChange(e.target.value)} spellCheck={false} placeholder="JSON / code" style={{ width: '100%', minHeight: 110, fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-xs)' }} />;
+      return <textarea id={id} value={v} onChange={(e) => onChange(e.target.value)} spellCheck={false} placeholder="JSON / code" style={{ width: '100%', minHeight: 110, fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-xs)' }} />;
     case 'keyvalue':
-      return <textarea value={v} onChange={(e) => onChange(e.target.value)} spellCheck={false} placeholder='{"Header":"value"}' style={{ width: '100%', minHeight: 48, fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-xs)' }} />;
+      return <textarea id={id} value={v} onChange={(e) => onChange(e.target.value)} spellCheck={false} placeholder='{"Header":"value"}' style={{ width: '100%', minHeight: 48, fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-xs)' }} />;
     case 'number':
-      return <input type="number" value={v} onChange={(e) => onChange(e.target.value)} />;
+      return <input id={id} type="number" value={v} onChange={(e) => onChange(e.target.value)} />;
     case 'password':
-      return <input type="password" value={v} onChange={(e) => onChange(e.target.value)} />;
+      return <input id={id} type="password" value={v} onChange={(e) => onChange(e.target.value)} />;
     default: // text, url, file
-      return <input type="text" value={v} onChange={(e) => onChange(e.target.value)} placeholder={field.type === 'url' ? 'https://…' : field.type === 'file' ? 'path or URL' : ''} />;
+      return <input id={id} type="text" value={v} onChange={(e) => onChange(e.target.value)} placeholder={field.type === 'url' ? 'https://…' : field.type === 'file' ? 'path or URL' : ''} />;
   }
+}
+
+/* A registry label carries its own aside in several categories ("Row selector
+   (list scraping — one record per match)"). A sentence-length parenthetical is
+   help, not a name, so it moves into the bubble instead of stretching the label
+   across its column. A short one — "(JSON)", "(ms)", "(optional)" — is part of
+   the name and stays put. */
+function splitLabel(f) {
+  const m = /^(.*?)\s*\(([^()]*)\)\s*$/.exec(f.label || '');
+  const aside = m?.[2].trim() || '';
+  if (!m || m[1].length < 3 || (aside.split(/\s+/).length < 3 && aside.length <= 24)) {
+    return { label: f.label, help: f.help };
+  }
+  const sentence = `${aside[0].toUpperCase()}${aside.slice(1)}${/[.!?]$/.test(aside) ? '' : '.'}`;
+  return { label: m[1].trim(), help: f.help ? `${f.help} ${sentence}` : sentence };
 }
 
 function ConfigFields({ fields, values, onChange }) {
   const visible = (fields || []).filter((f) => !f.showWhen || (f.showWhen.in || []).includes(values[f.showWhen.field]));
   if (!visible.length) return null;
   return (
-    <div className="form-row" style={{ flexWrap: 'wrap' }}>
-      {visible.map((f) => (
-        <div className="form-group" key={f.key} style={{ minWidth: f.type === 'code' || f.type === 'textarea' || f.type === 'keyvalue' ? '100%' : 200 }}>
-          <label style={{ fontSize: 'var(--fs-xs)' }}>{f.label}{f.required ? ' *' : ''}{f.help ? <span style={{ color: 'var(--text-dim)', fontWeight: 'var(--fw-normal)' }}> — {f.help}</span> : null}</label>
-          <FieldInput field={f} value={values[f.key]} onChange={(val) => onChange(f.key, val)} />
-        </div>
-      ))}
+    <div className="cfg-grid">
+      {visible.map((f) => {
+        const { label, help } = splitLabel(f);
+        const wide = f.type === 'code' || f.type === 'textarea' || f.type === 'keyvalue';
+        // A checkbox is its own label — box first, statement beside it — so it
+        // never gets the stacked label/input treatment of a typed field.
+        if (f.type === 'checkbox') {
+          return (
+            <div className="form-group" key={f.key}>
+              <label className="cfg-check">
+                <input type="checkbox" checked={!!values[f.key]} onChange={(e) => onChange(f.key, e.target.checked)} />
+                <span>{label}</span>
+                <InfoHint text={help} label={label} />
+              </label>
+            </div>
+          );
+        }
+        return (
+          <div className={`form-group${wide ? ' cfg-wide' : ''}`} key={f.key}>
+            <label className="cfg-label" htmlFor={`cfg-${f.key}`}>
+              <span title={label}>{label}</span>
+              {f.required && <span className="cfg-req" title="Required">*</span>}
+              <InfoHint text={help} label={label} />
+            </label>
+            <FieldInput id={`cfg-${f.key}`} field={f} value={values[f.key]} onChange={(val) => onChange(f.key, val)} />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -128,13 +172,76 @@ export default function StudioPage() {
      been consumed on the earlier render when the element did not exist yet. */
   useGrowFrom(detailRef, detail ? detailFrom : null);
 
+  // ── Draft recovery ────────────────────────────────────────────────────
+  const { user } = useAuth();
+  const userId = user?.userId ?? user?.email ?? null;
+  const [drafts, setDrafts] = useState([]);
+  const [seed, setSeed] = useState(() => readSeed(userId));
+  /* An offer to resume, shown instead of hijacking navigation when the pointer is old.
+     Null once dismissed or acted on. */
+  const [resumeOffer, setResumeOffer] = useState(null);
+  const resumeTried = useRef(false);
+
+  const loadDrafts = useCallback(async () => {
+    const res = await api.call('/api/connectors/drafts', undefined, 'GET');
+    setDrafts((res.ok && res.data?.data) || []);
+  }, []);
+
   // `origin` is read from the click target BEFORE React unmounts it.
-  const startAuthoring = (origin) => {
+  const startAuthoring = (origin, withSeed = null) => {
     setGrowFrom(origin || null);
-    setAuthoring({});
+    setAuthoring({ seed: withSeed });
     setSelectedId(null);
     setDetail(null);
   };
+
+  /* Reopen a draft at the stage it was abandoned on. Everything the flow needs is
+     re-fetched, because the draft may have moved on since the pointer was written. */
+  const resumeDraft = useCallback(async (connectorId, versionId, step) => {
+    const [conRes, verRes] = await Promise.all([
+      api.getConnector(connectorId),
+      api.getConnectorVersions(connectorId),
+    ]);
+    const connector = (conRes.ok && conRes.data?.data) || null;
+    const versions = (verRes.ok && verRes.data?.data) || [];
+    const version = versions.find((v) => v.versionId === versionId);
+    // Gone, or published by someone else while you were away — say so rather than
+    // dumping the author into an empty flow.
+    if (!connector || !version || version.status !== 'draft') {
+      clearSession();
+      await loadDrafts();
+      showToast('That draft is no longer available', 'warning');
+      return false;
+    }
+    const [entRes, opRes] = await Promise.all([
+      api.call(`/api/connectors/${connectorId}/entities?versionId=${versionId}`, undefined, 'GET'),
+      api.call(`/api/connectors/${connectorId}/operations?versionId=${versionId}&includeHidden=true`, undefined, 'GET'),
+    ]);
+    setDetail(null); setSelectedId(null); setGrowFrom(null);
+    setAuthoring({
+      existing: {
+        connectorId,
+        connector,
+        version,
+        entities: (entRes.ok && entRes.data?.data?.entities) || [],
+        operations: (opRes.ok && opRes.data?.data) || [],
+        resumeStep: step ?? version.draftState?.step ?? null,
+      },
+    });
+    return true;
+  }, [loadDrafts, showToast]);
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- loads the drafts rail on mount via an async loader (data fetch, not derived state)
+  useEffect(() => { loadDrafts(); }, [loadDrafts]);
+
+  const discardSeed = () => { clearSeed(); setSeed(null); };
+  // Server drafts plus the one that exists only in this browser.
+  const draftCount = drafts.length + (seed ? 1 : 0);
+
+  /* Same shelf behaviour as the Dashboard's adapter row: arrows page it, a plain wheel
+     moves it sideways, and the scrollbar stays hidden. */
+  const draftRowRef = useRef(null);
+  const draftScroll = useHorizontalScroll(draftRowRef, [draftCount]);
 
   const custom = useMemo(() => connectors.filter((c) => !c.isSystem).length, [connectors]);
   const shown = useMemo(() => {
@@ -177,6 +284,53 @@ export default function StudioPage() {
       operations: (opRes.ok && opRes.data?.data) || [],
     });
   }, []);
+
+  /* Reopen Studio where it was left. Runs once: an author who then navigates inside
+     Studio must not be yanked back by a later re-render. A pointer older than the
+     freshness window becomes an offer instead — silently overriding where someone
+     chose to go is worse than a dismissible banner. */
+  useEffect(() => {
+    if (resumeTried.current) return;
+    resumeTried.current = true;
+    const session = readSession(userId);
+    if (!session?.connectorId) return;
+    if (session.view === 'authoring' && isFresh(session)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- restores the author's last place on mount; an action taken once, not state derived from props
+      resumeDraft(session.connectorId, session.versionId, session.step).then((ok) => {
+        if (ok) showToast(`Resumed where you left off — stage ${session.step ?? 1}`, 'info');
+      });
+    } else if (session.view === 'detail') {
+      openDetail(session.connectorId);
+    } else {
+      setResumeOffer(session);
+    }
+  }, [userId, resumeDraft, openDetail, showToast]);
+
+  /* Discarding a draft. A draft that is a connector's FIRST version is the whole
+     connector, so discarding removes it; a draft on top of a published connector is a
+     version, and deleting the connector would take the published one with it. */
+  const discardDraft = async (d) => {
+    const ok = await confirm({
+      title: 'Discard draft',
+      message: d.latestVersionId
+        ? `Delete the unpublished draft of "${d.name}"? The published version stays.`
+        : `Delete "${d.name}"? It was never published, so nothing else uses it.`,
+      confirmLabel: 'Discard',
+      danger: true,
+    });
+    if (!ok) return;
+    if (d.latestVersionId) {
+      showToast('This connector has a published version — open it to manage its versions', 'info');
+      await openDetail(d.connectorId);
+      return;
+    }
+    const res = await api.call(`/api/connectors/${d.connectorId}`, undefined, 'DELETE');
+    if (res.ok && res.data?.success) {
+      clearSession();
+      showToast('Draft discarded', 'success');
+      await Promise.all([loadDrafts(), loadConnectors()]);
+    } else showToast(res.data?.error || 'Could not discard the draft', 'error');
+  };
 
   // Opened from the global search (Topbar): auto-open the matched connector's detail,
   // then clear the navigation state so it doesn't re-open on re-render/back.
@@ -273,6 +427,23 @@ export default function StudioPage() {
         ]}
       />
 
+      {resumeOffer && (
+        <div className="wiz-note wiz-note--info studio-resume" style={{ marginBottom: 12 }}>
+          <span>
+            You were building a connector here earlier
+            {resumeOffer.step ? ` \u2014 stage ${resumeOffer.step} of 6` : ''}
+            {resumeOffer.savedAt ? `, ${sinceLabel(resumeOffer.savedAt)}` : ''}.
+          </span>
+          <span className="studio-resume-actions">
+            <button type="button" className="btn btn-primary btn-sm" onClick={() => {
+              setResumeOffer(null);
+              resumeDraft(resumeOffer.connectorId, resumeOffer.versionId, resumeOffer.step);
+            }}>Continue</button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setResumeOffer(null); clearSession(); }}>Dismiss</button>
+          </span>
+        </div>
+      )}
+
       <div className="catalog-split studio-split fit-col">
         <div className="panel catalog-tree">
           <div className="search-bar catalog-search">
@@ -323,10 +494,20 @@ export default function StudioPage() {
           {authoring && (
             <div ref={authoringRef} className="studio-authoring">
             <AuthoringFlow
+              /* Remounts when the draft changes, so switching between two half-built
+                 connectors starts the flow from that draft's own state instead of
+                 inheriting the previous one's. */
+              key={authoring.existing?.version?.versionId || 'new'}
               categories={categories}
               existing={authoring.existing}
-              onCancel={() => setAuthoring(null)}
-              onDone={async (id) => { setAuthoring(null); await loadConnectors(); if (id) await openDetail(id); }}
+              seed={authoring.seed}
+              userId={userId}
+              onCancel={async () => { setAuthoring(null); clearSession(); setSeed(readSeed(userId)); await loadDrafts(); }}
+              onDone={async (id) => {
+                setAuthoring(null); setSeed(null);
+                await Promise.all([loadConnectors(), loadDrafts()]);
+                if (id) await openDetail(id);
+              }}
               showToast={showToast}
             />
             </div>
@@ -338,21 +519,109 @@ export default function StudioPage() {
           )}
           {!authoring && !detail && (
             <div className="studio-blank">
-              {/* The hover styling used to be two inline mouse handlers writing to
-                  style; a :hover rule does the same thing and survives focus. */}
-              <button
-                type="button"
-                className="studio-cta"
-                onClick={(e) => startAuthoring(e.currentTarget.getBoundingClientRect())}
-              >
-                <span className="studio-cta-icon">{'\u{1F50C}'}</span>
-                <span className="studio-cta-title">+ Author a new connector</span>
-                <span className="studio-cta-body">
-                  Design a connector through the guided System Registration → Authentication →
-                  Operations → Entity Modelling → Test → Publish flow — or pick an existing
-                  connector on the left to manage it.
-                </span>
-              </button>
+              {/* Unfinished work comes FIRST. The point of autosaving a draft is that the
+                  author can find it again without remembering what it was called. */}
+              {(seed || drafts.length > 0) && (
+                <div className="studio-drafts">
+                  <div className="studio-drafts-head">
+                    <span>Continue building</span>
+                    <span className="studio-drafts-sub">
+                      {draftCount} unfinished {draftCount === 1 ? 'draft' : 'drafts'} &middot; saved automatically
+                    </span>
+                  </div>
+                  <div className="studio-draft-shelf">
+                    {draftScroll.overflowing && (
+                      <button type="button" className="ah-scroll-btn ah-left"
+                        onClick={() => draftScroll.scrollByPage(-1)} aria-label="Scroll drafts left">
+                        &#8249;
+                      </button>
+                    )}
+                  <div className="studio-draft-scroll" ref={draftRowRef}>
+                  <div className="studio-draft-grid">
+                    {seed && (
+                      <div className="studio-draft-card is-seed">
+                        <div className="studio-draft-title">
+                          <span className="studio-draft-icon">{seed.icon || '\u{1F50C}'}</span>
+                          <span className="studio-draft-name">{seed.name?.trim() || 'Untitled connector'}</span>
+                        </div>
+                        <div className="studio-draft-meta">
+                          Not registered yet &middot; Stage 1 &middot; {sinceShort(seed.savedAt)}
+                        </div>
+                        <div className="studio-draft-actions">
+                          <button type="button" className="btn btn-primary btn-sm"
+                            onClick={(e) => startAuthoring(e.currentTarget.getBoundingClientRect(), seed)}>Continue</button>
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={discardSeed}>Discard</button>
+                        </div>
+                      </div>
+                    )}
+                    {drafts.map((d) => (
+                      <div key={d.versionId} className="studio-draft-card">
+                        <div className="studio-draft-title">
+                          <span className="studio-draft-icon">{d.icon || '\u{1F50C}'}</span>
+                          <span className="studio-draft-name">{d.name}</span>
+                        </div>
+                        <div className="studio-draft-meta">
+                          {d.runtimeKind || 'custom'} &middot; Stage {d.draftState?.step ?? 1} of 6 &middot; {sinceShort(d.touchedAt)}
+                        </div>
+                        <div className="studio-draft-progress" aria-hidden="true">
+                          <span style={{ width: `${Math.round(((d.draftState?.step ?? 1) / 6) * 100)}%` }} />
+                        </div>
+                        <div className="studio-draft-actions">
+                          <button type="button" className="btn btn-primary btn-sm"
+                            onClick={() => resumeDraft(d.connectorId, d.versionId, d.draftState?.step)}>Continue</button>
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => discardDraft(d)}>Discard</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  </div>
+                    {draftScroll.overflowing && (
+                      <button type="button" className="ah-scroll-btn ah-right"
+                        onClick={() => draftScroll.scrollByPage(1)} aria-label="Scroll drafts right">
+                        &#8250;
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+              {/* The residual space was a dashed box asking you to click it, after which the
+                  flow's first screen asked which system type. That question is asked HERE
+                  instead: the panel's empty half becomes the first step, one click shorter.
+                  Non-runnable categories stay visible but unselectable — an author deserves
+                  to know a runtime exists before designing against it, and that it does not
+                  run yet before investing in one. */}
+              <div className="studio-launch">
+                <div className="studio-drafts-head">
+                  <span>Start a new connector</span>
+                  <span className="studio-drafts-sub">
+                    Pick a system type — then Authentication → Operations → Entities → Test → Publish
+                  </span>
+                </div>
+                <div className="studio-launch-scroll">
+                  <div className="studio-launch-grid">
+                    {categories.map((c) => {
+                      const badge = STATUS_BADGE[c.status] || (c.real ? STATUS_BADGE.ga : STATUS_BADGE.planned);
+                      const disabled = c.status === 'partial' || c.status === 'planned';
+                      return (
+                        <button
+                          key={c.key}
+                          type="button"
+                          className="studio-launch-card"
+                          disabled={disabled}
+                          title={disabled
+                            ? `Not selectable yet — ${c.statusNote || 'runtime incomplete'}`
+                            : (c.statusNote || c.note || `Author a ${c.label} connector`)}
+                          onClick={(e) => startAuthoring(e.currentTarget.getBoundingClientRect(), { catKey: c.key })}
+                        >
+                          <ConnectorIcon icon={c.icon} size={26} />
+                          <span className="studio-launch-label">{c.label}</span>
+                          <span className="studio-launch-badge" style={{ color: badge.color }}>{badge.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -484,25 +753,39 @@ function IconPicker({ value, onChange, category }) {
   );
 }
 
-function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
+function AuthoringFlow({ categories, existing, seed, userId, onCancel, onDone, showToast }) {
   const editMode = !!existing;
-  const [step, setStep] = useState(editMode ? 2 : 1);
+  /* Resume beats both defaults: a draft reopened from the rail or the session pointer
+     carries the stage it was abandoned on. Stage 1 is unreachable once registered, so an
+     edit that has no saved stage starts at 2 as before. */
+  const [step, setStep] = useState(existing?.resumeStep ?? (editMode ? 2 : 1));
   const [registered, setRegistered] = useState(editMode);
 
-  // Stage 1 — System Registration
-  const [cat, setCat] = useState(categories[0]);
-  const [name, setName] = useState(existing?.connector?.name || '');
-  const [icon, setIcon] = useState(existing?.connector?.icon || '\u{1F50C}');
-  const [direction, setDirection] = useState(existing?.connector?.category || 'source');
-  const [description, setDescription] = useState('');
-  const [tags, setTags] = useState((existing?.connector?.tags || []).join(', '));
-  const [visibility, setVisibility] = useState(existing?.connector?.visibility || 'private');
-  const [config, setConfig] = useState({}); // per-category §5 config field values
+  // Stage 1 — System Registration (`seed` = a Stage-1 form abandoned before registering)
+  /* A category chosen on the launcher (or carried in a saved Stage-1 seed) must bring its
+     WHOLE selection with it — the runtime kind and the default direction, exactly what
+     clicking a card inside stage 1 sets. Seeding only `cat` left runtimeKind on the first
+     category in the list, so picking "Database" would have registered a REST connector. */
+  const seededCat = (seed?.catKey && categories.find(c => c.key === seed.catKey)) || null;
+  const [cat, setCat] = useState(() => seededCat || categories[0]);
+  const [name, setName] = useState(existing?.connector?.name || seed?.name || '');
+  const [icon, setIcon] = useState(existing?.connector?.icon || seed?.icon || '\u{1F50C}');
+  const [direction, setDirection] = useState(
+    existing?.connector?.category || seed?.direction || seededCat?.defaultRole || 'source');
+  /* The category grid is the flow's opening question. Answered already — on the launcher —
+     re-asking it reads as "the click did nothing", so it collapses to the answer plus a
+     way to change it. */
+  const [catPickerOpen, setCatPickerOpen] = useState(!seededCat && !editMode);
+  const [description, setDescription] = useState(seed?.description || '');
+  const [tags, setTags] = useState((existing?.connector?.tags || []).join(', ') || seed?.tags || '');
+  const [visibility, setVisibility] = useState(existing?.connector?.visibility || seed?.visibility || 'private');
+  const [config, setConfig] = useState(seed?.config || {}); // per-category §5 config field values
 
   // Draft being authored/edited
   const [connectorId, setConnectorId] = useState(existing?.connectorId || null);
   const [versionId, setVersionId] = useState(existing?.version?.versionId || null);
-  const [runtimeKind, setRuntimeKind] = useState(existing?.version?.runtimeConfig?.runtimeKind || (categories[0]?.runtimeKind ?? 'rest'));
+  const [runtimeKind, setRuntimeKind] = useState(
+    existing?.version?.runtimeConfig?.runtimeKind || seededCat?.runtimeKind || (categories[0]?.runtimeKind ?? 'rest'));
   const [rc, setRc] = useState(existing?.version?.runtimeConfig || {});
   const [fields, setFields] = useState(existing?.version?.credentialSchema?.fields || []);
   const [auth, setAuth] = useState(existing?.version?.runtimeConfig?.auth || { type: 'none' });
@@ -512,8 +795,24 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
   const [catalogKeys, setCatalogKeys] = useState([]);
   const [busy, setBusy] = useState(false);
   const [testMsg, setTestMsg] = useState('');
+  /* Sample credentials for Stage 5. Deliberately the ONE piece of authoring state that is
+     never persisted — not to the draft, not to localStorage. The server rejects them too. */
   const [testCreds, setTestCreds] = useState({});
   const [tested, setTested] = useState(false);
+  /* The version row's last-known updatedAt, sent back as `expectedUpdatedAt` so a save
+     that would clobber another session's edit is refused instead of winning by luck. */
+  const [versionUpdatedAt, setVersionUpdatedAt] = useState(existing?.version?.updatedAt ?? null);
+  const [conflict, setConflict] = useState(false);
+  /* A background save must never race a test or publish writing the same row. Autosave
+     pauses while one is in flight and picks the change up when it clears. */
+  const [opInFlight, setOpInFlight] = useState(false);
+  const lastSaveError = useRef(null);
+  /* The design PUT and the resume-point PATCH both bump `updated_at`, and their responses
+     can land out of order. Only ever move the watermark FORWARD — adopting an older stamp
+     would make our own next save look stale and raise a conflict that never happened. */
+  const adoptUpdatedAt = (next) => setVersionUpdatedAt((prev) => (
+    !prev || (next && new Date(next) > new Date(prev)) ? (next ?? prev) : prev
+  ));
 
   // In edit mode, recover the category spec from the connector's runtimeKind.
   useEffect(() => {
@@ -673,10 +972,13 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
       const cId = res.data.data?.connector?.connectorId;
       const vId = res.data.data?.version?.versionId;
       setConnectorId(cId); setVersionId(vId);
+      setVersionUpdatedAt(res.data.data?.version?.updatedAt ?? null);
       await loadDraft(cId, vId);
       setRegistered(true);
+      // From here the server draft is the record — the local Stage-1 copy would only go stale.
+      clearSeed();
       setStep(nextStep(1));
-      showToast('System registered — continue the design', 'success');
+      showToast('System registered — your work saves automatically from here', 'success');
     } finally { setBusy(false); }
   };
 
@@ -685,8 +987,12 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
     entities.forEach((e) => { if (e.list || e.create) eo[e.key] = { list: e.list || undefined, create: e.create || undefined }; });
     return eo;
   };
-  const saveDraft = async () => {
-    setBusy(true);
+  /* `silent` is what autosave uses: same write, no toast and no busy-spinner, because a
+     background save must not flash the UI or disable the controls under the author's
+     cursor. The manual Save Draft button still announces itself. */
+  const saveDraft = async ({ silent = false } = {}) => {
+    if (!connectorId || !versionId) return false;
+    if (!silent) setBusy(true);
     // The Crawl Recorder (and session/login capture) write these keys straight into the
     // version's categoryConfig, out-of-band from this form's in-memory `rc`. Re-read the
     // latest categoryConfig and preserve those recorder-managed keys, otherwise saving/
@@ -705,16 +1011,88 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
       runtimeConfig: { ...rc, categoryConfig, runtimeKind, baseUrlField, auth, entityOps: buildEntityOps() },
       operations: ops,
       entities: entities.map((e) => ({ key: e.key, name: e.name, description: e.description, defaultOn: e.defaultOn, masterEntityKey: e.masterEntityKey || null, naturalKey: e.naturalKey || null, discovery: e.discovery, fields: e.fields })),
+      draftState: { step, savedAt: new Date().toISOString() },
+      expectedUpdatedAt: versionUpdatedAt ?? undefined,
     }, 'PUT');
+    if (!silent) setBusy(false);
+    if (res.ok && res.data?.success) {
+      adoptUpdatedAt(res.data.data?.updatedAt ?? null);
+      setConflict(false);
+      if (!silent) showToast('Design saved', 'success');
+      return true;
+    }
+    /* 409 = someone else changed this draft since we read it. Surfacing it is the whole
+       point — the alternative is one author's work vanishing without a trace. */
+    if (res.status === 409 || /another session/i.test(res.data?.error || '')) {
+      setConflict(true);
+      if (!silent) showToast('This draft changed in another session', 'warning');
+      return false;
+    }
+    lastSaveError.current = res.data?.error || 'Save failed';
+    if (!silent) showToast(lastSaveError.current, 'error');
+    return false;
+  };
+
+  /* What autosave watches. Only the DESIGN — not `step`, not test state — so moving
+     between stages does not masquerade as an edit. Stage changes save the resume point
+     through the cheap PATCH below instead. */
+  const designSignature = JSON.stringify({ fields, rc, runtimeKind, auth, ops, entities });
+
+  const autosave = useAutosave(designSignature, async () => {
+    const ok = await saveDraft({ silent: true });
+    if (!ok) throw new Error(lastSaveError.current || 'Save failed');
+    return true;
+  }, { enabled: registered && !!connectorId && !!versionId && !conflict && !opInFlight });
+
+  /* The resume point is written on every stage change — one column, no design payload, so
+     navigating is cheap. It also lands in localStorage, which is what lets Studio reopen
+     here after the whole browser is closed. */
+  useEffect(() => {
+    if (!registered || !connectorId || !versionId) return;
+    writeSession(userId, { view: 'authoring', connectorId, versionId, step });
+    api.call(`/api/connectors/${connectorId}/versions/${versionId}/draft-state`,
+      { draftState: { step, savedAt: new Date().toISOString() } }, 'PATCH')
+      .then((res) => { if (res.ok && res.data?.success) adoptUpdatedAt(res.data.data?.updatedAt ?? null); });
+  }, [step, registered, connectorId, versionId, userId]);
+
+  /* Stage 1 has no draft to save into yet, so the form itself is mirrored locally. Cleared
+     the moment registration succeeds — from then on the server draft is the record. */
+  useEffect(() => {
+    if (registered) return undefined;
+    const t = setTimeout(() => {
+      const empty = !name.trim() && !description.trim() && !Object.keys(config).length;
+      if (empty) return;
+      writeSeed(userId, { catKey: cat?.key, name, icon, direction, description, tags, visibility, config });
+    }, 600);
+    return () => clearTimeout(t);
+  }, [registered, userId, cat, name, icon, direction, description, tags, visibility, config]);
+
+  /* Reload the draft from the server, discarding the local copy. The escape hatch from a
+     conflict, and the only honest one — the other session's version is the current truth. */
+  const reloadDraft = async () => {
+    if (!connectorId || !versionId) return;
+    setBusy(true);
+    await loadDraft(connectorId, versionId);
+    const vres = await api.call(`/api/connectors/${connectorId}/versions/${versionId}`, undefined, 'GET');
+    setVersionUpdatedAt((vres.ok && vres.data?.data?.updatedAt) || null);
+    setConflict(false);
     setBusy(false);
-    if (res.ok && res.data?.success) { showToast('Design saved', 'success'); return true; }
-    showToast(res.data?.error || 'Save failed', 'error'); return false;
+    showToast('Reloaded the latest version of this draft', 'success');
   };
 
   const testConnection = async () => {
     setTestMsg('Saving design + testing…');
-    const ok = await saveDraft();
+    // Autosave stands down for the duration: the test saves the row itself, and two
+    // writers on one version is exactly what the stale-write guard would (rightly) reject.
+    setOpInFlight(true);
+    try {
+      await runTest();
+    } finally { setOpInFlight(false); }
+  };
+  const runTest = async () => {
+    const ok = await saveDraft({ silent: true });
     if (!ok) { setTestMsg('Save failed'); return; }
+    autosave.markSaved(designSignature);
     let res;
     if (runtimeKind === 'sharepoint') {
       // SharePoint still executes via its dedicated handler (credential-specific).
@@ -736,11 +1114,20 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
     }
   };
   const publish = async () => {
-    const saved = await saveDraft();
-    if (!saved) return;
-    const res = await api.call(`/api/connectors/${connectorId}/versions/${versionId}/publish`, { tested: canTest ? tested : true });
-    if (res.ok && res.data?.success) { showToast('Connector published', 'success'); onDone(connectorId); }
-    else showToast(res.data?.error || 'Publish failed', 'error');
+    setOpInFlight(true);
+    try {
+      const saved = await saveDraft({ silent: true });
+      if (!saved) return;
+      autosave.markSaved(designSignature);
+      const res = await api.call(`/api/connectors/${connectorId}/versions/${versionId}/publish`, { tested: canTest ? tested : true });
+      if (res.ok && res.data?.success) {
+        // Published: there is nothing left to resume, so the pointer and the Stage-1 seed
+        // go with it — otherwise Studio would keep offering to reopen finished work.
+        clearSession(); clearSeed();
+        showToast('Connector published', 'success');
+        onDone(connectorId);
+      } else showToast(res.data?.error || 'Publish failed', 'error');
+    } finally { setOpInFlight(false); }
   };
 
   const setField = (i, p) => setFields((a) => a.map((f, idx) => idx === i ? { ...f, ...p } : f));
@@ -757,6 +1144,45 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'visible' }}>
+      {/* Two sessions edited the same draft. Neither copy is discarded silently: the
+          author chooses which one survives. */}
+      {conflict && (
+        <div className="wiz-note wiz-note--error studio-conflict" style={{ marginBottom: 12, flexShrink: 0 }}>
+          <span>
+            <strong>This draft changed somewhere else.</strong>{' '}
+            Another tab or author saved it after you opened it, so your changes are not being saved.
+          </span>
+          <span className="studio-resume-actions">
+            <button type="button" className="btn btn-outline btn-sm" onClick={reloadDraft}>
+              Reload theirs
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={async () => {
+              setVersionUpdatedAt(null);   // drop the guard: save unconditionally
+              setConflict(false);
+              const ok = await saveDraft({ silent: true });
+              if (ok) { autosave.markSaved(designSignature); showToast('Your version is saved', 'success'); }
+            }}>
+              Keep mine
+            </button>
+          </span>
+        </div>
+      )}
+      {registered && (
+        <div className={`studio-savechip is-${autosave.status}`} aria-live="polite">
+          <span className="studio-savechip-dot" aria-hidden="true" />
+          {autosave.status === 'saving' && 'Saving…'}
+          {autosave.status === 'dirty' && 'Unsaved changes'}
+          {autosave.status === 'error' && (
+            <>
+              Couldn&apos;t save &mdash; {autosave.error}
+              <button type="button" className="wiz-linkish" onClick={autosave.flush}>Retry</button>
+            </>
+          )}
+          {(autosave.status === 'saved' || autosave.status === 'idle') && (
+            autosave.savedAt ? `Saved ${sinceLabel(autosave.savedAt)}` : 'Saves automatically'
+          )}
+        </div>
+      )}
       <div className="studio-stepper" style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap', flexShrink: 0 }}>
         {STAGES.map((s, i) => {
           const st = stepState(i + 1);
@@ -784,7 +1210,28 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
       {step === 1 && (
         <div>
           <div style={{ fontWeight: 'var(--fw-bold)', marginBottom: 10 }}>1. System Registration</div>
-          <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)', marginBottom: 8 }}>Choose the system category ({categories.length})</div>
+          {!catPickerOpen && cat && (
+            <div className="studio-chosen-cat">
+              <ConnectorIcon icon={cat.icon} size={20} />
+              <span className="studio-chosen-label">{cat.label}</span>
+              <span className="studio-chosen-note">system type</span>
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => setCatPickerOpen(true)}>
+                Change
+              </button>
+            </div>
+          )}
+          {catPickerOpen && (
+          <>
+          <div className="studio-picker-head">
+            <span>Choose the system category ({categories.length})</span>
+            {/* Only offered when there is something to go back TO: on a brand-new connector
+                no category has been chosen yet, so "keep" would mean nothing. */}
+            {seededCat && (
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => setCatPickerOpen(false)}>
+                Keep {cat?.label}
+              </button>
+            )}
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px,1fr))', gap: 8, marginBottom: 14 }}>
             {categories.map((c) => {
               const badge = STATUS_BADGE[c.status] || (c.real ? STATUS_BADGE.ga : STATUS_BADGE.planned);
@@ -796,7 +1243,7 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
               <div key={c.key} className="card"
                 title={disabled ? `Not selectable yet — ${c.statusNote || 'runtime incomplete'}` : (c.statusNote || c.note || '')}
                 style={{ cursor: disabled ? 'not-allowed' : 'pointer', padding: 10, textAlign: 'center', opacity: disabled ? 0.45 : 1, borderColor: cat?.key === c.key ? 'var(--primary)' : undefined }}
-                onClick={() => { if (disabled) return; setCat(c); setRuntimeKind(c.runtimeKind); setDirection(c.defaultRole || 'source'); setConfig({}); }}>
+                onClick={() => { if (disabled) return; setCat(c); setRuntimeKind(c.runtimeKind); setDirection(c.defaultRole || 'source'); setConfig({}); setCatPickerOpen(false); }}>
                 <div><ConnectorIcon icon={c.icon} size={22} /></div>
                 <div style={{ fontSize: 'var(--fs-xs)', fontWeight: 'var(--fw-semibold)' }}>{c.label}</div>
                 <div style={{ fontSize: 'var(--fs-xs)', color: badge.color, fontWeight: 'var(--fw-semibold)' }}>{badge.label}</div>
@@ -804,7 +1251,13 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
             );
             })}
           </div>
+          </>
+          )}
 
+          {/* The rest of stage 1 describes the system you picked, so it has no meaning while
+              you are picking one. Showing a name/icon/config form under a grid of twelve
+              systems asked two questions at once. */}
+          {!catPickerOpen && (<>
           <div className="form-row">
             <div className="form-group"><label htmlFor="studiopage-connector-name">Connector Name *</label><input id="studiopage-connector-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Acme CRM" /></div>
             <div className="form-group" style={{ maxWidth: 160 }}><label>Icon</label><IconPicker value={icon} onChange={setIcon} category={cat} /></div>
@@ -822,23 +1275,30 @@ function AuthoringFlow({ categories, existing, onCancel, onDone, showToast }) {
 
           {cat && (
             <div className="card" style={{ background: 'var(--bg-main)', padding: 12, marginTop: 6 }}>
-              <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-sm)', marginBottom: 8 }}>{cat.label} configuration</div>
-              {cat.key === 'sharepoint' && <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)' }}>SharePoint uses the built-in Microsoft Graph runtime — credential fields and list discovery are set up for you.</div>}
-              {cat.key === 'database' && <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginBottom: 8 }}>Builds a reusable engine template (Docker-image model). <strong>No database is contacted now</strong> — the Operator connects in the Wizard.</div>}
+              {/* Orientation before the form, not after it: the note explains what the
+                  fields are for, so it read as an afterthought sitting under them. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                <span style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-sm)' }}>{cat.label} configuration</span>
+                {cat.note && <InfoHint text={cat.note} label={`${cat.label} configuration`} />}
+              </div>
+              {cat.key === 'sharepoint' && <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginBottom: 10 }}>SharePoint uses the built-in Microsoft Graph runtime — credential fields and list discovery are set up for you.</div>}
+              {cat.key === 'database' && <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginBottom: 10 }}>Builds a reusable engine template (Docker-image model). <strong>No database is contacted now</strong> — the Operator connects in the Wizard.</div>}
               <ConfigFields fields={cat.configFields} values={config} onChange={(k, v) => setConfig((c) => ({ ...c, [k]: v }))} />
               {cat.status && cat.status !== 'ga' && cat.statusNote && (
-                <div style={{ fontSize: 'var(--fs-xs)', color: cat.status === 'beta' ? 'var(--warning)' : 'var(--text-dim)', marginTop: 8 }}>
+                <div style={{ fontSize: 'var(--fs-xs)', color: cat.status === 'beta' ? 'var(--warning)' : 'var(--text-dim)', marginTop: 10 }}>
                   {cat.status === 'beta' ? 'β Beta — ' : '◐ Partial — '}{cat.statusNote}
                 </div>
               )}
-              {!cat.real && <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--warning-on)', marginTop: 8 }}>⚠ This category has no execution runtime yet — you can fully design &amp; publish it, but it won't move data until its runtime is added.</div>}
-              {cat.note && <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginTop: 6 }}>{cat.note}</div>}
+              {!cat.real && <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--warning-on)', marginTop: 10 }}>⚠ This category has no execution runtime yet — you can fully design &amp; publish it, but it won't move data until its runtime is added.</div>}
             </div>
           )}
+          </>)}
 
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16, position: 'sticky', bottom: 0, background: 'var(--bg-card)', borderTop: '1px solid var(--border)', padding: '12px 0', zIndex: 5 }}>
             <button className="btn btn-outline" onClick={onCancel}>Cancel</button>
-            <Button className="btn btn-primary" loading={busy} loadingLabel="Registering" onClick={register}>Register system →</Button>
+            {!catPickerOpen && (
+              <Button className="btn btn-primary" loading={busy} loadingLabel="Registering" onClick={register}>Register system →</Button>
+            )}
           </div>
         </div>
       )}

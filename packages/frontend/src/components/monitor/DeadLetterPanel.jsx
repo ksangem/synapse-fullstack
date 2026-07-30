@@ -3,6 +3,7 @@ import { api } from '../../services/api';
 import Button from '../ui/Button';
 import { useToast } from '../../hooks/useToast';
 import { SkeletonLines } from '../layout/Skeleton';
+import TableFrame from '../ui/TableFrame';
 
 // Dead Letter Queue panel (T-04 manual replay). Lists real dead-lettered
 // messages and lets an operator replay them — single row or all at once.
@@ -106,7 +107,7 @@ export default function DeadLetterPanel({ fill = false }) {
           No dead-lettered messages. &#127881; Failed hub deliveries will appear here for replay.
         </div>
       ) : (
-        <div className="table-wrap">
+        <TableFrame label="Dead-letter queue">
           <table>
             <thead>
               <tr>
@@ -145,7 +146,7 @@ export default function DeadLetterPanel({ fill = false }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </TableFrame>
       )}
     </div>
   );

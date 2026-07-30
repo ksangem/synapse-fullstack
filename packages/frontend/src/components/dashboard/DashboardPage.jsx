@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDetailPane } from '../../hooks/useDetailPane';
 import { useToast } from '../../hooks/useToast';
+import { useHorizontalScroll } from '../../hooks/useHorizontalScroll';
 import { useToolbarAction } from '../../hooks/useToolbarAction';
 import { api } from '../../services/api';
 import { mapToCard, computeKpis, statusLabel, nextRunFromCron, relativeTime } from '../../services/integrationMap';
@@ -9,6 +10,7 @@ import { Skeleton, SkeletonCards } from '../layout/Skeleton';
 import { OutcomesChart, VolumeChart } from './ActivityCharts';
 import NeedsAttentionPanel from './NeedsAttentionPanel';
 import Card from '../ui/Card';
+import EndpointRoute from '../ui/EndpointRoute';
 import { useCountUp } from '../../hooks/useCountUp';
 import { clickable } from '../../utils/clickable';
 
@@ -24,11 +26,11 @@ function IntegrationDetailContent({ tile }) {
       <div className="grid-2 mb-16">
         <div>
           <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Source</div>
-          <span style={{ fontSize: 'var(--fs-base)' }}>{tile.src}</span>
+          <span style={{ fontSize: 'var(--fs-base)' }}>{tile.srcLabel}</span>
         </div>
         <div>
           <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Destination</div>
-          <span style={{ fontSize: 'var(--fs-base)' }}>{tile.dest}</span>
+          <span style={{ fontSize: 'var(--fs-base)' }}>{tile.destLabel}</span>
         </div>
         <div>
           <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Status</div>
@@ -140,9 +142,7 @@ function HealthTile({ tile, onOpen, style }) {
       ariaLabel={`${tile.name}, ${h.label}, ${tile.route}`}
       sub={
         <>
-          <span className="ucard-node"><span className="ucard-ico" aria-hidden="true">{tile.srcIcon}</span>{tile.src}</span>
-          <span className="ucard-arrow" aria-hidden="true">&rarr;</span>
-          <span className="ucard-node"><span className="ucard-ico" aria-hidden="true">{tile.destIcon}</span>{tile.dest}</span>
+          <EndpointRoute tile={tile} />
         </>
       }
       foot={
@@ -169,12 +169,10 @@ export default function DashboardPage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [timeRange, setTimeRange] = useState('Last 24 hours');
 
-  // Adapter Health row: scroll by ~80% of the visible width per arrow click.
+  // Adapter Health row: arrows page it, and a plain wheel over it scrolls it sideways
+  // (shared with the Studio drafts shelf, so both rows answer the same gestures).
   const adapterRowRef = useRef(null);
-  const scrollAdapters = (dir) => {
-    const el = adapterRowRef.current;
-    if (el) el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: 'smooth' });
-  };
+  const { scrollByPage: scrollAdapters } = useHorizontalScroll(adapterRowRef);
 
   // ── Real data (T-07) ──
   const [cards, setCards] = useState([]);

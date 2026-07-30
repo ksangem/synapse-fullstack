@@ -1,6 +1,7 @@
 import { relativeTime } from '../../services/integrationMap';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
+import EndpointRoute from '../ui/EndpointRoute';
 import { RunProgressStrip } from './RunProgress';
 
 /* Registry card — now composed from the shared `Card` base, which owns the
@@ -49,13 +50,7 @@ export default function IntegrationCard({ int, onOpen, onRun, onLogs, running, r
       onSelect={onSelect}
       onOpen={() => onOpen(int)}
       ariaLabel={`${int.name}, ${h.label}, ${int.route}`}
-      sub={
-        <>
-          <span className="ucard-node"><span className="ucard-ico" aria-hidden="true">{int.srcIcon}</span>{int.src}</span>
-          <span className="ucard-arrow" aria-hidden="true">→</span>
-          <span className="ucard-node"><span className="ucard-ico" aria-hidden="true">{int.destIcon}</span>{int.dest}</span>
-        </>
-      }
+      sub={<EndpointRoute tile={int} />}
       foot={
         <>
           <span

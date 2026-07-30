@@ -2,6 +2,10 @@
 
 /* ===== THEME VARIABLES ===== */
 html.light-theme{
+/* Tell the UA which scheme we are in. Without it Chrome follows the OS preference and
+   paints native form widgets (the date input's calendar glyph, autofill, native scrollbars)
+   for the WRONG scheme — a white calendar icon on our lavender input. */
+color-scheme:light;
 --bg-main:#ede9fe;--bg-sidebar:#1e1245;--bg-card:#ffffff;--bg-card-hover:#eeeaff;
 --bg-input:#f5f3ff;--border:#d8d0f0;--border-light:#c4b5fd;
 /* Boundary of an INTERACTIVE control (input, select, textarea, outline button).
@@ -37,8 +41,12 @@ html.light-theme{
 --shadow-sm:var(--elev-1);--shadow-md:var(--elev-2);
 --json-bg:#f8fafc;--scrollbar-thumb:#cbd5e1;
 --toolbar-height:40px;
+/* Date-input calendar glyph. Indigo ink reads at 8.4:1 on the lavender --bg-input,
+   where the UA default (near-white in a dark UA scheme) was invisible. */
+--date-icon:#4338ca;--date-icon-hover:#312e81;
 }
 html.dark-theme{
+color-scheme:dark;
 /* Dark theme: the sidebar was the SAME value as the card, so nothing had elevation
    separation. It now sits one step back from the cards that float above it. */
 --bg-main:#0f0f1a;--bg-sidebar:#15152a;--bg-card:#1a1a2e;--bg-card-hover:#252546;
@@ -66,6 +74,8 @@ html.dark-theme{
 --shadow-sm:var(--elev-1);--shadow-md:var(--elev-2);
 --json-bg:#0d0d18;--scrollbar-thumb:#333;
 --toolbar-height:40px;
+/* Dark surface: the light indigo step, matching --primary-on. */
+--date-icon:#a5b4fc;--date-icon-hover:#c7d2fe;
 --sidebar-text:var(--text);--sidebar-text-dim:var(--text-dim);--sidebar-text-active:var(--primary-on);--sidebar-active-bg:var(--primary-dim);--sidebar-hover-bg:rgba(99,102,241,.08);
 --topbar-bg:var(--bg-sidebar);--topbar-text:var(--text);
 }
@@ -77,15 +87,31 @@ html.dark-theme{
 
 /* ===== MOTION TOKENS =====
    Duration is chosen by how far/complex the change is, not by taste. Easing follows
-   the physical convention: things entering decelerate, things leaving accelerate. */
+   the physical convention: things entering decelerate, things leaving accelerate.
+
+   These were all roughly half their current length, which is why the app read as
+   flat: an 8px move over 220ms is over before the eye tracks it, so it registers as
+   a pop, not as motion. The ENTRANCE steps are now long enough to be followed.
+   --dur-instant deliberately did NOT change — hover and focus feedback must feel
+   immediate, and slowing them reads as lag, which is the opposite of flow. */
 --dur-instant:80ms;   /* colour/opacity swap — hover, focus ring        */
---dur-fast:140ms;     /* press, toggle, small reveal                    */
---dur-base:220ms;     /* panel/menu open, expand, tab change            */
---dur-slow:320ms;     /* drawer, detail pane, route change              */
+--dur-fast:190ms;     /* press, toggle, small reveal                    */
+--dur-base:360ms;     /* panel/menu open, expand, tab change            */
+--dur-slow:560ms;     /* drawer, modal, theme change                    */
+--dur-slower:820ms;   /* page/route level choreography                  */
 --ease-out:cubic-bezier(.16,.84,.44,1);      /* enters, expands         */
 --ease-in:cubic-bezier(.55,0,.85,.35);       /* exits, collapses        */
 --ease-inout:cubic-bezier(.65,0,.35,1);      /* moves between states    */
 --ease-spring:cubic-bezier(.34,1.4,.64,1);   /* press RELEASE only      */
+/* Near-expo decel: covers most of the distance early, then glides to a stop. This is
+   the curve that makes a long entrance feel intentional rather than slow. */
+--ease-glide:cubic-bezier(.22,1,.36,1);      /* long entrances          */
+
+/* Stagger steps for cascading lists. Every caller caps its index (Math.min(i, 12–14)),
+   so the tail is bounded at ~14 × the step no matter how many rows render — which is
+   what keeps a 10,000-row Monitor table from scheduling a ten-minute cascade. */
+--stagger:46ms;        /* cards, tiles, alerts — the visible sweep      */
+--stagger-tight:22ms;  /* dense rows and chart bars                     */
 
 /* The standard interactive transition. Replaces `transition:all`, which also animated
    layout properties (width/padding/font-size) on the main thread — the app's main
@@ -155,8 +181,12 @@ a{color:var(--primary);text-decoration:none}
 .panel{border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--bg-card)}
 
 /* Confirm / prompt dialog (replaces window.confirm / window.prompt) */
-.modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;z-index:1000;padding:16px;animation:modalFadeIn var(--dur-fast) var(--ease-out)}
-.modal-dialog{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-md);width:100%;max-width:420px;padding:24px}
+.modal-overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;z-index:1000;padding:16px;animation:modalFadeIn var(--dur-base) var(--ease-out)}
+/* The dialog had NO entrance — only the backdrop faded, so the box itself snapped
+   into existence over a dimming screen. It now rises into the fade with it. */
+.modal-dialog{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-md);width:100%;max-width:420px;padding:24px;
+  animation:modalPop var(--dur-slow) var(--ease-glide) backwards;animation-delay:40ms}
+@keyframes modalPop{from{opacity:0;transform:translateY(20px) scale(.96)}}
 .modal-title{font-weight:var(--fw-bold);font-size:var(--fs-md);margin-bottom:8px;color:var(--text)}
 .modal-message{font-size:var(--fs-base);color:var(--text-secondary);line-height:var(--lh-normal)}
 .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
@@ -164,6 +194,28 @@ a{color:var(--primary);text-decoration:none}
 button{font-family:inherit;cursor:pointer;border:none;outline:none;font-size:var(--fs-base)}
 input,select,textarea{font-family:inherit;background:var(--bg-input);border:1px solid var(--border-strong);color:var(--text);border-radius:var(--radius-sm);padding:8px 12px;font-size:var(--fs-base);outline:none;transition:border-color var(--dur-instant) var(--ease-out)}
 input:focus,select:focus,textarea:focus{border-color:var(--primary)}
+
+/* Date/time picker glyph. The UA-drawn indicator can only be recoloured by hacks
+   (filter:invert), which fight the theme. Instead we mask our own calendar path and
+   FILL it with a theme variable, so it tracks light/dark like every other icon. */
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="month"]::-webkit-calendar-picker-indicator,
+input[type="week"]::-webkit-calendar-picker-indicator{
+  width:15px;height:15px;padding:0;margin-left:6px;cursor:pointer;opacity:1;
+  background-color:var(--date-icon);background-image:none;
+  -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+  -webkit-mask-position:center;mask-position:center;
+  -webkit-mask-size:contain;mask-size:contain;
+  -webkit-mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cpath d='M16 2v4M8 2v4M3 10h18'/%3E%3C/svg%3E");
+  mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2'/%3E%3Cpath d='M16 2v4M8 2v4M3 10h18'/%3E%3C/svg%3E");
+  transition:background-color var(--dur-instant) var(--ease-out)}
+input[type="date"]::-webkit-calendar-picker-indicator:hover,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover,
+input[type="month"]::-webkit-calendar-picker-indicator:hover,
+input[type="week"]::-webkit-calendar-picker-indicator:hover{background-color:var(--date-icon-hover)}
+/* Firefox has no ::-webkit- pseudo; color-scheme above already gives it the right glyph. */
+input[type="time"]::-webkit-calendar-picker-indicator{opacity:1;cursor:pointer}
 /* Visible keyboard focus ring (mouse clicks are unaffected via :focus-visible). */
 :focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 /* Thin, theme-styled scrollbars: keep a scroll affordance but stay unobtrusive.
@@ -318,10 +370,12 @@ input:focus,select:focus,textarea:focus{border-color:var(--primary)}
 /* The page never scrolls itself: it's a flex column that fills the content area.
    The header stays pinned (flex-shrink:0) and only .page-body scrolls, so the
    content container always fits the screen and its content scrolls if needed. */
-.page.active{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;padding:0 24px;animation:pageFadeIn var(--dur-base) var(--ease-out)}
+.page.active{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;padding:0 24px;animation:pageFadeIn var(--dur-slower) var(--ease-glide)}
 .page-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-bottom:24px}
 .wizard-content{min-height:0;padding-bottom:40px}
-@keyframes pageFadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+/* The route change is the app's biggest state change and had the smallest move in it
+   (4px). It now rises far enough to read as the page arriving. */
+@keyframes pageFadeIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
 .page-header{flex-shrink:0;background:var(--bg-main);display:flex;align-items:center;justify-content:space-between;gap:12px;padding:20px 0 14px;margin-bottom:12px}
 /* Now a real <h1> — reset the UA margin and keep the line tight. */
 .page-title{font-size:var(--fs-xl);font-weight:var(--fw-bold);margin:0;line-height:var(--lh-tight)}
@@ -338,8 +392,17 @@ input:focus,select:focus,textarea:focus{border-color:var(--primary)}
 .page-subtitle{font-size:var(--fs-base);color:var(--text-secondary);margin-top:2px}
 
 /* ===== DETAIL PANE (replaces all modals) ===== */
-.detail-pane{width:0;min-width:0;overflow:hidden;background:var(--bg-card);border-left:1px solid var(--border);box-shadow:-2px 0 12px rgba(0,0,0,.08);display:flex;flex-direction:column;transition:width var(--dur-slow) var(--ease-inout),min-width var(--dur-slow) var(--ease-inout);flex-shrink:0;z-index:var(--z-base)}
+/* Pinned to --dur-base, NOT --dur-slow: this transition animates `width`, which
+   re-runs layout on the page beside it every frame. It is the one place in the app
+   where a longer duration buys jank rather than flow, so it stays short while its
+   CONTENT (below) carries the softness instead. */
+.detail-pane{width:0;min-width:0;overflow:hidden;background:var(--bg-card);border-left:1px solid var(--border);box-shadow:-2px 0 12px rgba(0,0,0,.08);display:flex;flex-direction:column;transition:width var(--dur-base) var(--ease-inout),min-width var(--dur-base) var(--ease-inout);flex-shrink:0;z-index:var(--z-base)}
 .detail-pane.open{width:420px;min-width:420px}
+/* The pane used to reveal fully-formed content inside a box that was still growing,
+   which is what made it read as a panel being stretched rather than one arriving.
+   The body now drifts in behind the opening edge. */
+.detail-pane.open .detail-pane-body{animation:dpBodyIn var(--dur-slow) var(--ease-glide) backwards;animation-delay:var(--dur-fast)}
+@keyframes dpBodyIn{from{opacity:0;transform:translateX(16px)}}
 .detail-pane-header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg-card)}
 .detail-pane-header .dp-title{font-weight:var(--fw-bold);font-size:var(--fs-md);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
 /* Standalone, not scoped to .detail-pane-header — it is reused by the My Connections
@@ -408,6 +471,15 @@ input:focus,select:focus,textarea:focus{border-color:var(--primary)}
 
 .card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--space-5);transition:var(--t-interactive);box-shadow:var(--shadow-sm)}
 .card:hover{border-color:var(--border-light)}
+/* Status on a plain card, carried by a left rail — the one channel the card system
+   already uses (see components/ui/Card.jsx). Replaces ad-hoc `border:2px solid …`,
+   which thickened the box on all four sides, nudged its neighbours by a pixel and
+   read as an alarm even when the state was "done". */
+.card.is-accent,.card.is-warning,.card.is-success,.card.is-error{
+  padding-left:calc(var(--space-5) - 3px);border-left:4px solid var(--primary)}
+.card.is-warning{border-left-color:var(--warning)}
+.card.is-success{border-left-color:var(--success)}
+.card.is-error{border-left-color:var(--error)}
 
 .badge{padding:2px 8px;border-radius:10px;font-size:var(--fs-xs);font-weight:var(--fw-semibold);display:inline-flex;align-items:center;gap:4px}
 .badge-success{background:var(--success-dim);color:var(--success-on)}
@@ -502,6 +574,11 @@ th[aria-sort]:not([aria-sort="none"]) .th-sort-icon{opacity:1}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)}
 .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--space-4)}
 .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-4)}
+/* A grid item defaults to min-width:auto — it REFUSES to shrink below its content, so one
+   wide child (a preview table, a long unbroken id) blows its 1fr column open and pushes the
+   page past the screen. These columns must always divide the width they are given, and wide
+   content must scroll inside its own box. */
+.grid-2>*,.grid-3>*,.grid-4>*{min-width:0}
 .flex{display:flex}.flex-col{flex-direction:column}.items-center{align-items:center}.justify-between{justify-content:space-between}.gap-4{gap:var(--space-1)}.gap-6{gap:6px}.gap-8{gap:var(--space-2)}.gap-12{gap:var(--space-3)}.gap-16{gap:var(--space-4)}.gap-20{gap:var(--space-5)}
 .mb-4{margin-bottom:var(--space-1)}.mb-8{margin-bottom:var(--space-2)}.mb-12{margin-bottom:var(--space-3)}.mb-16{margin-bottom:var(--space-4)}.mb-20{margin-bottom:var(--space-5)}.mb-24{margin-bottom:var(--space-6)}
 .mt-8{margin-top:var(--space-2)}.mt-12{margin-top:var(--space-3)}.mt-16{margin-top:var(--space-4)}.mt-20{margin-top:var(--space-5)}.mt-24{margin-top:var(--space-6)}
@@ -748,13 +825,29 @@ button.wiz-step.is-done:hover .wiz-step-token{filter:brightness(1.1)}
 .wiz-actions-left,.wiz-actions-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .wiz-actions-right{margin-left:auto}
 .wiz-meter{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px;max-width:340px}
+/* On the last step this is the push readout, not a step counter, and it carries a
+   sentence — it gets the room the step label never needed. */
+.wiz-meter.is-push{max-width:min(620px,52%)}
 .wiz-meter-text{font-size:var(--fs-xs);color:var(--text-secondary);display:flex;justify-content:space-between;gap:8px}
 .wiz-meter-text strong{color:var(--text);font-weight:var(--fw-semibold)}
+.wiz-meter-text > :last-child{flex-shrink:0;white-space:nowrap;font-variant-numeric:tabular-nums}
+.wiz-meter-label{display:flex;align-items:center;gap:7px;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The state IS the message here, so it is the one bit of the bar that carries colour. */
+.wiz-meter-text.is-busy .wiz-meter-label,
+.wiz-meter-text.is-idle .wiz-meter-label{color:var(--text);font-weight:var(--fw-semibold)}
+.wiz-meter-text.is-good .wiz-meter-label{color:var(--success-on);font-weight:var(--fw-semibold)}
+.wiz-meter-text.is-bad .wiz-meter-label{color:var(--error-on);font-weight:var(--fw-semibold)}
+.wiz-meter-text.is-info .wiz-meter-label{color:var(--warning-on);font-weight:var(--fw-semibold)}
 .wiz-meter-track{height:4px;border-radius:2px;background:var(--bg-input);overflow:hidden}
 .wiz-meter-fill{height:100%;border-radius:2px;background:var(--primary-solid);
   transition:width var(--dur-slow) var(--ease-out)}
 /* A run with failures colours its own bar — the number alone is easy to skim past. */
-.wiz-meter-fill.is-fail{background:var(--error-solid)}
+.wiz-meter-fill.is-fail,.wiz-meter-fill.is-bad{background:var(--error-solid)}
+.wiz-meter-fill.is-good{background:var(--success-solid)}
+.wiz-meter-fill.is-info{background:var(--warning-solid)}
+/* A settled run that had nothing to deliver: complete, but not an achievement. */
+.wiz-meter-fill.is-idle{background:var(--text-dim);opacity:.45}
 
 /* ── Live run progress (Integration Registry card + Logs pane) ─────────
    Before this, starting a run gave a toast and nothing else: the card reloaded a
@@ -770,6 +863,10 @@ button.wiz-step.is-done:hover .wiz-step-token{filter:brightness(1.1)}
 .runp-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
   font-size:var(--fs-xs)}
 .runp-live{font-weight:var(--fw-semibold);color:var(--primary-on)}
+/* The outcome label carries the verdict, so it carries the colour: a failed or stopped
+   run must not read in the same ink as a clean one. */
+.runp-live--fail{color:var(--error-on)}
+.runp-live--idle{color:var(--text-secondary)}
 .runp-readout{color:var(--text-secondary);font-variant-numeric:tabular-nums}
 .runp-counters{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:var(--fs-xs);
   color:var(--text-secondary)}
@@ -895,7 +992,7 @@ button.wiz-step.is-done:hover .wiz-step-token{filter:brightness(1.1)}
    times. Promoted to classes so every panel reads identically and theming
    lives in one place. */
 .wiz-card-title{font-weight:var(--fw-semibold);font-size:var(--fs-md);
-  color:var(--text);margin-bottom:12px}
+  color:var(--text);margin-bottom:12px;display:flex;align-items:center;gap:8px;min-width:0}
 .wiz-card-title.is-warning{color:var(--warning-on)}
 
 /* Callout / note banner. Neutral by default; colour comes from a modifier. */
@@ -917,8 +1014,10 @@ button.wiz-step.is-done:hover .wiz-step-token{filter:brightness(1.1)}
 .wiz-empty-title{font-size:var(--fs-base)}
 .wiz-empty-sub{font-size:var(--fs-sm);margin-top:4px}
 
-/* Result stat tiles (inserted / updated / failed …). */
-.wiz-stats{display:grid;gap:12px}
+/* Result stat tiles (inserted / updated / failed …). The track count used to be handed
+   in as an inline `gridTemplateColumns` per call site; auto-fit derives it from how many
+   tiles there actually are and cannot exceed the card's width. */
+.wiz-stats{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(min(100%,130px),1fr))}
 .wiz-stat{padding:12px;background:var(--bg-main);border-radius:6px;text-align:center}
 .wiz-stat-label{font-size:var(--fs-xs);color:var(--text-dim);font-weight:var(--fw-semibold)}
 .wiz-stat-value{font-size:var(--fs-lg);font-weight:var(--fw-bold);color:var(--text)}
@@ -929,12 +1028,241 @@ button.wiz-step.is-done:hover .wiz-step-token{filter:brightness(1.1)}
 
 /* Preview / data tables — the border-wrapped, scrollable grid shared by the
    fetch preview, transformation preview and DB quick-view. */
-.wiz-table-wrap{border:1px solid var(--border);border-radius:6px;overflow:auto}
+/* The wizard's own scroll box — NOT `.table-wrap`, so the fill rules that reach through
+   `.tf-shell` are repeated for it below. The default cap is what callers used to pass
+   inline (340/400px); a fill column replaces it with the height it actually has. */
+.wiz-table-wrap{border:1px solid var(--border);border-radius:6px;overflow:auto;
+  max-height:min(46vh,360px)}
+.fit-col > .tf-shell > .wiz-table-wrap{flex:1 1 0;min-height:0;max-height:none;overflow:auto}
 .wiz-data-table{width:100%;border-collapse:collapse;font-size:var(--fs-sm)}
 .wiz-data-table.is-xs{font-size:var(--fs-xs)}
 .wiz-data-table th{padding:6px 8px;text-align:left;font-weight:var(--fw-semibold);
   border-bottom:1px solid var(--border);background:var(--bg-main);white-space:nowrap}
 .wiz-data-table.is-sticky th{position:sticky;top:0;z-index:1}
+/* Header cell as a pin toggle. Freezing itself — the sticky geometry and the tint — is
+   applied by TableFrame (components/ui/TableFrame.jsx), which every table shares. It has to look like the header text it replaced — the
+   button is a hit target, not a visible control, until you hover it. */
+.wiz-pin-btn{display:flex;align-items:center;gap:5px;width:100%;padding:0;border:0;
+  background:none;font:inherit;color:inherit;letter-spacing:inherit;text-transform:inherit;
+  text-align:left;cursor:pointer;border-radius:3px}
+.wiz-pin-btn:hover{color:var(--primary-on)}
+.wiz-pin-btn:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.wiz-pin-mark{opacity:0;font-size:10px;line-height:1;transition:opacity var(--dur-fast) var(--ease-out)}
+.wiz-pin-btn:hover .wiz-pin-mark,.wiz-pin-btn:focus-visible .wiz-pin-mark{opacity:.55}
+.wiz-pin-btn[aria-pressed="true"] .wiz-pin-mark{opacity:1}
+
+/* (The bespoke caption strip that used to sit above the preview table is gone —
+   TableFrame's `caption`/`meta` header does that job for every table now.) */
+
+/* ===== CONNECTOR STUDIO — draft recovery =====
+   Autosave chip, the "continue building" rail, and the two banners (resume offer,
+   edit conflict). The chip is the load-bearing one: it is the only thing that tells an
+   author their work is safe, which is what makes leaving the page a non-event. */
+.studio-savechip{display:flex;align-items:center;gap:7px;align-self:flex-start;flex-shrink:0;
+  margin-bottom:10px;padding:3px 10px;border-radius:999px;border:1px solid var(--border);
+  background:var(--bg-main);font-size:var(--fs-xs);color:var(--text-dim)}
+.studio-savechip-dot{width:6px;height:6px;border-radius:50%;background:var(--text-dim);flex-shrink:0}
+.studio-savechip.is-saved .studio-savechip-dot{background:var(--success-solid)}
+.studio-savechip.is-dirty .studio-savechip-dot{background:var(--warning-solid)}
+.studio-savechip.is-saving .studio-savechip-dot{background:var(--primary);animation:tfPulse 1s var(--ease-inout) infinite}
+.studio-savechip.is-error{border-color:var(--error);color:var(--error-on)}
+.studio-savechip.is-error .studio-savechip-dot{background:var(--error-solid)}
+@keyframes tfPulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+.studio-resume,.studio-conflict{display:flex;align-items:center;justify-content:space-between;
+  gap:12px;flex-wrap:wrap}
+.studio-resume-actions{display:flex;gap:8px;flex-shrink:0}
+
+.studio-drafts{width:100%;max-width:1200px;flex:0 0 auto;display:flex;flex-direction:column;
+  text-align:left}
+
+/* The launcher takes every pixel the shelf does not, and scrolls inside itself on a short
+   window — the page never grows. */
+.studio-launch{width:100%;max-width:1200px;flex:1 1 auto;min-height:0;display:flex;
+  flex-direction:column;text-align:left}
+.studio-launch-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;
+  padding:3px;margin:-3px}
+.studio-launch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));
+  gap:10px;align-content:start}
+.studio-launch-card{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:6px;min-height:92px;padding:12px 10px;text-align:center;cursor:pointer;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+  box-shadow:var(--shadow-sm);color:var(--text);
+  transition:border-color var(--dur-fast) var(--ease-out),box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out)}
+.studio-launch-card:hover:not(:disabled){border-color:var(--primary);box-shadow:var(--shadow-md);
+  transform:translateY(-2px)}
+.studio-launch-card:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+/* Visible but unselectable: the roadmap is information, a dead-looking click is not. */
+.studio-launch-card:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+.studio-launch-label{font-size:var(--fs-sm);font-weight:var(--fw-semibold);max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.studio-launch-badge{font-size:var(--fs-xs);font-weight:var(--fw-semibold)}
+
+/* Stage 1 with the category already chosen: the answer, not the question. */
+.studio-chosen-cat{display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:8px 12px;
+  background:linear-gradient(var(--primary-dim),var(--primary-dim)) var(--bg-card);
+  border:1px solid var(--primary);border-radius:var(--radius)}
+.studio-chosen-label{font-weight:var(--fw-semibold);font-size:var(--fs-base);color:var(--text)}
+.studio-chosen-note{font-size:var(--fs-xs);color:var(--text-dim);margin-right:auto}
+.studio-picker-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  margin-bottom:8px;font-size:var(--fs-sm);color:var(--text-dim)}
+.studio-drafts-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  flex-shrink:0;margin-bottom:10px;font-weight:var(--fw-semibold);font-size:var(--fs-md);
+  color:var(--text)}
+.studio-drafts-sub{font-weight:var(--fw-normal);font-size:var(--fs-xs);color:var(--text-dim)}
+/* ONE ROW that scrolls sideways. A wrapping grid grew the panel downwards with every
+   abandoned draft and walked the call to action off the page; a single row costs the same
+   height whether there are two drafts or twenty. `padding` + negative `margin` keep card
+   hover shadows and focus rings from being clipped by the scroll edge. */
+/* Arrow buttons flank the shelf, matching the Dashboard's adapter row. */
+.studio-draft-shelf{display:flex;align-items:center;gap:6px;min-width:0}
+.studio-draft-scroll{flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;
+  padding:3px;margin:-3px;scroll-snap-type:x proximity;scroll-behavior:smooth;
+  scrollbar-width:none;-ms-overflow-style:none}
+.studio-draft-scroll::-webkit-scrollbar{display:none}
+.studio-draft-grid{display:flex;flex-wrap:nowrap;align-items:stretch;gap:12px;width:max-content}
+/* Fixed width, so the row reads as a uniform shelf and the next card is always half in
+   view — the only honest signal that there is more to the right. */
+.studio-draft-grid > *{flex:0 0 clamp(228px,21vw,268px);min-width:0;scroll-snap-align:start}
+/* A fixed min-height keeps the shelf a straight line: without it a card whose meta wrapped
+   to two lines stood taller than its neighbours and the row read as broken. */
+.studio-draft-card{display:flex;flex-direction:column;gap:6px;padding:12px 14px;min-height:118px;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+  box-shadow:var(--shadow-sm);
+  transition:border-color var(--dur-fast) var(--ease-out),box-shadow var(--dur-fast) var(--ease-out)}
+.studio-draft-card:hover{border-color:var(--primary);box-shadow:var(--shadow-md)}
+/* Dashed edge = not registered yet: this one exists only in this browser. */
+.studio-draft-card.is-seed{border-style:dashed}
+.studio-draft-title{display:flex;align-items:center;gap:8px;min-width:0}
+.studio-draft-icon{font-size:var(--fs-lg);line-height:1;flex-shrink:0}
+.studio-draft-name{font-weight:var(--fw-semibold);font-size:var(--fs-sm);color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.studio-draft-meta{font-size:var(--fs-xs);color:var(--text-dim);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.studio-draft-card .studio-draft-progress{margin-top:auto}
+.studio-draft-progress{height:3px;border-radius:2px;background:var(--border);overflow:hidden}
+.studio-draft-progress > span{display:block;height:100%;background:var(--primary-solid);
+  transition:width var(--dur-base) var(--ease-out)}
+.studio-draft-actions{display:flex;gap:6px;margin-top:2px}
+
+/* ===== TableFrame — shared expand + freeze-columns shell (components/ui/TableFrame.jsx)
+   The shell is near enough a pass-through: it adds one 26px control strip above the
+   table (see --tf-tools-h below) and nothing else. Its controls live in that strip and
+   only appear on hover/focus. Sticky-column geometry is injected per instance by the
+   component. */
+.tf-shell{position:relative;display:flex;flex-direction:column;min-height:0}
+/* Every layout rule that made `.table-wrap` the growing child of a fill container has to
+   reach through the shell, or those pages would collapse to the table's natural height.
+   In these fill layouts the tools strip costs no page height at all — the shell is
+   flex:1, so its padding simply takes 26px off the scroll box inside it.
+   Keep this list in step with the `> .table-wrap` rules above. */
+.page-body.fit > .tf-shell,.dlq-fill > .tf-shell,.fit-col > .tf-shell{flex:1 1 0;min-height:0}
+.page-body.fit > .tf-shell > .table-wrap,
+.dlq-fill > .tf-shell > .table-wrap,
+.fit-col > .tf-shell > .table-wrap{flex:1 1 0;min-height:0;max-height:none;overflow:auto}
+/* Expanded, the scroll box is whatever the caller passed as the wrap — always the shell's
+   last child. TableFrame also sets these inline, which is the half that can beat a
+   caller's own inline max-height. */
+.tf-shell.is-overlay > :last-child{flex:1 1 0;min-height:0;max-height:none;overflow:auto}
+
+/* The controls sit in a reserved strip ABOVE the table, not over its top-right corner.
+   Floating them at top:5px meant that on hover they covered the last header cells —
+   so reaching for "Expand" hid the very column headings you were reading.
+
+   The strip is reserved permanently, even though the buttons only fade in on hover:
+   claiming the space only while hovering would shove the whole table down 26px under
+   the cursor. It is the one place the shell breaks its own "adds NO height" rule, and
+   it costs 26px once per table rather than covering content every time you hover.
+
+   Absolute (not a flex row) is deliberate: the buttons stay out of flow, so a caller's
+   table still measures and scrolls exactly as before — only the shell's padding moved. */
+.tf-shell{--tf-tools-h:26px}
+.tf-shell:not(.tf-shell--framed){padding-top:var(--tf-tools-h)}
+.tf-tools{position:absolute;top:0;right:0;height:var(--tf-tools-h);align-items:center;
+  z-index:var(--z-sticky);display:flex;gap:6px;
+  opacity:0;transition:opacity var(--dur-fast) var(--ease-out)}
+.tf-shell:hover .tf-tools,.tf-shell:focus-within .tf-tools,.tf-shell.is-overlay .tf-tools{opacity:1}
+/* Expanded, the panel adds its own 14px inset; the strip stacks under it. Specificity
+   (0,3,0) beats the `.tf-shell.is-overlay{padding:14px}` shorthand further down, so this
+   holds regardless of source order. */
+.tf-shell.is-overlay:not(.tf-shell--framed){padding-top:calc(14px + var(--tf-tools-h))}
+.tf-shell.is-overlay:not(.tf-shell--framed) .tf-tools{top:14px;right:14px}
+
+/* Framed variant (`caption` given): the table becomes a titled object with a real header
+   strip, and the controls live IN that strip instead of floating on hover. A hover-only
+   control is fine on a page whose table is the whole page; inside a card, nothing tells
+   you it is there — which is how expand + freeze went unnoticed on the wizard. */
+/* Not `overflow:hidden` for the rounded corners — the freeze menu drops out of this
+   header and would be clipped by it. The corners are cut on the two children instead. */
+.tf-shell--framed{border:1px solid var(--border);border-radius:var(--radius-lg);
+  background:var(--bg-card)}
+.tf-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  flex-shrink:0;padding:7px 10px 7px 12px;background:var(--bg-main);
+  border-bottom:1px solid var(--border);
+  border-radius:calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0 0}
+.tf-head-main{display:flex;align-items:baseline;gap:8px;min-width:0}
+.tf-head-title{font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tf-head-meta{font-size:var(--fs-xs);color:var(--text-dim);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.tf-tools.is-static{position:static;opacity:1;flex-shrink:0}
+/* The frame draws the border now — a wrap that also draws one would double it. */
+.tf-shell--framed > :last-child{border:0;
+  border-radius:0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px)}
+/* Expanded, the panel IS the frame: the header sits flush at its top edge. Clipping is
+   safe here — a dropdown inside a fullscreen panel has nothing to escape. */
+.tf-shell--framed.is-overlay{padding:0;overflow:hidden}
+.tf-btn{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:var(--radius-sm);
+  border:1px solid var(--border);background:var(--bg-card);color:var(--text-secondary);
+  font-size:var(--fs-xs);font-weight:var(--fw-medium);cursor:pointer;box-shadow:var(--shadow-sm);
+  transition:color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)}
+.tf-btn:hover{color:var(--primary-on);border-color:var(--primary)}
+.tf-btn:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+
+.tf-menu-anchor{position:relative}
+.tf-menu-scrim{position:fixed;inset:0;z-index:var(--z-base)}
+.tf-menu{position:absolute;top:calc(100% + 4px);right:0;z-index:var(--z-dropdown);min-width:190px;
+  max-height:280px;overflow-y:auto;padding:6px;background:var(--bg-card);border:1px solid var(--border);
+  border-radius:var(--radius);box-shadow:var(--elev-3)}
+.tf-menu-head{padding:4px 6px 6px;font-size:var(--fs-xs);font-weight:var(--fw-semibold);
+  color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em}
+.tf-menu-item{display:flex;align-items:center;gap:7px;padding:4px 6px;border-radius:var(--radius-sm);
+  font-size:var(--fs-sm);color:var(--text);cursor:pointer}
+.tf-menu-item:hover{background:var(--primary-dim)}
+.tf-menu-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tf-menu-clear{width:100%;margin-top:4px;padding:5px;border:0;border-top:1px solid var(--border);
+  background:none;color:var(--primary-on);font-size:var(--fs-xs);cursor:pointer}
+
+/* Expanded: the SAME element grows to near-fullscreen — re-styled, not re-mounted, so the
+   scroll position and the frozen columns survive the trip in both directions. */
+.tf-shell.is-overlay{position:fixed;inset:24px;z-index:var(--z-modal);padding:14px;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-lg);
+  box-shadow:var(--elev-3);animation:tfIn var(--dur-slow) var(--ease-glide)}
+/* The exit sets its OWN duration and easing rather than swapping the animation-name and
+   inheriting the entrance's. It used to run for --dur-slow (560ms) while the backdrop
+   behind it cleared in --dur-base (360ms): for 200ms a half-faded ghost of the table hung
+   over a page that already looked normal, which is the "shutter" in expand-then-close.
+   Both halves now end together, on an exit curve — leaving is quicker than arriving. */
+.tf-shell.is-overlay.is-out{animation:tfOut var(--dur-base) var(--ease-in)}
+.tf-backdrop{position:fixed;inset:0;z-index:var(--z-overlay);background:rgba(15,15,26,.5);
+  animation:tfBackdropIn var(--dur-base) var(--ease-out)}
+.tf-backdrop.is-out{animation:tfBackdropOut var(--dur-base) var(--ease-in)}
+/* Stands in for the shell while it is `position:fixed` and therefore out of the flow.
+   Height is measured from the shell itself the moment before it leaves. */
+.tf-gap{flex-shrink:0}
+/* The landing. Worn for one fade as the frame rejoins the page, so the in-page table
+   arrives instead of simply being there. */
+.tf-shell.is-back{animation:tfBack var(--dur-fast) var(--ease-out)}
+@keyframes tfBack{from{opacity:0}to{opacity:1}}
+@keyframes tfIn{from{opacity:0;transform:scale(.94) translateY(12px)}to{opacity:1;transform:none}}
+@keyframes tfOut{from{opacity:1;transform:none}to{opacity:0;transform:scale(.96)}}
+@keyframes tfBackdropIn{from{opacity:0}to{opacity:1}}
+@keyframes tfBackdropOut{from{opacity:1}to{opacity:0}}
+
+.wiz-linkish{border:0;background:none;padding:0;font:inherit;color:var(--primary-on);
+  cursor:pointer;text-decoration:underline}
+.wiz-linkish:hover{color:var(--primary)}
 .wiz-data-table th.is-mono{font-family:var(--font-mono)}
 .wiz-data-table td{padding:4px 8px;border-bottom:1px solid var(--border)}
 .wiz-data-table td.is-mono{font-family:var(--font-mono);white-space:nowrap}
@@ -943,6 +1271,76 @@ button.wiz-step.is-done:hover .wiz-step-token{filter:brightness(1.1)}
 /* Opt-in row hover (DB quick-view). On td, not tr — a tr background is unreliable under
    border-collapse. Replaces an inline onMouseEnter/Leave element.style mutation. */
 .wiz-data-table.is-hoverable tbody tr:hover td{background:var(--primary-dim)}
+
+/* ===== Step 6 — Push & sync =====
+   A single column whose children are HARD-capped at its width. The cards used to sit on
+   an inline grid with `1fr` tracks: `1fr` floors at the item's min-content, so the widest
+   table in the step (106 mapped columns) set the width of every card beside it and the
+   page clipped them — including the table's own expand/freeze controls. */
+/* Every step is a flex item of .wizard-content (a column flex container), so it stretches
+   to the container's width but will still be pushed WIDER by its own min-content. Capping
+   it here is what makes the `max-width:100%` below resolve against the page rather than
+   against an already-blown-out box. */
+.wizard-step{min-width:0;max-width:100%}
+.wiz-step6{display:flex;flex-direction:column;gap:12px;min-width:0;max-width:100%}
+.wiz-step6 > *{min-width:0;max-width:100%}
+/* Review chrome, not reading matter: the cards here hold one fact row apiece, so the
+   20px card padding was mostly air taken from the preview table below them. */
+.wiz-step6 > .card{padding:14px 16px}
+.wiz-step6 > .card > .wiz-card-title{margin-bottom:10px}
+
+/* Height, the same way the width above is handled: the step claims the space between
+   the rail and the action bar and hands the surplus to ONE child — the preview table
+   while idle, the results panel once pushed. Everything else keeps its natural height,
+   so the step stops growing the page and the scrollbar moves inside the box that owns
+   the unbounded content (rows), which is the only place a scrollbar belongs. */
+.wiz-step6.is-fill{flex:1 1 0;min-height:0}
+.wiz-step6.is-fill > *{flex-shrink:0}
+.wiz-status-card{display:flex;flex-direction:column;min-height:0}
+.wiz-status-card > .wiz-card-title{flex-shrink:0}
+/* Only once the push has run — while idle the card is a single ready row and must not
+   compete with the preview table for the leftover height. */
+.wiz-step6.is-fill > .wiz-status-card.is-fill{flex:1 1 auto;min-height:0}
+.wiz-status-body{display:flex;flex-direction:column;min-height:0;flex:1 1 auto;
+  overflow-y:auto;overflow-x:hidden}
+.wiz-status-body > *{min-width:0}
+
+/* Small print under a table: what it was computed from, what it is not. */
+.wiz-hint-line{margin-top:6px;font-size:var(--fs-xs);color:var(--text-dim);line-height:var(--lh-normal)}
+
+/* Idle push state — a status line with its action, not an empty-state illustration. */
+.wiz-ready{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.wiz-ready-main{display:flex;flex-direction:column;gap:2px;min-width:0}
+.wiz-ready-title{font-size:var(--fs-base);color:var(--text)}
+.wiz-ready-title code{font-family:var(--font-mono);font-size:.92em;background:var(--bg-main);
+  padding:1px 6px;border-radius:var(--radius-sm)}
+.wiz-ready-sub{font-size:var(--fs-sm);color:var(--text-secondary)}
+
+/* Push in flight. Left-aligned and full width, sharing the progress meter the wizard's
+   action bar already uses — a centred column with a bespoke inline progress bar was a
+   second, slightly different progress language on the same screen. */
+/* What is left of the in-card run panel: the push now reports itself in the action
+   bar, so the head/title/counts/foot rules went with it. The spinner rides in the
+   bar's status line and the run id in the results card title. */
+.wiz-run-spin{width:12px;height:12px;flex-shrink:0;border:2px solid var(--border);
+  border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
+.wiz-run-id{margin-left:auto;font-size:var(--fs-xs);color:var(--text-dim);font-weight:var(--fw-normal);
+  font-family:var(--font-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Group-run result rows. */
+.wiz-grouprun{margin-top:10px;font-size:var(--fs-sm)}
+.wiz-grouprun-row{display:flex;justify-content:space-between;gap:8px;padding:3px 0;
+  border-bottom:1px solid var(--border)}
+.wiz-grouprun-row:last-child{border-bottom:0}
+.wiz-grouprun-row.is-skipped{color:var(--text-dim)}
+
+/* Transform chip under a preview column name. `th` is uppercased and letter-spaced
+   globally; the chip opts out so it reads as metadata rather than a second heading. */
+.wiz-xf-row{margin-top:3px}
+.wiz-xf{text-transform:none;letter-spacing:0;font-weight:var(--fw-medium);padding:0 6px}
+/* Absent values, in one place — they were three different inline styles. */
+.wiz-empty-cell{color:var(--text-dim)}
+.wiz-empty-cell.is-null{font-style:italic}
 
 /* Bordered result block with a heading strip (errors, column changes, quick-view). */
 .wiz-panel{border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:14px}
@@ -994,6 +1392,9 @@ button.wiz-step.is-done:hover .wiz-step-token{filter:brightness(1.1)}
 .notif-item.warning{border-left:3px solid var(--warning)}
 .notif-item .notif-title{font-size:var(--fs-sm);font-weight:var(--fw-semibold);margin-bottom:3px}
 .notif-item .notif-meta{font-size:var(--fs-xs);color:var(--text-dim)}
+/* The connection the alert came from — one line, truncated, never wrapping the item. */
+.notif-item .notif-route{font-size:var(--fs-xs);color:var(--text-secondary);margin-bottom:3px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* Help Panel */
 /* Slides on `transform`, not `right`: it is position:fixed, so the offset can be a
@@ -1184,6 +1585,42 @@ html.dark-theme .json-bool{color:#c084fc}
 .form-group textarea{min-height:60px;resize:vertical}
 .form-row{display:flex;gap:12px}
 .form-row .form-group{flex:1}
+
+/* ===== FIELD HELP (ⓘ + bubble) =====
+   Long per-field help used to be printed after the label in dim text, which
+   made the label 3–4 lines tall and left every input in a row starting at a
+   different height. Help is now on demand; see components/ui/InfoHint.jsx. */
+.info-hint-btn{display:inline-flex;align-items:center;justify-content:center;
+  width:16px;height:16px;padding:0;border:none;background:none;border-radius:50%;
+  color:var(--text-dim);cursor:pointer;vertical-align:-3px;flex-shrink:0;
+  transition:color var(--dur-fast) var(--ease-out),background var(--dur-fast) var(--ease-out)}
+.info-hint-btn:hover,.info-hint-btn.is-open{color:var(--primary);background:var(--primary-dim)}
+.info-hint-btn:active{transform:scale(.92)}
+.info-hint-pop{position:fixed;z-index:var(--z-tooltip);
+  background:var(--bg-card);border:1px solid var(--border);border-left:3px solid var(--primary);
+  border-radius:var(--radius);box-shadow:var(--elev-3);padding:10px 12px;
+  font-size:var(--fs-xs);font-weight:var(--fw-normal);line-height:var(--lh-loose);
+  color:var(--text-secondary);animation:hintIn var(--dur-fast) var(--ease-out)}
+.info-hint-title{font-weight:var(--fw-semibold);color:var(--text);margin-bottom:4px}
+@keyframes hintIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.info-hint-pop{animation:none}}
+
+/* ===== REGISTRY CONFIG GRID =====
+   Category config fields (FSD §5). A flex-wrap row sized every column to its
+   own label, so a two-word label and a two-line one sat in visibly different
+   boxes; equal tracks + top-aligned labels keep the inputs on one baseline. */
+.cfg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
+  gap:var(--space-3) var(--space-4);align-items:start}
+.cfg-grid .form-group{margin-bottom:0;min-width:0}
+.cfg-grid .form-group.cfg-wide{grid-column:1/-1}
+.cfg-label{display:flex;align-items:center;gap:6px;margin-bottom:4px;
+  font-size:var(--fs-xs);font-weight:var(--fw-semibold);color:var(--text-secondary)}
+.cfg-label>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cfg-req{color:var(--error-on);margin-left:-3px}
+/* Checkboxes read as a statement, not a labelled input: box first, text beside it. */
+.cfg-check{display:flex;align-items:center;gap:8px;min-height:32px;
+  font-size:var(--fs-xs);font-weight:var(--fw-semibold);color:var(--text-secondary);cursor:pointer}
+.cfg-check input[type="checkbox"]{accent-color:var(--primary);width:16px;height:16px;margin:0;flex-shrink:0}
 
 /* Eye toggle for passwords */
 .password-wrap{position:relative;display:flex;align-items:center;gap:8px}
@@ -1408,9 +1845,15 @@ html.dark-theme .json-bool{color:#c084fc}
    The chrome (frame, rail, slots, hover, selection, actions) now comes from the
    shared .ucard base; what remains here is the route row, the 7-day sparkline and
    the freshness/meta footer. */
-.ucard-node{display:inline-flex;align-items:center;gap:4px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ucard-ico{font-size:.9rem;line-height:1;flex-shrink:0}
+.ucard-node{display:inline-flex;align-items:baseline;gap:4px;min-width:0;flex:0 1 auto;
+  overflow:hidden;white-space:nowrap}
+.ucard-ico{font-size:.9rem;line-height:1;flex-shrink:0;align-self:center}
 .ucard-arrow{color:var(--text-dim);flex-shrink:0}
+/* The endpoint label is two parts: what it IS (site.list) and what it RUNS ON
+   (SharePoint). The scope carries the identity so it takes the space and the
+   ellipsis; the system stays legible but recedes. */
+.ucard-scope{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ucard-sys{color:var(--text-dim);font-size:var(--fs-xs);flex-shrink:0}
 
 .int-spark{display:flex;align-items:flex-end;gap:3px;height:26px;flex:1;min-width:0}
 .int-spark-bar{flex:1;min-width:2px;max-width:9px;background:var(--border-light);border-radius:2px 2px 0 0;
@@ -1592,7 +2035,7 @@ html.dark-theme .json-bool{color:#c084fc}
   min-width:240px;max-width:100%;padding:10px 10px 10px 0;
   background:var(--bg-card);border:1px solid var(--border);border-left:3px solid var(--tone,var(--primary));
   border-radius:var(--radius);box-shadow:var(--elev-3);font-size:var(--fs-sm);color:var(--text);
-  animation:toastIn var(--dur-base) var(--ease-out)}
+  animation:toastIn var(--dur-slow) var(--ease-glide)}
 .toast.is-leaving{animation:toastOut var(--dur-fast) var(--ease-in) forwards}
 .toast--success{--tone:var(--success-on)}
 .toast--error{--tone:var(--error-on)}
@@ -1609,8 +2052,8 @@ html.dark-theme .json-bool{color:#c084fc}
   display:flex;align-items:center;justify-content:center}
 .toast-close:hover{background:var(--bg-card-hover);color:var(--text)}
 
-@keyframes toastIn{from{opacity:0;transform:translateY(12px) scale(.97)}to{opacity:1;transform:none}}
-@keyframes toastOut{to{opacity:0;transform:translateY(6px) scale(.98)}}
+@keyframes toastIn{from{opacity:0;transform:translateY(22px) scale(.95)}to{opacity:1;transform:none}}
+@keyframes toastOut{to{opacity:0;transform:translateY(10px) scale(.97)}}
 
 /* ===================================================================
    ENTRANCE CHOREOGRAPHY
@@ -1621,15 +2064,19 @@ html.dark-theme .json-bool{color:#c084fc}
    =================================================================== */
 .ucard-grid > .ucard,
 .adapter-health-row > .ucard{
-  animation:cardIn var(--dur-base) var(--ease-out) backwards;
-  animation-delay:calc(var(--i,0) * 28ms)}
-@keyframes cardIn{from{opacity:0;transform:translateY(8px)}}
+  animation:cardIn var(--dur-slow) var(--ease-glide) backwards;
+  /* The +80ms offset is the choreography: the page itself is still settling for its
+     first frames, so the cards start after it rather than racing it. Two things
+     moving in sequence read as one flow; two moving at once read as a jumble. */
+  animation-delay:calc(var(--i,0) * var(--stagger) + 80ms)}
+/* 18px and a hair of scale — at 8px with no scale the card simply appeared. */
+@keyframes cardIn{from{opacity:0;transform:translateY(18px) scale(.985)}}
 
 /* Chart bars grow from the baseline on first paint. Keyed by date, so a re-render
    with the same buckets does not restart them — only genuinely new bars animate. */
 .viz-bar,.int-spark-bar{transform-origin:bottom}
-.viz-bar{animation:barGrow var(--dur-base) var(--ease-out) backwards;
-  animation-delay:calc(var(--i,0) * 12ms)}
+.viz-bar{animation:barGrow var(--dur-slow) var(--ease-glide) backwards;
+  animation-delay:calc(var(--i,0) * var(--stagger-tight) + 120ms)}
 @keyframes barGrow{from{transform:scaleY(0)}}
 
 /* A row that arrived since the last poll — flashes once, then settles. Only the
@@ -1647,10 +2094,10 @@ tr.is-new td{animation:rowArrive 1.4s var(--ease-out) backwards}
    left. The direction is what makes it read as position in a sequence
    rather than as a generic fade, so Back genuinely feels like retreating.
    =================================================================== */
-.wizard-content{animation:stepInFwd var(--dur-base) var(--ease-out)}
+.wizard-content{animation:stepInFwd var(--dur-slow) var(--ease-glide)}
 .wizard-content.is-back{animation-name:stepInBack}
-@keyframes stepInFwd{from{opacity:0;transform:translateX(18px)}}
-@keyframes stepInBack{from{opacity:0;transform:translateX(-18px)}}
+@keyframes stepInFwd{from{opacity:0;transform:translateX(34px)}}
+@keyframes stepInBack{from{opacity:0;transform:translateX(-34px)}}
 
 /* The stepper's completed segment fills rather than snapping. */
 .step-line{transition:background var(--dur-base) var(--ease-out)}
@@ -1663,14 +2110,14 @@ tr.is-new td{animation:rowArrive 1.4s var(--ease-out) backwards}
    reads as a flash; a short stagger shows them being laid down, and the
    pair-number badge draws attention to the link that was just made.
    =================================================================== */
-.canvas-row{animation:mapRowIn var(--dur-base) var(--ease-out) backwards;
-  animation-delay:calc(var(--i,0) * 26ms)}
-@keyframes mapRowIn{from{opacity:0;transform:translateY(6px)}}
+.canvas-row{animation:mapRowIn var(--dur-base) var(--ease-glide) backwards;
+  animation-delay:calc(var(--i,0) * var(--stagger-tight))}
+@keyframes mapRowIn{from{opacity:0;transform:translateY(14px)}}
 
 /* A freshly auto-mapped row pings its number once so the eye can follow the
    sweep down the list. One shot — never a loop. */
 .canvas-row .map-num{animation:mapNumPop var(--dur-slow) var(--ease-spring) backwards;
-  animation-delay:calc(var(--i,0) * 26ms + 60ms)}
+  animation-delay:calc(var(--i,0) * var(--stagger-tight) + 90ms)}
 @keyframes mapNumPop{from{transform:scale(0)}60%{transform:scale(1.12)}}
 
 /* ===================================================================
@@ -1740,9 +2187,16 @@ tr.is-new td{animation:rowArrive 1.4s var(--ease-out) backwards}
   .page-body.fit > *,.wizard-content{flex:none !important;min-height:0 !important}
   .wizard-content{overflow:visible !important}
   /* Inner scroll regions take natural height (page scrolls); tables keep a sane cap */
-  .fit-scroll,.fit-col,.dlq-fill{overflow:visible !important;flex:none !important}
+  .fit-scroll,.fit-col,.dlq-fill,.tf-shell{overflow:visible !important;flex:none !important}
+  /* Same release for the step-6 fill column: below this height there is nothing left
+     to distribute, so the cards go back to their natural size and the page scrolls. */
+  .wiz-step6.is-fill,.wiz-status-card.is-fill,.wiz-status-body{
+    overflow:visible !important;flex:none !important;min-height:0 !important}
   .table-wrap{max-height:70vh !important;flex:none !important}
-  .fit-col > .table-wrap,.dlq-fill > .table-wrap{max-height:70vh !important}
+  .fit-col > .table-wrap,.dlq-fill > .table-wrap,.tf-shell > .table-wrap{max-height:70vh !important}
+  /* The fill rule above lifts the wizard box's cap; put one back when there is no
+     fill column left to bound it. */
+  .wiz-table-wrap,.fit-col > .tf-shell > .wiz-table-wrap{max-height:60vh !important;flex:none !important}
   /* Dashboard: charts stack and keep a usable height */
   .dash-charts{flex-direction:column !important}
   .dash-charts > .card{min-height:240px}
@@ -1818,6 +2272,21 @@ tr.is-new td{animation:rowArrive 1.4s var(--ease-out) backwards}
 /* Disabled controls must never appear to respond. */
 .btn:disabled:active,.ucard-act:disabled:active,
 .conn-strip-arrow:disabled:active{transform:none}
+
+/* ===================================================================
+   PRESS IS THE EXCEPTION TO THE LONGER SCALE
+   Entrances got slower; direct manipulation must not. Every :active rule
+   inherits --t-interactive, whose transform step is --dur-fast — at 190ms a
+   button would visibly lag the finger, which reads as an unresponsive app no
+   matter how well the rest of it flows. Pressing DOWN is therefore pinned to
+   --dur-instant; the release keeps the normal (slower, springier) return, which
+   is the physical convention the easing tokens already describe.
+   :where() keeps specificity at 0 so nothing here overrides a component's own
+   colours — only the duration of the press.
+   =================================================================== */
+:where(button,[role="button"],.ucard--interactive,.user-menu,.user-dd-item,
+       .th-sort,.info-hint-btn,.joins-intent,.help-doc-link):active{
+  transition-duration:var(--dur-instant)}
 
 /* ===================================================================
    GLOBAL MOTION GUARD
@@ -1919,8 +2388,13 @@ tr.is-new td{animation:rowArrive 1.4s var(--ease-out) backwards}
 
 /* ── Alerts list ── full-width cards in one column, same anatomy as the grid. */
 .alert-list{display:flex;flex-direction:column;gap:10px;padding-bottom:12px}
-.alert-list > .ucard{animation:cardIn var(--dur-base) var(--ease-out) backwards;
-  animation-delay:calc(var(--i,0) * 28ms)}
+.alert-list > .ucard{animation:cardIn var(--dur-slow) var(--ease-glide) backwards;
+  animation-delay:calc(var(--i,0) * var(--stagger) + 80ms)}
+/* The mirror of `.ucard > *` one level up: a card is a flex item here, and because the
+   card sets overflow:hidden its automatic minimum height is 0 — so instead of the list
+   scrolling, six cards SHARED the available height, each clipped mid-sentence with its
+   whole footer cut away. Cards size to their content; the list scrolls. */
+.alert-list > .ucard,.fit-scroll > .ucard{flex-shrink:0}
 .alert-msg{font-size:var(--fs-sm);color:var(--text-secondary);line-height:var(--lh-snug)}
 
 /* A count riding its filter chip — the chip row doubles as a summary. */
@@ -1957,8 +2431,10 @@ button.stat-tile:hover{transform:translateY(-2px);box-shadow:var(--elev-2);borde
 button.stat-tile[aria-pressed="true"]{border-color:var(--primary);
   box-shadow:inset 0 0 0 2px var(--primary),var(--elev-1)}
 button.stat-tile[aria-pressed="true"] .stat-tile-value{color:var(--primary)}
-.stat-tile{animation:cardIn var(--dur-base) var(--ease-out) backwards;
-  animation-delay:calc(var(--i,0) * 40ms)}
+/* The stat strip is the first thing on most pages, so it leads the cascade and takes
+   the widest stagger — it sets the tempo everything below it follows. */
+.stat-tile{animation:cardIn var(--dur-slow) var(--ease-glide) backwards;
+  animation-delay:calc(var(--i,0) * var(--stagger) + 60ms)}
 
 /* ===================================================================
    QUIET DESTRUCTIVE — a solid red button on every row of a 100-row table
@@ -2001,8 +2477,11 @@ button.stat-tile[aria-pressed="true"] .stat-tile-value{color:var(--primary)}
 .data-table tbody tr[data-status="fail"] > td:first-child::before{background:var(--viz-fail)}
 .data-table tbody tr[data-status="idle"] > td:first-child::before{background:var(--border-light)}
 .data-table tbody tr[data-muted="true"] td{opacity:.62}
-.data-table tbody tr{animation:cardIn var(--dur-fast) var(--ease-out) backwards;
-  animation-delay:calc(var(--i,0) * 18ms)}
+/* Rows use the TIGHT stagger and a shorter duration than cards: a table is read as a
+   block, so a wide cascade here would make the last row land long after the first is
+   being read. The index is capped at 14 by every caller, bounding the tail at ~310ms. */
+.data-table tbody tr{animation:cardIn var(--dur-base) var(--ease-glide) backwards;
+  animation-delay:calc(var(--i,0) * var(--stagger-tight))}
 .table-empty{text-align:center;color:var(--text-secondary);padding:34px 20px}
 .table-empty-title{font-weight:var(--fw-bold);color:var(--text);font-size:var(--fs-base);margin-bottom:4px}
 
@@ -2032,6 +2511,14 @@ button.stat-tile[aria-pressed="true"] .stat-tile-value{color:var(--primary)}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .payload-head{font-size:var(--fs-sm);color:var(--text-dim);margin-bottom:6px;font-weight:var(--fw-semibold)}
 .payload-block{max-height:280px;overflow:auto;white-space:pre-wrap}
+/* The facts the feed no longer spends a column on — connector kinds, run, message
+   id. Read once while diagnosing one message, so they live in the expanded row.
+   Wraps rather than scrolls: this sits inside a table cell that must not widen it. */
+.payload-meta{display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-5);margin-bottom:var(--space-3)}
+.payload-meta>div{min-width:0}
+.payload-meta dt{font-size:var(--fs-xs);color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em}
+.payload-meta dd{margin:0;font-size:var(--fs-sm);font-family:var(--font-mono);
+  max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* Real-time switch — a labelled control, not three loose inline-styled spans. */
 .realtime-toggle{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-sm);cursor:pointer;
@@ -2119,7 +2606,7 @@ td:has(.secret-value.is-revealed){white-space:normal}
 .studio-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;cursor:pointer;
   padding:9px 11px;border:1px solid var(--border);border-radius:var(--radius);
   background:var(--bg-card);color:var(--text);transition:var(--t-interactive);
-  animation:cardIn var(--dur-fast) var(--ease-out) backwards;animation-delay:calc(var(--i,0) * 26ms)}
+  animation:cardIn var(--dur-base) var(--ease-glide) backwards;animation-delay:calc(var(--i,0) * var(--stagger-tight))}
 .studio-item:hover{border-color:var(--border-light);background:var(--bg-card-hover)}
 .studio-item.is-selected{border-color:var(--primary);box-shadow:inset 0 0 0 1px var(--primary)}
 /* Connector icons can be several emoji ("📁📦") and were 58px wide in a 266px
@@ -2142,17 +2629,11 @@ td:has(.secret-value.is-revealed){white-space:normal}
    the icon picker's dropdown can still escape. */
 .studio-authoring{height:100%;min-height:0;display:flex;flex-direction:column}
 .studio-authoring > *{flex:1;min-height:0}
-.studio-blank{height:100%;display:flex;align-items:center;justify-content:center;padding:16px}
-.studio-cta{display:flex;flex-direction:column;align-items:center;gap:10px;max-width:520px;
-  padding:44px 40px;text-align:center;cursor:pointer;
-  border:2px dashed var(--border-strong);border-radius:var(--radius-lg);
-  background:var(--bg-main);color:var(--text-secondary);transition:var(--t-interactive)}
-.studio-cta:hover{border-color:var(--primary);background:var(--primary-dim);color:var(--text)}
-.studio-cta-icon{font-size:var(--fs-2xl);line-height:1}
-.studio-cta-title{font-weight:var(--fw-bold);font-size:var(--fs-md);color:var(--text)}
-/* This copy IS the content of the CTA, so it takes primary ink — as
-   --text-secondary it sat at 4.07:1 on the tinted --bg-main surface. */
-.studio-cta-body{font-size:var(--fs-base);line-height:var(--lh-normal);color:var(--text)}
+/* A COLUMN that FILLS the panel: drafts shelf on top (fixed height), the category
+   launcher below taking whatever is left. It used to be a centring row with an 860px cap,
+   which manufactured gutters on both sides and left the bottom half of the panel white. */
+.studio-blank{height:100%;min-height:0;display:flex;flex-direction:column;align-items:stretch;
+  justify-content:flex-start;gap:18px;padding:18px 16px}
 
 /* ===================================================================
    FORM PANEL — one grid instead of six hand-rolled inline layouts.

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { api } from '../services/api';
+import { endpoint } from '../services/integrationMap';
 import { useAuth } from '../hooks/useAuth';
 import { AlertsContext } from '../hooks/useAlerts';
 
@@ -53,6 +54,11 @@ export function AlertsProvider({ children }) {
   const [error, setError] = useState(null);
   // Alerts the user dismissed from the banner this session (id set).
   const [dismissed, setDismissed] = useState(() => new Set());
+  /* integrationId → what an operator calls that connection. An alert carries only
+     the id, so every notification surface printed a raw UUID (or nothing) where the
+     answer to "which sync broke?" belongs. Fetched once here rather than in each of
+     the three consumers — banner, bell and Alerts page all read this provider. */
+  const [connById, setConnById] = useState({});
   const aliveRef = useRef(true);
 
   const load = useCallback(async () => {
@@ -88,19 +94,52 @@ export function AlertsProvider({ children }) {
     return () => { aliveRef.current = false; clearInterval(t); };
   }, [load, isAuthed]);
 
+  /* Connections change far more slowly than alerts do, so this is a one-shot read
+     per session rather than part of the 30s poll. A missing entry is fine — the
+     consumers fall back to whatever the alert itself carries. */
+  useEffect(() => {
+    if (!isAuthed) { setConnById({}); return undefined; }
+    let alive = true;
+    (async () => {
+      const res = await api.getConnected();
+      if (!alive) return;
+      const map = {};
+      for (const i of (res?.ok && Array.isArray(res.data?.data) ? res.data.data : [])) {
+        if (!i.integrationId) continue;
+        const src = endpoint(i.fieldMappings, 'source');
+        const dest = endpoint(i.fieldMappings, 'dest');
+        map[i.integrationId] = {
+          name: i.name || null,
+          srcLabel: src.label,
+          destLabel: dest.label,
+          route: `${src.label} → ${dest.label}`,
+        };
+      }
+      setConnById(map);
+    })().catch(() => { /* the fallback path already covers an unavailable API */ });
+    return () => { alive = false; };
+  }, [isAuthed]);
+
   const dismiss = useCallback((id) => {
     setDismissed((prev) => new Set(prev).add(id));
   }, []);
 
   const value = useMemo(() => {
-    const unresolved = alerts.filter((a) => !a.resolved);
+    // One enrichment pass, so `recent`, `unresolved` and `topCritical` are all the
+    // same objects and no consumer has to join the two lists itself.
+    const enriched = alerts.map((a) => (
+      a.integrationId && connById[a.integrationId]
+        ? { ...a, connection: connById[a.integrationId] }
+        : a
+    ));
+    const unresolved = enriched.filter((a) => !a.resolved);
     const criticals = unresolved.filter((a) => a.severity === 'critical');
     return {
-      alerts,
+      alerts: enriched,
       unresolved,
       unresolvedCount: unresolved.length,
       // Newest-first, unresolved first — what the bell should surface.
-      recent: [...alerts]
+      recent: [...enriched]
         .sort((a, b) => (a.resolved === b.resolved
           ? new Date(b.createdAt || 0) - new Date(a.createdAt || 0)
           : (a.resolved ? 1 : -1)))
@@ -111,7 +150,7 @@ export function AlertsProvider({ children }) {
       dismiss,
       refresh: load,
     };
-  }, [alerts, dismissed, loading, error, dismiss, load]);
+  }, [alerts, connById, dismissed, loading, error, dismiss, load]);
 
   return <AlertsContext.Provider value={value}>{children}</AlertsContext.Provider>;
 }

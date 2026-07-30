@@ -2,9 +2,10 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { api } from '../../services/api';
 import DeadLetterPanel from './DeadLetterPanel';
 import { SkeletonTableRows } from '../layout/Skeleton';
-import { integrationIdFromDest } from '../dashboard/chartUtils';
 import StatStrip from '../ui/StatStrip';
 import Icon from '../ui/Icon';
+import TableFrame from '../ui/TableFrame';
+import { endpoint } from '../../services/integrationMap';
 import { useToast } from '../../hooks/useToast';
 
 /* One classifier, three consumers: the row rail, the status badge and the
@@ -38,17 +39,23 @@ export default function MonitorPage() {
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [counts, setCounts] = useState({ delivered: 0, failed: 0, inflight: 0, total: 0 });
-  const [connectorIds, setConnectorIds] = useState([]);
+  const [connections, setConnections] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [connectorFilter, setConnectorFilter] = useState('All');
+  const [connectionFilter, setConnectionFilter] = useState('All');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [page, setPage] = useState(0);
   const [sort, setSort] = useState({ col: 'time', dir: 'desc' });
-  /* connector UUID / integration UUID → human name. The feed stores raw ids, so
-     without this the Source and Destination columns were two walls of UUID that
-     no operator could act on. */
+  /* connector UUID → human name, for the connector kinds in the expanded row.
+     The feed stores raw ids, and a wall of UUIDs is nothing an operator can act on. */
   const [nameById, setNameById] = useState({});
+  /* integrationId → its destination targets. Only a connection that fans out to
+     more than one target needs the Target column; for the rest it is one
+     repeated value, so it stays blank. */
+  const [targetsById, setTargetsById] = useState({});
+  /* integrationId → its qualified source/destination ("site.list (SharePoint)").
+     Built once alongside the target map — both come out of the same fetch. */
+  const [endsById, setEndsById] = useState({});
   const { showToast } = useToast();
   const timer = useRef(null);
   /* Ids seen on the previous poll — rows not in this set arrived since, and only
@@ -67,11 +74,11 @@ export default function MonitorPage() {
     p.set('dir', sort.dir);
     if (directionFilter !== 'All') p.set('direction', directionFilter.toLowerCase());
     if (outcome !== 'all') p.set('outcome', outcome);
-    if (connectorFilter !== 'All') p.set('connector', connectorFilter);
+    if (connectionFilter !== 'All') p.set('connection', connectionFilter);
     if (dateFrom) p.set('from', dateFrom);
     if (dateTo) p.set('to', dateTo);
     return `?${p.toString()}`;
-  }, [page, sort, directionFilter, outcome, connectorFilter, dateFrom, dateTo]);
+  }, [page, sort, directionFilter, outcome, connectionFilter, dateFrom, dateTo]);
 
   const load = useCallback(async () => {
     const res = await api.getMessages(query);
@@ -87,7 +94,7 @@ export default function MonitorPage() {
       setRows(next);
       setTotal(res.data.total ?? next.length);
       if (res.data.counts) setCounts(res.data.counts);
-      if (Array.isArray(res.data.connectors)) setConnectorIds(res.data.connectors);
+      if (Array.isArray(res.data.connections)) setConnections(res.data.connections);
     }
     setLoading(false);
   }, [query]);
@@ -95,7 +102,7 @@ export default function MonitorPage() {
   // Refetches whenever the server-side query changes (filters, sort, page).
   useEffect(() => { load(); }, [load]);
 
-  // Names change rarely — fetched once, not on every 4s poll.
+  // Names and targets change rarely — fetched once, not on every 4s poll.
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -105,10 +112,31 @@ export default function MonitorPage() {
       for (const c of (conn.ok && Array.isArray(conn.data?.data) ? conn.data.data : [])) {
         if (c.connectorId) map[c.connectorId] = c.name || c.key;
       }
+      const targets = {};
+      const ends = {};
       for (const i of (integ.ok && Array.isArray(integ.data?.data) ? integ.data.data : [])) {
-        if (i.integrationId) map[i.integrationId] = i.name;
+        if (!i.integrationId) continue;
+        // The qualified endpoints of the connection this message belongs to. A
+        // connector name ("SharePoint") is the same on every row out of the same
+        // site; `site.list` is what distinguishes them.
+        ends[i.integrationId] = {
+          source: endpoint(i.fieldMappings, 'source').label,
+          dest: endpoint(i.fieldMappings, 'dest').label,
+        };
+        const list = Array.isArray(i.fieldMappings?.targets) ? i.fieldMappings.targets : [];
+        // The label an operator would recognise: what they named the target, else
+        // the table/list it writes to, else the raw id.
+        targets[i.integrationId] = {
+          count: list.length || 1,
+          labels: Object.fromEntries(list.map((t, n) => [
+            t.targetId || `t${n + 1}`,
+            t.label || t.config?.pgTable || t.config?.destTable || t.config?.listName || t.targetId || `t${n + 1}`,
+          ])),
+        };
       }
       setNameById(map);
+      setTargetsById(targets);
+      setEndsById(ends);
     })();
     return () => { alive = false; };
   }, []);
@@ -123,26 +151,53 @@ export default function MonitorPage() {
     return () => clearInterval(timer.current);
   }, [realtime, load]);
 
-  const nameOf = useCallback((id) => {
-    if (!id) return null;
-    const intg = integrationIdFromDest(id);
-    if (intg) return nameById[intg] || shortId(intg);
-    return nameById[id] || shortId(id);
-  }, [nameById]);
+  const nameOf = useCallback(
+    (id) => (id ? nameById[id] || shortId(id) : null),
+    [nameById],
+  );
 
-  const resolved = useMemo(() => rows.map((r) => ({
-    r,
-    k: classify(r.status),
-    srcName: nameOf(r.source) ?? '—',
-    destName: nameOf(r.dest),
-  })), [rows, nameOf]);
+  /* The Target cell. Blank unless the connection actually fans out — with one
+     target it is the same value on every row, and 'legacy' is the synthesised
+     id of a single-destination connection, which names nothing. */
+  const targetOf = useCallback((row) => {
+    if (!row.targetId || row.targetId === 'legacy') return null;
+    const t = targetsById[row.integrationId];
+    if (t && t.count < 2) return null;
+    return t?.labels?.[row.targetId] ?? row.targetId;
+  }, [targetsById]);
+
+  const resolved = useMemo(() => rows.map((r) => {
+    const targetName = targetOf(r);
+    const ends = endsById[r.integrationId];
+    return {
+      r,
+      k: classify(r.status),
+      // The server resolves the name; an id with no surviving connection (deleted
+      // since the message was sent) still identifies it better than a dash.
+      connName: r.connection || (r.integrationId ? shortId(r.integrationId) : null),
+      targetName,
+      /* The connection's qualified endpoints first — "site.list (SharePoint)" rather
+         than "SharePoint", which is the same value on every row out of that site.
+         The connector-name lookup stays as the fallback for a message whose
+         connection has since been deleted. */
+      srcName: ends?.source || nameOf(r.source) || '—',
+      // A fan-out row names its OWN target; only then the connection's single dest.
+      destName: targetName || ends?.dest || (r.dest ? (nameById[r.dest] || r.dest) : '—'),
+    };
+  }), [rows, targetOf, nameOf, nameById, endsById]);
+
+  /* The Target column earns its place only when something on the page fans out.
+     No connection multi-targets today, so a permanent column would be a full
+     width of dashes; it appears the moment one does. */
+  const showTarget = useMemo(() => resolved.some((x) => x.targetName), [resolved]);
+  const colCount = showTarget ? 7 : 6;
 
   // Options come from the server's DISTINCT over the whole feed, so the list
-  // does not change as you page. Value is the raw id; the label is resolved.
-  const connectorOptions = useMemo(
-    () => connectorIds.map((id) => ({ id, label: nameOf(id) || id }))
+  // does not change as you page.
+  const connectionOptions = useMemo(
+    () => connections.map((c) => ({ id: c.id, label: c.name || shortId(c.id) }))
       .sort((a, b) => a.label.localeCompare(b.label)),
-    [connectorIds, nameOf],
+    [connections],
   );
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -183,7 +238,7 @@ export default function MonitorPage() {
     const res = await api.getMessages(`?${p.toString()}`);
     if (!res.ok || !res.data?.success) { showToast('Could not load messages to export', 'error'); return; }
     const all = res.data.data || [];
-    const cols = ['timestamp', 'direction', 'topic', 'source', 'dest', 'status', 'messageId'];
+    const cols = ['timestamp', 'direction', 'topic', 'connection', 'targetId', 'source', 'dest', 'status', 'runId', 'messageId'];
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const csv = [cols.join(','), ...all.map((r) => cols.map((k) => esc(r[k])).join(','))].join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
@@ -197,10 +252,10 @@ export default function MonitorPage() {
   };
 
   const clearFilters = () => {
-    setDirectionFilter('All'); setOutcome('all'); setConnectorFilter('All');
+    setDirectionFilter('All'); setOutcome('all'); setConnectionFilter('All');
     setDateFrom(''); setDateTo(''); setPage(0);
   };
-  const filtersOn = directionFilter !== 'All' || outcome !== 'all' || connectorFilter !== 'All' || dateFrom || dateTo;
+  const filtersOn = directionFilter !== 'All' || outcome !== 'all' || connectionFilter !== 'All' || dateFrom || dateTo;
 
   /* No contextual-toolbar actions here by design. Export / Clear filters /
      Real-time each used to exist BOTH in the toolbar and on the page — and the
@@ -275,10 +330,10 @@ export default function MonitorPage() {
             <option value="In">Inbound (in)</option>
             <option value="Out">Outbound (out)</option>
           </select>
-          <select aria-label="Filter by connector" value={connectorFilter}
-            onChange={(e) => { setConnectorFilter(e.target.value); setPage(0); }}>
-            <option value="All">All connectors</option>
-            {connectorOptions.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+          <select aria-label="Filter by connection" value={connectionFilter}
+            onChange={(e) => { setConnectionFilter(e.target.value); setPage(0); }}>
+            <option value="All">All connections</option>
+            {connectionOptions.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
           </select>
           <label className="filter-date">
             From <input type="date" aria-label="From date" value={dateFrom}
@@ -294,24 +349,26 @@ export default function MonitorPage() {
           </span>
         </div>
 
-        <div className="table-wrap">
+        <TableFrame label="Message feed">
           <table className="data-table">
             <thead>
               <tr>
                 {th('time', 'Time')}
                 {th('direction', 'Dir')}
                 {th('topic', 'Topic')}
-                {/* Source and Destination show a resolved NAME while the feed
-                    stores an id, so sorting them server-side would disagree with
-                    the visible order. Left unsorted rather than sorted wrongly. */}
-                <th scope="col">Source</th>
-                <th scope="col">Destination</th>
+                {/* The connection, not the connector pair. Several connections
+                    run the same source→destination kinds, so connector names
+                    cannot tell you which one a failure came from — and the
+                    connection is the only thing you can then act on. Its name is
+                    resolved server-side AFTER paging, so it is not sortable. */}
+                <th scope="col">Connection</th>
+                {showTarget && <th scope="col">Target</th>}
                 {th('status', 'Status')}
                 <th scope="col"><span className="viz-sr-only">Payload</span></th>
               </tr>
             </thead>
             <tbody>
-              {resolved.map(({ r: row, k, srcName, destName }, idx) => {
+              {resolved.map(({ r: row, k, connName, targetName, srcName, destName }, idx) => {
                 const id = rowKey(row);
                 const open = expandedRows.has(id);
                 return (
@@ -329,8 +386,8 @@ export default function MonitorPage() {
                         </span>
                       </td>
                       <td className="cell-topic" title={row.topic}>{row.topic}</td>
-                      <td className="cell-name" title={row.source || ''}>{srcName}</td>
-                      <td className="cell-name" title={row.dest || ''}>{destName || '—'}</td>
+                      <td className="cell-name" title={row.integrationId || ''}>{connName || '—'}</td>
+                      {showTarget && <td className="cell-name" title={row.targetId || ''}>{targetName || '—'}</td>}
                       <td><span className={`badge ${k.badge}`}>{row.status}</span></td>
                       <td>
                         {/* One affordance instead of two: the row was clickable
@@ -345,8 +402,17 @@ export default function MonitorPage() {
                     </tr>
                     {open && (
                       <tr className="expandable-content show">
-                        <td colSpan={7}>
-                          <div className="payload-head">Payload — message {row.messageId}</div>
+                        <td colSpan={colCount}>
+                          <dl className="payload-meta">
+                            {/* No longer just the connector kind — the qualified
+                                endpoint, so "which SharePoint list" is answered here
+                                instead of needing a trip to the Registry. */}
+                            <div><dt>Source</dt><dd title={row.source || ''}>{srcName}</dd></div>
+                            <div><dt>Destination</dt><dd title={row.dest || ''}>{destName}</dd></div>
+                            <div><dt>Run</dt><dd title={row.runId || ''}>{row.runId ? shortId(row.runId) : '—'}</dd></div>
+                            <div><dt>Message</dt><dd>{row.messageId}</dd></div>
+                          </dl>
+                          <div className="payload-head">Payload</div>
                           <pre className="json-block payload-block">
                             {JSON.stringify(row.payload, null, 2)}
                           </pre>
@@ -357,7 +423,7 @@ export default function MonitorPage() {
                 );
               })}
               {!loading && total === 0 && (
-                <tr><td colSpan={7} className="table-empty">
+                <tr><td colSpan={colCount} className="table-empty">
                   <div className="table-empty-title">
                     {filtersOn ? 'Nothing matches these filters' : 'No messages on the bus yet'}
                   </div>
@@ -366,10 +432,10 @@ export default function MonitorPage() {
                     : 'Trigger a flow from the Registry — the bus must be running (HUB_ENABLED=true).'}
                 </td></tr>
               )}
-              {loading && <SkeletonTableRows rows={6} cols={7} />}
+              {loading && <SkeletonTableRows rows={6} cols={colCount} />}
             </tbody>
           </table>
-        </div>
+        </TableFrame>
 
         {pageCount > 1 && (
           <div className="flex gap-8 items-center mt-16" style={{ justifyContent: 'flex-end' }}>

@@ -1,4 +1,4 @@
-import { useRunProgress, runProgressOf } from '../../hooks/useRunProgress';
+import { useRunProgress, runProgressOf, runOutcomeOf } from '../../hooks/useRunProgress';
 
 /**
  * Live view of an in-flight bus run.
@@ -35,10 +35,13 @@ function Counters({ status, compact }) {
   );
 }
 
+/** tone: 'ok' | 'fail' | 'idle' — idle is a settled run that had nothing to deliver, so
+ *  the bar fills (the run IS complete) but in a neutral ink rather than a success green. */
 function Bar({ pct, tone }) {
+  const mod = tone === 'fail' ? ' is-fail' : tone === 'idle' ? ' is-idle' : '';
   return (
     <div className="wiz-meter-track" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-      <div className={`wiz-meter-fill${tone === 'fail' ? ' is-fail' : ''}`} style={{ width: `${pct}%` }} />
+      <div className={`wiz-meter-fill${mod}`} style={{ width: `${pct}%` }} />
     </div>
   );
 }
@@ -57,18 +60,23 @@ export function RunProgressStrip({ runId, onFinish }) {
   if (error && !status) return <div className="runp runp--card"><span className="runp-err">{error}</span></div>;
   if (!status) return <div className="runp runp--card"><span className="runp-muted">Starting…</span></div>;
 
-  const { settled, total, pct } = runProgressOf(status);
-  // recordsIn is 0 until the source finishes reading — say "reading" rather than "0 of 0".
-  const readout = total > 0 ? `${settled}/${total}` : 'reading source…';
+  const { pct } = runProgressOf(status);
+  // Label AND readout both come from the run's outcome. The old card said "Finished"
+  // for every settled run — including one that errored — and paired it with the
+  // in-flight placeholder "reading source…", which is how a re-run that published
+  // nothing came out looking like a blank success.
+  const { label, detail, tone } = runOutcomeOf(status);
 
   return (
     <div className="runp runp--card">
       <div className="runp-head">
-        <span className="runp-live">{status.finished ? 'Finished' : 'Running'}</span>
-        <span className="runp-readout">{readout}</span>
+        <span className={`runp-live runp-live--${tone}`}>{label}</span>
+        <span className="runp-readout">{detail}</span>
       </div>
-      <Bar pct={pct} tone={status.failed > 0 ? 'fail' : 'ok'} />
-      <Counters status={status} compact />
+      <Bar pct={pct} tone={tone} />
+      {/* A run that delivered nothing has no counters worth showing — `detail` above
+          already says why in words, and "0 delivered" on its own reads as a failure. */}
+      {(status.delivered > 0 || status.failed > 0 || !status.finished) && <Counters status={status} compact />}
       {!status.finished && (
         <button type="button" className="btn btn-outline btn-xs runp-stop"
           disabled={stopping} onClick={(e) => { e.stopPropagation(); stop(); }}>
@@ -100,18 +108,25 @@ export function RunLogPanel({ runId }) {
 
       {status && (() => {
         const { settled, total, pct } = runProgressOf(status);
+        const { label, detail, tone } = runOutcomeOf(status);
         return (
           <>
             <div className="runp-head">
-              <span className="runp-live">
-                {status.finished ? (status.failed > 0 ? 'Finished with failures' : 'Finished') : 'Running'}
-              </span>
+              <span className={`runp-live runp-live--${tone}`}>{label}</span>
               <span className="runp-readout">
-                {total > 0 ? `${settled} of ${total} · ${pct}%` : 'reading source…'}
+                {total > 0 ? `${settled} of ${total} · ${pct}%` : detail}
               </span>
             </div>
-            <Bar pct={pct} tone={status.failed > 0 ? 'fail' : 'ok'} />
+            <Bar pct={pct} tone={tone} />
             <Counters status={status} />
+            {/* The read-vs-published gap, spelled out. This is the number that explains a
+                run with nothing to deliver, and it has never been shown anywhere. */}
+            {status.finished && status.recordsRead > 0 && (
+              <div className="runp-muted runp-note">
+                Read {status.recordsRead} record{status.recordsRead === 1 ? '' : 's'} from the source
+                {status.duplicates > 0 && <> · {status.duplicates} already delivered unchanged, so {status.duplicates === status.recordsRead ? 'none were' : 'they were not'} re-sent</>}.
+              </div>
+            )}
 
             {status.errors?.length > 0 && (
               <ul className="runp-errors">

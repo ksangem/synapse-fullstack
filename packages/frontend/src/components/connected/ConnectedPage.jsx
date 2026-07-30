@@ -3,12 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import Button from '../ui/Button';
 import Card, { CardEmpty, CardSkeleton } from '../ui/Card';
 import Icon from '../ui/Icon';
+import TableFrame from '../ui/TableFrame';
 import StatStrip from '../ui/StatStrip';
+import EndpointRoute from '../ui/EndpointRoute';
 import { useToast } from '../../hooks/useToast';
 import { useConfirm } from '../../hooks/useConfirm';
 import { usePolling } from '../../hooks/usePolling';
 import { api } from '../../services/api';
-import { systemIcon } from '../../services/integrationMap';
+import { systemIcon, endpoint } from '../../services/integrationMap';
 import {
   overlayStyle, modalStyle, labelStyle, inputStyle, selectStyle, statusBadgeClass, fmtDate,
 } from './styles';
@@ -93,6 +95,20 @@ function IntegrationCard(props) {
   const fm = intg.fieldMappings || {};
   const srcName = ident(intg.source, fm, 'sourceType');
   const destName = ident(intg.dest, fm, 'destType');
+  /* The route row names the endpoints, not the technologies — every connection on
+     this page would otherwise read "SharePoint → PostgreSQL". The system name comes
+     from the connector when one is pinned, so the scope is all that is derived. */
+  const route = (() => {
+    const s = endpoint(fm, 'source').scope;
+    const d = endpoint(fm, 'dest').scope;
+    return {
+      src: srcName, dest: destName, srcScope: s, destScope: d,
+      srcIcon: identIcon(intg.source, fm, 'sourceType'),
+      destIcon: identIcon(intg.dest, fm, 'destType'),
+      srcLabel: s ? `${s} (${srcName})` : srcName,
+      destLabel: d ? `${d} (${destName})` : destName,
+    };
+  })();
   const target = fm.endpointUrl || fm.destListName || fm.listName || fm.pgTable || fm.destTable || '—';
 
   const pushes = pushHistoryCache[intg.integrationId] || intg.recentPushes || [];
@@ -112,12 +128,10 @@ function IntegrationCard(props) {
       eyebrow={<span>{eyebrowLabel}</span>}
       badge={kind}
       title={intg.name || fm.projectKey || 'Connection'}
-      ariaLabel={`${intg.name || 'Connection'}, ${eyebrowLabel}, ${srcName} to ${destName}`}
+      ariaLabel={`${intg.name || 'Connection'}, ${eyebrowLabel}, ${route.srcLabel} to ${route.destLabel}`}
       sub={
         <>
-          <span className="ucard-node"><span className="ucard-ico" aria-hidden="true">{identIcon(intg.source, fm, 'sourceType')}</span>{srcName}</span>
-          <span className="ucard-arrow" aria-hidden="true">→</span>
-          <span className="ucard-node"><span className="ucard-ico" aria-hidden="true">{identIcon(intg.dest, fm, 'destType')}</span>{destName}</span>
+          <EndpointRoute tile={route} />
           {fm.projectKey ? <span className="badge badge-neutral" style={{ marginLeft: 6 }}>{fm.projectKey}</span> : null}
         </>
       }
@@ -169,7 +183,7 @@ function IntegrationCard(props) {
           {isExpanded ? '▼' : '▶'} Push History ({pushes.length})
         </button>
         {isExpanded && pushes.length > 0 && (
-          <div className="table-wrap" style={{ marginTop: 8 }}>
+          <TableFrame label="Push history" style={{ marginTop: 8 }}>
             <table className="conn-table">
               <thead><tr>
                 <th scope="col">Type</th><th scope="col">Date Range</th>
@@ -188,7 +202,7 @@ function IntegrationCard(props) {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableFrame>
         )}
         {isExpanded && pushes.length === 0 && (
           <div style={{ marginTop: 8, fontSize: 'var(--fs-sm)', color: 'var(--text-dim)' }}>No push history available.</div>

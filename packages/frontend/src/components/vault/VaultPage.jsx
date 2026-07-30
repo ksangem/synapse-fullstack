@@ -3,6 +3,7 @@ import { useGrowFrom, originRect } from '../../hooks/useGrowFrom';
 import { useToast } from '../../hooks/useToast';
 import { useConfirm } from '../../hooks/useConfirm';
 import { api } from '../../services/api';
+import TableFrame from '../ui/TableFrame';
 import Button from '../ui/Button';
 import StatStrip from '../ui/StatStrip';
 import Icon from '../ui/Icon';
@@ -275,7 +276,7 @@ export default function VaultPage() {
           )}
         </div>
 
-        <div className="table-wrap">
+        <TableFrame label="Credential vault">
           <table className="data-table">
             <thead>
               <tr>
@@ -347,7 +348,7 @@ export default function VaultPage() {
               )}
             </tbody>
           </table>
-        </div>
+        </TableFrame>
 
         {showDbForm && (
           <div className="panel form-panel" ref={formRef}>

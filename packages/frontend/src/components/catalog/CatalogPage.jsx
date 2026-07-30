@@ -6,6 +6,7 @@ import { useToolbarAction } from '../../hooks/useToolbarAction';
 import { SkeletonLines } from '../layout/Skeleton';
 import StatStrip from '../ui/StatStrip';
 import Icon from '../ui/Icon';
+import TableFrame from '../ui/TableFrame';
 import { useGrowFrom, originRect } from '../../hooks/useGrowFrom';
 
 /* Master Entity Catalog — real data from /api/entities. Entities are grouped by
@@ -211,6 +212,7 @@ export default function CatalogPage() {
                       </div>
                     </div>
                   ) : (
+                    <TableFrame className="" label="Entity fields">
                     <table className="data-table">
                       <thead><tr><th scope="col">Field</th><th scope="col">Label</th><th scope="col">Type</th><th scope="col">Required</th><th scope="col">Usage</th></tr></thead>
                       <tbody>
@@ -232,6 +234,7 @@ export default function CatalogPage() {
                         ))}
                       </tbody>
                     </table>
+                    </TableFrame>
                   )}
                 </div>
 

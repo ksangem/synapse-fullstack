@@ -17,6 +17,11 @@ export default function CriticalBanner() {
       <span className="pulse-dot" aria-hidden="true"></span>
       <span style={{ flex: 1 }}>
         <strong>Critical:</strong> {topCritical.title}
+        {/* Name the connection before the prose. A platform-wide alert has none,
+            and then this reads exactly as it did. */}
+        {topCritical.connection
+          ? ` — ${topCritical.connection.name || topCritical.connection.route}`
+          : ''}
         {topCritical.message ? ` — ${topCritical.message}` : ''}
       </span>
       <button className="btn btn-danger btn-sm" onClick={() => navigate('/alerts')}>

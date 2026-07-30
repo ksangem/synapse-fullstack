@@ -79,6 +79,13 @@ export default function NotificationDropdown({ isOpen, onClose }) {
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleItemClick(); } }}
         >
           <div className="notif-title">{a.title}</div>
+          {/* Which connection raised it. The bell listed three "Sync failed" lines
+              with nothing to tell them apart. */}
+          {a.connection && (
+            <div className="notif-route" title={a.connection.route}>
+              {a.connection.name ? `${a.connection.name} · ` : ''}{a.connection.route}
+            </div>
+          )}
           <div className="notif-meta">
             {a.relative}
             {a.resolved ? ' · Resolved' : ''}

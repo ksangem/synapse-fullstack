@@ -20,6 +20,85 @@ export function systemIcon(name) {
   return SYSTEM_ICONS[name] || '\u{1F517}';
 }
 
+/* ── Endpoint naming ───────────────────────────────────────────────────────────
+   "SharePoint → PostgreSQL" names the TECHNOLOGY. It does not say which list or
+   which table, so two connections out of the same site read as identical rows on
+   every screen that lists them. These build the qualified endpoint —
+   `site.list`, `database.table` — which is the part that actually identifies one.
+
+   Everything is derived from `fieldMappings`, whose keys this module already owns
+   (see the file header), so no caller has to learn them. Credentials are NOT here:
+   a DB *source* keeps host/database in an encrypted bag behind `srcCredId`, so the
+   best it can name is the entity it reads. Absent scope ⇒ the bare system name,
+   never a half-built "undefined.orders". */
+
+// The segment after /sites/ or /teams/ — what people call a SharePoint site. Root
+// sites have no managed path, so fall back to the host label.
+function spSite(url) {
+  if (!url) return '';
+  const s = String(url);
+  const m = s.match(/\/(?:sites|teams)\/([^/?#]+)/i);
+  if (m) return decodeURIComponent(m[1]);
+  const host = s.match(/^https?:\/\/([^./]+)/i);
+  return host ? host[1] : '';
+}
+
+const join = (...parts) => parts.filter(Boolean).join('.');
+
+// One fan-out target → the label an operator would recognise, same precedence the
+// Monitor's target column uses.
+function targetScope(t) {
+  const c = t?.config || {};
+  return t?.label || c.pgTable || c.destTable || c.listName
+    || join(spSite(c.destSiteUrl || c.siteUrl), c.destListName)
+    || t?.targetId || '';
+}
+
+/** The qualified endpoint for one side of a connection.
+ *  @param fm    an integration's `fieldMappings`
+ *  @param side  'source' | 'dest'
+ *  @returns {{system:string, scope:string, label:string}} — `label` is
+ *           "scope (System)", or just "System" when nothing qualifies it. */
+export function endpoint(fm, side) {
+  const f = fm || {};
+  const isSrc = side === 'source';
+  // Trimmed: some saved connections carry a leading space in `sourceType`
+  // (" Web Scraping"), which rendered as a stray indent on every card.
+  const system = String((isSrc ? f.sourceType : f.destType) || '').trim()
+    || (isSrc ? 'Source' : 'Destination');
+  let scope = '';
+
+  if (isSrc) {
+    if (/sharepoint/i.test(system)) scope = join(spSite(f.siteUrl), f.sourceListName || f.listName);
+    else if (/jira/i.test(system)) scope = f.projectKey || '';
+    // Every other source kind (REST, scrape, file share, DB…) records the object it
+    // reads as `sourceEntity`; its connection details live behind `srcCredId`.
+    else scope = f.sourceEntity || f.projectKey || '';
+  } else {
+    const targets = Array.isArray(f.targets) ? f.targets : [];
+    if (targets.length > 1) {
+      // Fan-out: name the first and count the rest rather than truncating a list
+      // nobody can read at card width.
+      scope = `${targetScope(targets[0])} +${targets.length - 1} more`;
+    } else if (/sharepoint/i.test(system)) {
+      scope = join(spSite(f.destSiteUrl || f.siteUrl), f.destListName || f.listName);
+    } else if (f.pgTable) {
+      // A non-default schema is part of the name — `pulse.employees` is ambiguous
+      // across two schemas, `pulse.pulse_2.employees` is not.
+      const schema = f.pgSchema && !/^(public|dbo)$/i.test(f.pgSchema) ? f.pgSchema : '';
+      scope = join(f.pgDatabase, schema, f.pgTable);
+    } else {
+      /* No table yet (a connection saved before its destination was picked). The
+         database ALONE — appending the schema here produced "pulse.pulse_2", which
+         reads as database.table and names a table that does not exist. */
+      scope = f.pgDatabase || '';
+    }
+  }
+
+  scope = scope || '';
+  return { system, scope, label: scope ? `${scope} (${system})` : system };
+}
+
 // Backend status enum → tile colour used across the UI.
 export function statusToColor(status) {
   switch (status) {
@@ -128,14 +207,23 @@ export function mapToCard(integ) {
   const volume7d = Array.isArray(integ.volume7d) ? integ.volume7d : [];
   const records7d = volume7d.reduce((s, d) => s + (Number(d.count) || 0), 0);
 
+  // The qualified endpoints. `src`/`dest` stay the bare system names — plenty of
+  // callers key off them (icons, filters) — and the scope rides alongside.
+  const srcEnd = endpoint(fm, 'source');
+  const destEnd = endpoint(fm, 'dest');
+
   return {
     id: integ.integrationId,
     name: integ.name,
     src,
     dest,
+    srcScope: srcEnd.scope,
+    destScope: destEnd.scope,
+    srcLabel: srcEnd.label,
+    destLabel: destEnd.label,
     srcIcon: systemIcon(src),
     destIcon: systemIcon(dest),
-    route: `${src} → ${dest}`,
+    route: `${srcEnd.label} → ${destEnd.label}`,
     kind: integ.kind || null,
     health,
     lastRunAt,

@@ -24,10 +24,29 @@ function AlertDetailContent({ alert, navigate }) {
         </div>
         <div>
           <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Integration</div>
+          {/* A bare UUID identified nothing you could act on. Name it, and say what
+              it moves — the id stays as the tooltip for anyone matching logs. */}
           {alert.integrationId
-            ? <button type="button" className="link-btn" onClick={() => navigate('/registry')}>{alert.integrationId}</button>
+            ? (
+              <button type="button" className="link-btn" title={alert.integrationId}
+                onClick={() => navigate('/registry')}>
+                {alert.connection?.name || alert.integrationId}
+              </button>
+            )
             : <span style={{ color: 'var(--text-dim)' }}>Platform-wide</span>}
         </div>
+        {alert.connection && (
+          <>
+            <div>
+              <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Source</div>
+              <span style={{ fontSize: 'var(--fs-base)' }}>{alert.connection.srcLabel}</span>
+            </div>
+            <div>
+              <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Destination</div>
+              <span style={{ fontSize: 'var(--fs-base)' }}>{alert.connection.destLabel}</span>
+            </div>
+          </>
+        )}
         <div>
           <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Time</div>
           {alert.time || '—'}
@@ -166,6 +185,14 @@ export default function AlertsPage() {
                   eyebrow={a.resolved ? `${sev.label} · resolved` : sev.label}
                   badge={a.integrationId ? 'integration' : 'platform'}
                   title={a.title}
+                  /* Which sync raised it, named the way the Registry names it.
+                     "integration" in the badge said only that one was involved. */
+                  sub={a.connection
+                    ? <>
+                        <span className="ucard-scope">{a.connection.name || 'Connection'}</span>
+                        <span className="ucard-sys">{a.connection.route}</span>
+                      </>
+                    : undefined}
                   onOpen={() => handleAlertClick(a)}
                   ariaLabel={`${sev.label} alert: ${a.title}, ${a.resolved ? 'resolved' : 'unresolved'}`}
                   foot={

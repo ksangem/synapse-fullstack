@@ -7,6 +7,9 @@ import PresetConfigFields from '../mapping/PresetConfigFields';
 import SessionRecorder from './SessionRecorder';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
+import TableFrame from '../ui/TableFrame';
+import Icon from '../ui/Icon';
+import InfoHint from '../ui/InfoHint';
 import {
   PAIR_COLORS, PRESET_GROUPS, PRESET_TRANSFORMS, PRESET_OUTPUT_TYPE,
   computeMappedValue, defaultPresetConfig, presetConfigSpec, presetIssue, sampleFor,
@@ -98,6 +101,18 @@ function typesCompatible(srcType, destType) {
 function spSafeColName(name) {
   const clean = String(name).replace(/[^A-Za-z0-9]/g, '');
   return /^[0-9]/.test(clean) ? `f${clean}` : (clean || 'Field');
+}
+
+// One preview cell as text. Sources hand back nested objects (Jira `status`, SP lookups)
+// and arrays; render the human part when there is one instead of "[object Object]".
+function cellText(v) {
+  if (v === null || v === undefined) return '';
+  if (Array.isArray(v)) return v.map(cellText).filter(Boolean).join(', ');
+  if (typeof v === 'object') {
+    const label = v.displayName ?? v.name ?? v.value ?? v.Title ?? v.title;
+    return label !== undefined && typeof label !== 'object' ? String(label) : JSON.stringify(v);
+  }
+  return String(v);
 }
 
 function autoMapFields(srcFields, destFields) {
@@ -1052,6 +1067,43 @@ export default function WizardPage() {
     return null;
   })();
 
+  /* Step 6 has no step to count — it IS the last one — so the action bar's meter
+     reports the push instead: state line, record counter and progress fill, right
+     next to the button that starts it. That is what let the "Push Status" card go
+     away entirely before a push, and with it a duplicate primary button. */
+  const pushing = pushStatus === 'pushing' || pushStatus === 'polling';
+  const pushMeter = (() => {
+    if (wizardStep !== 6) return null;
+    const total = pushResult?.total || fetchResult?.totalCount || 0;
+    if (pushing) {
+      const p = pushProgress || {};
+      const processed = (p.createdCount ?? p.created_count ?? 0) + (p.updatedCount ?? p.updated_count ?? 0)
+        + (p.failedCount ?? p.failed_count ?? 0) + (p.skippedCount ?? p.skipped_count ?? 0);
+      return {
+        tone: 'busy', busy: true,
+        label: pushStatus === 'pushing' ? 'Starting push…' : `Pushing to ${selectedDest}…`,
+        right: total ? `${processed.toLocaleString()} of ${total.toLocaleString()} records` : '',
+        pct: total ? Math.min(100, Math.round((processed / total) * 100)) : 0,
+      };
+    }
+    if (pushStatus === 'done' && pushResult) {
+      const cancelled = pushResult.status === 'cancelled';
+      const ok = pushResult.status === 'success';
+      return {
+        tone: ok ? 'good' : cancelled ? 'info' : 'bad',
+        label: ok ? 'Push complete' : cancelled ? 'Push stopped' : 'Push had errors',
+        right: `${(pushResult.created || pushResult.inserted || 0).toLocaleString()} inserted · ${(pushResult.updated || 0).toLocaleString()} updated · ${(pushResult.failed || 0).toLocaleString()} failed`,
+        pct: 100,
+      };
+    }
+    if (pushStatus === 'error') return { tone: 'bad', label: 'Push failed', right: 'Nothing was written', pct: 0 };
+    return {
+      tone: 'idle', pct: 0,
+      label: `Ready to push ${total.toLocaleString()} ${total === 1 ? 'record' : 'records'} to ${selectedDest}`,
+      right: 'Nothing is written until you start',
+    };
+  })();
+
   const goNext = () => {
     if (wizardStep === 1 && (!selectedSource || !selectedDest)) return;
     if (wizardStep === 2 && (srcTestStatus !== 'connected' || destTestStatus !== 'connected')) return;
@@ -1065,7 +1117,13 @@ export default function WizardPage() {
       else if (!destCreds.table) return; // must pick/create a table (or already have one set)
     }
     if (wizardStep === 5 && fetchStatus !== 'done') return; // must fetch before push
-    if (wizardStep === 6) { handlePush(); return; } // Step 6 button triggers push
+    // Step 6's button pushes — except after a successful push, when it reads "Done"
+    // and must mean it. It used to run handlePush() a second time under that label.
+    if (wizardStep === 6) {
+      if (pushStatus === 'done') navigate('/connected');
+      else handlePush();
+      return;
+    }
     setStepDir('fwd');
     setWizardStep(prev => Math.min(6, prev + 1));
   };
@@ -1150,6 +1208,64 @@ export default function WizardPage() {
       setFetchStatus('error');
     }
   };
+
+  // ─── Step 5: Preview grid (source-agnostic) ────────────
+  // The preview used to hand-pick 3 columns per source and read SharePoint values from
+  // `t.fields[name]`. The SERVER preview (the path that actually runs now) emits a FLAT
+  // payload — fields spread at the top level plus `id` — so every one of those cells read
+  // undefined and the table rendered blank. Derive columns from the records themselves
+  // instead: whatever the source returns is what you see, for every source.
+  const previewRows = useMemo(() => {
+    const rows = fetchResult?.tickets;
+    if (!Array.isArray(rows)) return [];
+    return rows.map((t) => {
+      if (!t || typeof t !== 'object') return { value: t };
+      // Client-fallback shapes (SP items, Jira issues) still nest values under `.fields`.
+      const nested = t.fields;
+      if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+        const { fields: _drop, ...rest } = t;
+        return { ...rest, ...nested };
+      }
+      return t;
+    });
+  }, [fetchResult]);
+
+  // Union of keys across ALL previewed rows (a record can omit an empty field), with the
+  // identity columns hoisted to the front so the table reads like a record list.
+  const previewCols = useMemo(() => {
+    const seen = [];
+    for (const r of previewRows) {
+      for (const k of Object.keys(r)) if (!seen.includes(k)) seen.push(k);
+    }
+    const lead = ['id', 'spItemId', 'key', 'issueKey', 'Title', 'title'].filter(k => seen.includes(k));
+    return [...lead, ...seen.filter(k => !lead.includes(k))];
+  }, [previewRows]);
+
+  // Column header label: prefer the source's display name when we know it.
+  const previewLabel = useCallback((col) => {
+    const f = srcFields.find(sf => sf.name === col);
+    return f?.displayName || col;
+  }, [srcFields]);
+
+  // ── Pinned (frozen) preview columns ──
+  // Click a header to pin that column: it jumps to the front and stays put while the rest
+  // scroll sideways. Pinning is USER-CHOSEN rather than hard-wired to `id`, because which
+  // column identifies a row is entity-specific — for a Jira list it's Key, for a people
+  // list it's Name. Pin order = click order, so a second pin parks to the right of the first.
+  const [pinnedCols, setPinnedCols] = useState([]);
+  const togglePin = useCallback((col) => {
+    setPinnedCols(prev => prev.includes(col) ? prev.filter(c => c !== col) : [...prev, col]);
+  }, []);
+  // Drop pins for columns the current preview no longer has (re-fetch of another entity).
+  const pinned = useMemo(
+    () => pinnedCols.filter(c => previewCols.includes(c)),
+    [pinnedCols, previewCols],
+  );
+  const orderedCols = useMemo(
+    () => [...pinned, ...previewCols.filter(c => !pinned.includes(c))],
+    [pinned, previewCols],
+  );
+
 
   // ─── Step 6: Push to destination ───────────────────────
   // Server-side push (Wizard convergence): persist the recipe (mappings + key + date
@@ -3438,7 +3554,11 @@ export default function WizardPage() {
 
         {/* ── Step 5: Fetch & Review ── */}
         {wizardStep === 5 && (
-          <div className="wizard-step active">
+          // Step 5 FITS the viewport instead of growing past it: the step, the grid and the
+          // results card are all flex / min-height:0 links in one chain, so the only thing
+          // that resizes with the window is the preview's own scroll box. The fixed-height
+          // table pushed the card below the fold and put a scrollbar on the whole page.
+          <div className="wizard-step active" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             <div className="wiz-section">
               <div className="wiz-section-main">
                 <div className="wiz-section-title">Fetch &amp; review</div>
@@ -3448,9 +3568,11 @@ export default function WizardPage() {
               </div>
             </div>
 
-            <div className="grid-2" style={{ gap: 24 }}>
+            {/* Columns stay 50/50 however wide the preview gets — `.grid-2>*{min-width:0}`
+                in styles.css stops a grid item from inflating its own column. */}
+            <div className="grid-2" style={{ gap: 24, flex: 1, minHeight: 0 }}>
               {/* Left: Config */}
-              <div className="card" style={{ padding: 20 }}>
+              <div className="card" style={{ padding: 20, minWidth: 0, minHeight: 0, overflowY: 'auto' }}>
                 <div className="wiz-card-title">Fetch Configuration</div>
                 {/* "Project" is a Jira-only scope. Other sources are scoped by the entity
                     field below, so showing an empty (or fake) Project box only confused. */}
@@ -3514,8 +3636,8 @@ export default function WizardPage() {
               </div>
 
               {/* Right: Results */}
-              <div className="card" style={{ padding: 20 }}>
-                <div className="wiz-card-title">Fetch Results</div>
+              <div className="card" style={{ padding: 20, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <div className="wiz-card-title" style={{ flexShrink: 0 }}>Fetch Results</div>
                 {fetchStatus === 'idle' && (
                   <div className="wiz-empty">
                     <div className="wiz-empty-icon">&#128269;</div>
@@ -3533,8 +3655,8 @@ export default function WizardPage() {
                   </div>
                 )}
                 {fetchStatus === 'done' && fetchResult && (
-                  <div>
-                    <div className="wiz-note wiz-note--success" style={{ marginBottom: 12 }}>
+                  <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                    <div className="wiz-note wiz-note--success" style={{ marginBottom: 12, flexShrink: 0 }}>
                       <div style={{ fontWeight: 'var(--fw-bold)', color: 'var(--success-on)', fontSize: 'var(--fs-base)' }}>
                         &#9989; {fetchResult.serverPreview
                           ? `Previewed ${fetchResult.totalCount}${fetchResult.totalCount >= fetchResult.previewLimit ? '+' : ''} ${isSpSource(selectedSource) ? 'items' : selectedSource === 'Jira' ? 'issues' : 'records'}`
@@ -3551,78 +3673,72 @@ export default function WizardPage() {
                         Run ID: <span style={{ fontFamily: 'var(--font-mono)' }}>{fetchResult.runId}</span>
                       </div>
                     </div>
-                    <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)', marginBottom: 6, fontWeight: 'var(--fw-semibold)' }}>
-                      Preview (first {Math.min(5, fetchResult.tickets.length)} of {fetchResult.totalCount})
-                    </div>
-                    <div className="wiz-table-wrap" style={{ maxHeight: 220 }}>
-                      <table className="wiz-data-table">
+                    <>
+                      {/* Every record and every column the source returned. TableFrame owns the
+                          scroll box's expand control and the sticky geometry of the pinned
+                          columns; this table stays in charge of WHICH columns are pinned,
+                          because it also reorders them to the front — `pinnedCount` says "the
+                          first N columns are frozen" and the frame measures the rest.
+                          The caption strip that used to sit above this replaced by the frame's
+                          own header, so both wizard previews are one component now. */}
+                      <TableFrame
+                        className="wiz-table-wrap"
+                        style={{ flex: 1, minHeight: 120, overflow: 'auto', maxWidth: '100%' }}
+                        label="Fetched records preview"
+                        caption="Preview"
+                        meta={`${previewRows.length} ${previewRows.length === 1 ? 'record' : 'records'} · ${previewCols.length} ${previewCols.length === 1 ? 'column' : 'columns'}${pinned.length ? ` · ${pinned.length} pinned` : ' · click a column header to pin it left'}`}
+                        pinnedCount={pinned.length}
+                        tools={pinned.length
+                          ? <button type="button" className="tf-btn" onClick={() => setPinnedCols([])}>Unpin all</button>
+                          : null}
+                      >
+                      <table className="wiz-data-table is-sticky is-xs" style={{ width: 'max-content', minWidth: '100%' }}>
                         <thead>
                           <tr>
-                            {isSpSource(selectedSource) ? (
-                              <>
-                                <th scope="col">Item ID</th>
-                                {srcFields.slice(0, 3).map(f => (
-                                  <th scope="col" key={f.name}>{f.displayName || f.name}</th>
-                                ))}
-                              </>
-                            ) : selectedSource === 'Jira' ? (
-                              <>
-                                <th scope="col">Key</th>
-                                <th scope="col">Summary</th>
-                                <th scope="col">Status</th>
-                              </>
-                            ) : (
-                              // Generic source (REST/DB/…): columns from the actual record keys.
-                              <>
-                                {Object.keys(fetchResult.tickets[0] || {}).slice(0, 5).map((c) => (
-                                  <th scope="col" key={c}>{c}</th>
-                                ))}
-                              </>
-                            )}
+                            {orderedCols.map((c) => {
+                              const isPinned = pinned.includes(c);
+                              return (
+                                <th scope="col" key={c}>
+                                  {/* A button, not a click handler on the th: pinning has to be
+                                      reachable by keyboard and announce its on/off state. */}
+                                  <button
+                                    type="button"
+                                    className="wiz-pin-btn"
+                                    aria-pressed={isPinned}
+                                    title={isPinned ? `Unpin ${previewLabel(c)}` : `Pin ${previewLabel(c)} to the left`}
+                                    onClick={() => togglePin(c)}
+                                  >
+                                    {previewLabel(c)}
+                                    <span className="wiz-pin-mark" aria-hidden="true">&#128204;</span>
+                                  </button>
+                                </th>
+                              );
+                            })}
                           </tr>
                         </thead>
                         <tbody>
-                          {fetchResult.tickets.slice(0, 5).map((t, i) => (
+                          {previewRows.map((t, i) => (
                             <tr key={i}>
-                              {isSpSource(selectedSource) ? (
-                                <>
-                                  <td className="is-mono">
-                                    {t.spItemId || t.id || '--'}
+                              {orderedCols.map((c) => {
+                                const text = cellText(t[c]);
+                                return (
+                                  <td
+                                    key={c}
+                                    className="is-clip"
+                                    style={{ maxWidth: 220 }}
+                                    title={text.length > 40 ? text : undefined}
+                                  >
+                                    {text}
                                   </td>
-                                  {srcFields.slice(0, 3).map(f => (
-                                    <td key={f.name}>
-                                      {String(t.fields?.[f.name] ?? '').substring(0, 50)}
-                                    </td>
-                                  ))}
-                                </>
-                              ) : selectedSource === 'Jira' ? (
-                                <>
-                                  <td className="is-mono">
-                                    {t.key || t.issueKey || '--'}
-                                  </td>
-                                  <td>
-                                    {(t.fields?.summary || t.summary || '').substring(0, 60)}
-                                  </td>
-                                  <td style={{ whiteSpace: 'nowrap' }}>
-                                    {t.fields?.status?.name || t.status || '--'}
-                                  </td>
-                                </>
-                              ) : (
-                                // Generic source: show the same record keys as the header.
-                                <>
-                                  {Object.keys(fetchResult.tickets[0] || {}).slice(0, 5).map((c) => (
-                                    <td key={c}>
-                                      {String(t[c] ?? '').substring(0, 50)}
-                                    </td>
-                                  ))}
-                                </>
-                              )}
+                                );
+                              })}
                             </tr>
                           ))}
                         </tbody>
                       </table>
-                    </div>
-                    <div style={{ marginTop: 12, fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)' }}>
+                      </TableFrame>
+                    </>
+                    <div style={{ marginTop: 12, fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)', flexShrink: 0 }}>
                       {(isDbDest(selectedDest)) ? (
                         <>Click <strong>Next</strong> to push {fetchResult.totalCount} records to <strong>{destCreds.table || 'auto-generated table'}</strong> in {selectedDest}. Table is auto-created if it doesn't exist. Existing rows updated by {mappings[0]?.destinations?.[0] || 'key'}.</>
                       ) : (
@@ -3638,7 +3754,7 @@ export default function WizardPage() {
 
         {/* ── Step 6: Push & Sync ── */}
         {wizardStep === 6 && (
-          <div className="wizard-step active">
+          <div className="wizard-step active" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             <div className="wiz-section">
               <div className="wiz-section-main">
                 <div className="wiz-section-title">Push &amp; sync</div>
@@ -3650,49 +3766,69 @@ export default function WizardPage() {
 
             {/* ── Run all entities in this group (multi-entity orchestration) ── */}
             {groupId && (
-              <div className="card" style={{ padding: 16, marginBottom: 16, borderLeft: '3px solid var(--primary)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                  <div>
-                    <div style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-md)' }}>Entity group: <code style={{ background: 'var(--bg-main)', padding: '1px 6px', borderRadius: 'var(--radius-sm)' }}>{groupId}</code></div>
-                    <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)' }}>Runs every <strong>active saved</strong> connection tagged with this group, one after another. Save this connection first so it's included.</div>
+              <div className="card is-accent" style={{ marginBottom: 16 }}>
+                <div className="wiz-ready">
+                  <div className="wiz-ready-main">
+                    <span className="wiz-ready-title">
+                      Entity group <code>{groupId}</code>
+                    </span>
+                    <span className="wiz-ready-sub">
+                      Runs every <strong>active saved</strong> connection tagged with this group, one after
+                      another. Save this connection first so it&rsquo;s included.
+                    </span>
                   </div>
-                  <button className="btn btn-primary btn-sm" disabled={groupRunStatus === 'running'} onClick={handleRunGroup}>
-                    {groupRunStatus === 'running' ? 'Running all…' : '▶ Run all in group'}
-                  </button>
+                  <Button
+                    className="btn btn-primary btn-sm"
+                    loading={groupRunStatus === 'running'}
+                    loadingLabel="Running all…"
+                    onClick={handleRunGroup}
+                  >
+                    <Icon name="play" /> Run all in group
+                  </Button>
                 </div>
                 {groupRunResult && (
-                  <div style={{ marginTop: 10, fontSize: 'var(--fs-sm)' }}>
+                  <div className="wiz-grouprun">
                     {groupRunResult.error ? (
-                      <span style={{ color: 'var(--error-on)' }}>{groupRunResult.error}</span>
+                      <div className="wiz-note wiz-note--error">{groupRunResult.error}</div>
                     ) : (
-                      <div>
+                      <>
                         <div style={{ color: 'var(--success-on)', fontWeight: 'var(--fw-semibold)', marginBottom: 4 }}>
                           Ran {groupRunResult.count - (groupRunResult.skipped || 0)} of {groupRunResult.count} entit{groupRunResult.count === 1 ? 'y' : 'ies'}
                           {groupRunResult.skipped ? ` · ${groupRunResult.skipped} skipped after a failure` : ''}:
                         </div>
                         {(groupRunResult.results || []).map((r, i) => (
-                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '2px 0', borderBottom: '1px solid var(--border)' }}>
-                            <span style={r.skipped ? { color: 'var(--text-dim)' } : undefined}>{r.name || r.integrationId}</span>
+                          <div key={i} className={`wiz-grouprun-row${r.skipped ? ' is-skipped' : ''}`}>
+                            <span>{r.name || r.integrationId}</span>
                             {/* A skipped member is neither a success nor its own failure —
                                 it never ran because something earlier in the load order did. */}
                             {r.skipped
-                              ? <span style={{ color: 'var(--warning-on)' }}>{r.reason || 'Skipped'}</span>
+                              ? <span className="badge badge-warning">{r.reason || 'Skipped'}</span>
                               : r.error
-                                ? <span style={{ color: 'var(--error-on)' }}>{r.error}</span>
+                                /* A badge is a pill sized to its text — right for "Skipped",
+                                   wrong for a driver error that runs to a paragraph. */
+                                ? <span style={{ color: 'var(--error-on)', textAlign: 'right' }}>{r.error}</span>
                                 : <span style={{ color: 'var(--text-dim)' }}>{r.published ?? 0} published &times; {r.targets ?? 1} target(s)</span>}
                           </div>
                         ))}
-                      </div>
+                      </>
                     )}
                   </div>
                 )}
               </div>
             )}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {/* Config + Status row */}
-              <div style={{ display: 'grid', gridTemplateColumns: pushStatus !== 'idle' || !fetchResult?.tickets?.length ? '1fr 1fr' : '1fr', gap: 16 }}>
-              <div className="card" style={{ padding: 20 }}>
+            {/* One column, and every child capped at the column's width.
+                The step used to lay these cards out on an inline grid whose tracks were
+                sized `1fr` — auto-minimum, so the 106-column preview table set the track's
+                minimum width and every card in it grew to match. The page then clipped
+                (page-body is overflow-x:hidden), taking the table's own controls off
+                screen with it. Nothing here may be wider than the page. */}
+            {/* is-fill: the step owns the height left under the rail and above the
+                action bar, and the ONE region that can grow without bound — the
+                preview table while idle, the results panel once pushed — scrolls
+                inside its own box. The step itself never pushes the page. */}
+            <div className="wiz-step6 is-fill">
+              <div className="card">
                 <div className="wiz-card-title">Push Configuration</div>
                 {/* Facts, not a run-on list of "label: value" divs — the same
                     read-only treatment step 5 uses, so the two review panels match. */}
@@ -3733,41 +3869,80 @@ export default function WizardPage() {
                     </div>
                   )}
                 </div>
-                <div className="wiz-note wiz-note--info" style={{ marginTop: 14 }}>
-                  {matchKey === '__append__'
-                    ? <><strong>Append:</strong> Every record is inserted as a new row (no matching). The auto-increment <code>id</code> keeps rows unique.</>
-                    : <><strong>Dedup:</strong> Each record is matched by the <code>{matchKey || mappings[0]?.destinations?.[0] || 'key'}</code> column. If a row with the same key already exists in {selectedDest}, it is <strong>updated</strong>; otherwise a new row is created. No duplicates.</>}
-                </div>
+                {/* A full paragraph of dedup theory cost this card a 46px banner on every
+                    visit, on a step whose job is to show the outcome. The rule itself
+                    stays visible as one line; the explanation is a click away. */}
+                {(() => {
+                  const key = matchKey || mappings[0]?.destinations?.[0] || 'key';
+                  const append = matchKey === '__append__';
+                  return (
+                    <div className="wiz-hint-line" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10 }}>
+                      <span>
+                        {append
+                          ? <>Append &mdash; every record is inserted as a new row.</>
+                          : <>Dedup &mdash; matched on <code>{key}</code>: existing rows are updated, new ones inserted.</>}
+                      </span>
+                      <InfoHint
+                        label={append ? 'Append' : 'Dedup'}
+                        text={append
+                          ? 'Every record is inserted as a new row, with no matching against what is already there. The auto-increment id column keeps rows unique, so running the push twice writes the records twice.'
+                          : `Each record is matched by the ${key} column. If a row with the same key already exists in ${selectedDest} it is updated in place; otherwise a new row is created. Running the push twice cannot create duplicates.`}
+                      />
+                    </div>
+                  );
+                })()}
               </div>
 
-              {/* Middle: Transformation Preview */}
+              {/* Transformation preview. The frame IS the card here \u2014 a titled header strip
+                  carrying the counts and the expand/freeze controls, so a 106-column preview
+                  is navigable instead of merely clipped. The record key is frozen from the
+                  start: it is the only cell that says WHICH record a row is. */}
               {fetchResult?.tickets?.length > 0 && pushStatus === 'idle' && (
-                <div className="card" style={{ padding: 20, gridColumn: '1 / -1', marginBottom: 0 }}>
-                  <div className="wiz-card-title">
-                    Transformation Preview &mdash; what goes to {selectedDest}
-                  </div>
-                  <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)', marginBottom: 10 }}>
-                    Showing transformed output for the first {Math.min(3, fetchResult.tickets.length)} of {fetchResult.totalCount} records using your {mappings.length} mapping rules.
-                  </div>
-                  <div className="wiz-table-wrap" style={{ maxHeight: 320 }}>
-                    <table className="wiz-data-table is-xs is-sticky">
+                /* fit-col, not a 340px cap: the preview takes whatever height the
+                   step has left over and scrolls its own rows, so the step fits a
+                   short screen and uses a tall one. */
+                <div className="fit-col" style={{ flex: '1 1 0', minHeight: 140 }}>
+                  <TableFrame
+                    className="wiz-table-wrap"
+                    label="Transformation preview"
+                    caption={`Transformation preview \u2014 what goes to ${selectedDest}`}
+                    /* Every fetched record, not a 3-row sample: the box scrolls, and a
+                       sample is exactly the wrong thing to review before a write \u2014
+                       the row that maps badly is rarely one of the first three. */
+                    meta={`${fetchResult.tickets.length < fetchResult.totalCount
+                      ? `${fetchResult.tickets.length.toLocaleString()} of ${fetchResult.totalCount.toLocaleString()}`
+                      /* A server preview stops at its own limit, so "all" would be a lie
+                         about the source even though it is all we hold. */
+                      : fetchResult.serverPreview && fetchResult.totalCount >= fetchResult.previewLimit
+                        ? `First ${fetchResult.totalCount.toLocaleString()}`
+                        : `All ${fetchResult.totalCount.toLocaleString()}`} records \u00b7 ${mappings.length} mapping ${mappings.length === 1 ? 'rule' : 'rules'}`}
+                    defaultPins={[0]}
+                  >
+                    <table className="wiz-data-table is-xs is-sticky is-hoverable">
                       <thead>
                         <tr>
-                          <th scope="col">#</th>
-                          {mappings.map((m, i) => (
-                            <th scope="col" key={i}>
-                              <span title={`${m.sources.join('+')} \u2192 ${m.destinations.join('+')}`}>
-                                {m.destinations[0] || '?'}
-                              </span>
-                              <div style={{ fontSize: 'var(--fs-xs)', color: m.transform === 'DIRECT' ? 'var(--success)' : m.transform === 'EXPRESSION' ? 'var(--warning)' : 'var(--info)', fontWeight: 'var(--fw-normal)' }}>
-                                {m.transform === 'DIRECT' ? 'Direct' : m.preset ? m.preset : 'JS Expr'}
-                              </div>
-                            </th>
-                          ))}
+                          <th scope="col">Record</th>
+                          {mappings.map((m, i) => {
+                            const kind = m.transform === 'DIRECT' ? 'Direct' : m.preset ? m.preset : 'JS expr';
+                            const tone = m.transform === 'DIRECT' ? 'neutral' : m.transform === 'EXPRESSION' ? 'warning' : 'info';
+                            return (
+                              <th scope="col" key={i}>
+                                <span title={`${m.sources.join('+')} \u2192 ${m.destinations.join('+')}`}>
+                                  {m.destinations[0] || '?'}
+                                </span>
+                                {/* A chip, not coloured micro-text: `th` is uppercased
+                                    globally, so "Direct" shouted a second line under every
+                                    one of the 106 column names. */}
+                                <div className="wiz-xf-row">
+                                  <span className={`badge badge-${tone} wiz-xf`}>{kind}</span>
+                                </div>
+                              </th>
+                            );
+                          })}
                         </tr>
                       </thead>
                       <tbody>
-                        {fetchResult.tickets.slice(0, 3).map((ticket, rowIdx) => {
+                        {fetchResult.tickets.map((ticket, rowIdx) => {
                           // Use the SAME evaluator as the push so preview == what's written
                           // (includes sum/avg/min/max/count + type casts).
                           const applyTransform = (m, t) => {
@@ -3779,7 +3954,7 @@ export default function WizardPage() {
 
                           return (
                             <tr key={rowIdx}>
-                              <td className="is-mono" style={{ color: 'var(--text-dim)' }}>
+                              <td className="is-mono">
                                 {ticket.key || ticket.issueKey || rowIdx + 1}
                               </td>
                               {mappings.map((m, colIdx) => {
@@ -3787,7 +3962,7 @@ export default function WizardPage() {
                                 const truncated = String(val).length > 40 ? String(val).substring(0, 40) + '...' : val;
                                 return (
                                   <td key={colIdx} className="is-clip" style={{ maxWidth: 180 }} title={String(val)}>
-                                    {truncated || <span style={{ color: 'var(--text-dim)' }}>(empty)</span>}
+                                    {truncated || <span className="wiz-empty-cell">(empty)</span>}
                                   </td>
                                 );
                               })}
@@ -3796,30 +3971,34 @@ export default function WizardPage() {
                         })}
                       </tbody>
                     </table>
-                  </div>
-                  <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginTop: 6 }}>
-                    Note: The actual push uses the server-side 35-field mapper for all columns. This preview shows your custom mapping transforms.
+                  </TableFrame>
+                  <div className="wiz-hint-line">
+                    Computed with the same mapping engine the push runs server-side &mdash; what
+                    you see here is what gets written.
                   </div>
                 </div>
               )}
 
               {/* DDL Preview — Database destination schema diff */}
               {ddlPreview && ddlPreview.requiresApproval && ddlStatus !== 'applied' && (
-                <div className="card" style={{ padding: 20, gridColumn: '1 / -1', border: '2px solid var(--warning)', background: 'var(--bg-main)' }}>
+                <div className="card is-warning">
                   <div className="wiz-card-title is-warning">
-                    &#9888; Schema Changes Required — DDL Preview
+                    Schema changes required &mdash; DDL preview
                   </div>
                   <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)', marginBottom: 12 }}>
                     The target table is missing {ddlPreview.missingColumns.length} column(s) needed by your field mapping.
                     Review the ALTER statements below and approve to proceed.
                   </div>
-                  <div style={{ background: '#1a1d2e', color: '#e2e4f0', padding: 14, borderRadius: 'var(--radius)', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-sm)', whiteSpace: 'pre-wrap', marginBottom: 12, maxHeight: 240, overflow: 'auto' }}>
+                  {/* The shared code block, not a hardcoded `#1a1d2e` panel — that one stayed
+                      near-black in the light theme, the only such surface on the page. */}
+                  <pre className="json-block" style={{ whiteSpace: 'pre-wrap', maxHeight: 240, marginBottom: 12 }}>
                     {ddlPreview.ddlStatements.join('\n')}
-                  </div>
-                  <div style={{ display: 'flex', gap: 10 }}>
-                    <button
+                  </pre>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                    <Button
                       className="btn btn-primary"
-                      disabled={ddlStatus === 'applying'}
+                      loading={ddlStatus === 'applying'}
+                      loadingLabel="Applying…"
                       onClick={async () => {
                         setDdlStatus('applying');
                         setDdlError('');
@@ -3840,14 +4019,13 @@ export default function WizardPage() {
                         }
                       }}
                     >
-                      {ddlStatus === 'applying' ? 'Applying...' : '✓ Approve & Apply DDL'}
-                    </button>
+                      <Icon name="check" /> Approve &amp; apply DDL
+                    </Button>
                     <button
-                      className="btn"
-                      style={{ background: 'var(--bg-card)', border: '1px solid var(--border)' }}
+                      className="btn btn-outline"
                       onClick={() => { setDdlPreview(null); setDdlStatus('idle'); }}
                     >
-                      ✗ Reject
+                      <Icon name="close" /> Reject
                     </button>
                   </div>
                   {ddlError && (
@@ -3858,91 +4036,36 @@ export default function WizardPage() {
                 </div>
               )}
               {ddlStatus === 'applied' && (
-                <div className="card" style={{ padding: 16, gridColumn: '1 / -1', border: '2px solid var(--success)', background: 'var(--bg-main)' }}>
-                  <span style={{ color: 'var(--success-on)', fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-md)' }}>
-                    &#10003; DDL applied successfully — {ddlPreview?.ddlStatements?.length || 0} statement(s) executed.
+                <div className="card is-success">
+                  <span style={{ color: 'var(--success-on)', fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-md)', display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                    <Icon name="check" /> DDL applied &mdash; {ddlPreview?.ddlStatements?.length || 0} statement(s) executed.
                   </span>
                 </div>
               )}
 
-              {/* Right: Push status */}
-              <div className="card" style={{ padding: 20, gridColumn: pushStatus === 'idle' && fetchResult?.tickets?.length > 0 ? '1 / -1' : undefined }}>
-                <div className="wiz-card-title">Push Status</div>
-
-                {pushStatus === 'idle' && (
-                  <div className="wiz-empty">
-                    <div className="wiz-empty-icon">&#128640;</div>
-                    <div className="wiz-empty-title">Ready to push {fetchResult?.totalCount || 0} records.</div>
-                    <div className="wiz-empty-sub">Click <strong>Push to {selectedDest}</strong> below to start.</div>
-                    <button
-                      className="btn btn-primary"
-                      onClick={handlePush}
-                      style={{ marginTop: 16 }}
-                    >
-                      &#9654; Push to {selectedDest}
-                    </button>
-                  </div>
-                )}
-
-                {(pushStatus === 'pushing' || pushStatus === 'polling') && (
-                  <div className="wiz-empty" style={{ padding: '30px 20px' }}>
-                    <div className="wiz-empty-icon is-spinning">&#9696;</div>
-                    <div style={{ fontSize: 'var(--fs-md)', fontWeight: 'var(--fw-semibold)', marginTop: 8, color: 'var(--primary)' }}>
-                      {pushStatus === 'pushing' ? 'Starting push…' : `Pushing to ${selectedDest}…`}
-                    </div>
-                    {pushResult && (
-                      <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-secondary)', marginTop: 8 }}>
-                        {pushResult.total} records queued
-                        {pushProgress && (
-                          <span> &middot; {(pushProgress.createdCount || 0) + (pushProgress.updatedCount || 0)} processed</span>
-                        )}
-                      </div>
-                    )}
-                    {pushResult?.total > 0 && (() => {
-                      const p = pushProgress || {};
-                      const processed = (p.createdCount ?? p.created_count ?? 0) + (p.updatedCount ?? p.updated_count ?? 0) + (p.failedCount ?? p.failed_count ?? 0) + (p.skippedCount ?? p.skipped_count ?? 0);
-                      const pct = Math.min(100, Math.round((processed / pushResult.total) * 100));
-                      return (
-                        <div style={{ marginTop: 14, maxWidth: 360, marginLeft: 'auto', marginRight: 'auto' }}>
-                          <div style={{ height: 9, background: 'var(--bg-main)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
-                            <div style={{ width: `${pct}%`, height: '100%', background: 'var(--primary)', borderRadius: 'var(--radius)', transition: 'width .3s ease' }} />
-                          </div>
-                          <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginTop: 5 }}>{processed} / {pushResult.total} records &middot; {pct}%</div>
-                        </div>
-                      );
-                    })()}
-                    <div style={{ fontSize: 'var(--fs-sm)', color: 'var(--text-dim)', marginTop: 8 }}>
-                      Push Run: <span style={{ fontFamily: 'var(--font-mono)' }}>{pushResult?.pushRunId || '...'}</span>
-                    </div>
-                    {pushResult?.pushRunId && (
-                      <div style={{ marginTop: 16 }}>
-                        <button className="btn btn-outline" onClick={handleStopPush} disabled={stopping}
-                          style={{ borderColor: 'var(--error)', color: 'var(--error-on)' }}>
-                          {stopping ? 'Stopping…' : '⏹ Stop push'}
-                        </button>
-                        <div style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', marginTop: 6 }}>
-                          Stops sending the rest. Records already sent are kept (no duplicates).
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
+              {/* Results — rendered only once there is something to report. There is no
+                  "Push Status" card before a push: the ready line, the live counter and
+                  the progress fill all live in the action bar next to the button that
+                  starts the push, so the step carries one status and one primary, and the
+                  preview table gets the height the placeholder card used to occupy.
+                  is-fill only when there are results to fill WITH — a lone error note
+                  should not stretch to the foot of the step. */}
+              {((pushStatus === 'done' && pushResult) || pushError) && (
+              <div className={`card wiz-status-card${pushStatus === 'done' && pushResult ? ' is-fill' : ''}`}>
+                <div className="wiz-card-title">
+                  {pushResult?.status === 'cancelled' ? 'Results — push stopped' : 'Results'}
+                  {pushResult?.pushRunId && (
+                    <span className="wiz-run-id" title={pushResult.pushRunId}>Run {pushResult.pushRunId}</span>
+                  )}
+                </div>
+                <div className="wiz-status-body">
 
                 {pushStatus === 'done' && pushResult && (
-                  <div>
-                    {(() => {
-                      const cancelled = pushResult.status === 'cancelled';
-                      const ok = pushResult.status === 'success';
-                      const accent = ok ? 'var(--success)' : cancelled ? 'var(--info)' : 'var(--error)';
-                      const bg = ok ? 'var(--success-dim)' : cancelled ? 'var(--info-dim)' : 'var(--error-dim)';
-                      const label = ok ? '\u2705 Push Complete' : cancelled ? '\u23F9 Push Stopped' : '\u274C Push Had Errors';
-                      return (
-                        <div style={{ padding: '12px 16px', background: bg, border: `1px solid ${accent}`, borderRadius: 'var(--radius)', marginBottom: 16 }}>
-                          <div style={{ fontWeight: 'var(--fw-bold)', color: accent, fontSize: 'var(--fs-md)' }}>{label}</div>
-                        </div>
-                      );
-                    })()}
-                    <div className="wiz-stats" style={{ gridTemplateColumns: pushResult.skipped != null ? '1fr 1fr 1fr 1fr' : '1fr 1fr 1fr' }}>
+                  <div className="fit-col" style={{ flex: '1 1 auto' }}>
+                    {/* No outcome banner here: the action bar states the outcome (and
+                        announces it via role="status"), and a second "Push complete" strip
+                        on top of the numbers that prove it was 46px saying nothing new. */}
+                    <div className="wiz-stats">
                       <div className="wiz-stat">
                         <div className="wiz-stat-label">Inserted</div>
                         <div className="wiz-stat-value is-good">{pushResult.created || pushResult.inserted || 0}</div>
@@ -4000,23 +4123,27 @@ export default function WizardPage() {
                     )}
 
                     <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
-                      <button className="btn btn-outline" onClick={() => navigate('/connected')}>View Connected</button>
-                      <button className="btn btn-outline" onClick={() => { setPushStatus('idle'); setPushResult(null); setQuickView(null); }}>Push Again</button>
+                      <button className="btn btn-outline" onClick={() => navigate('/connected')}>View connected</button>
+                      <button className="btn btn-outline" onClick={() => { setPushStatus('idle'); setPushResult(null); setQuickView(null); }}>
+                        <Icon name="refresh" /> Push again
+                      </button>
                       {pushResult?.listUrl && (
                         <a className="btn btn-outline" href={pushResult.listUrl} target="_blank" rel="noopener noreferrer"
                           style={{ textDecoration: 'none' }} title={pushResult.listUrl}>
-                          &#128279; Open list in SharePoint
+                          <Icon name="external" /> Open list in SharePoint
                         </a>
                       )}
                       {(isDbDest(selectedDest)) && destCreds.table && (
-                        <button
-                          className="btn btn-primary btn-sm"
+                        <Button
+                          className="btn btn-primary"
                           onClick={handleQuickView}
-                          disabled={quickViewLoading}
+                          loading={quickViewLoading}
+                          loadingLabel="Loading\u2026"
                           style={{ marginLeft: 'auto' }}
                         >
-                          {quickViewLoading ? 'Loading...' : quickView ? 'Refresh View' : '\uD83D\uDD0D Quick View DB'}
-                        </button>
+                          <Icon name={quickView ? 'refresh' : 'search'} />
+                          {quickView ? ' Refresh view' : ' Quick view DB'}
+                        </Button>
                       )}
                     </div>
 
@@ -4027,15 +4154,19 @@ export default function WizardPage() {
                       </div>
                     )}
                     {quickView && (
-                      <div className="wiz-panel">
-                        <div className="wiz-panel-head">
-                          <span>
-                            <span style={{ fontFamily: 'var(--font-mono)' }}>{quickView.table}</span>
-                            {' '}&mdash; {quickView.rowCount} of {quickView.totalCount} rows
-                          </span>
-                          <span style={{ fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', fontWeight: 'var(--fw-normal)' }}>SELECT * LIMIT 50</span>
-                        </div>
-                        <div style={{ maxHeight: 400, overflow: 'auto' }}>
+                      /* Fills the rest of the results panel rather than adding 400px to
+                         the step's height — the rows scroll, the buttons above stay put. */
+                      <div className="fit-col" style={{ marginTop: 14, flex: '1 1 0', minHeight: 140 }}>
+                        {/* Same frame as the transformation preview — one table treatment
+                            for the whole step, controls in the header where they can be
+                            seen rather than floating on hover. */}
+                        <TableFrame
+                          className="wiz-table-wrap"
+                          label={`${quickView.table} rows`}
+                          caption={quickView.table}
+                          meta={`${quickView.rowCount} of ${quickView.totalCount} rows · SELECT * LIMIT 50`}
+                          defaultPins={[0]}
+                        >
                           <table className="wiz-data-table is-xs is-sticky is-hoverable">
                             <thead>
                               <tr>
@@ -4055,7 +4186,7 @@ export default function WizardPage() {
                                     const truncated = display.length > 60 ? display.substring(0, 60) + '...' : display;
                                     return (
                                       <td key={col} title={display} className="is-clip" style={{ maxWidth: 220 }}>
-                                        {val == null ? <span style={{ color: 'var(--text-dim)', fontStyle: 'italic' }}>null</span> : truncated}
+                                        {val == null ? <span className="wiz-empty-cell is-null">null</span> : truncated}
                                       </td>
                                     );
                                   })}
@@ -4063,7 +4194,7 @@ export default function WizardPage() {
                               ))}
                             </tbody>
                           </table>
-                        </div>
+                        </TableFrame>
                       </div>
                     )}
                   </div>
@@ -4074,9 +4205,10 @@ export default function WizardPage() {
                     {pushError}
                   </div>
                 )}
+                </div>{/* close .wiz-status-body */}
               </div>
-              </div>{/* close Config + Status row grid */}
-            </div>{/* close flex column */}
+              )}
+            </div>{/* close .wiz-step6 */}
           </div>
         )}
       </div>
@@ -4090,23 +4222,50 @@ export default function WizardPage() {
         <div className="wiz-actions-left">
           <button className="btn btn-outline" onClick={goBack} disabled={wizardStep === 1}>&larr; Back</button>
         </div>
-        <div className="wiz-meter">
-          <div className="wiz-meter-text">
-            <span>Step <strong>{wizardStep}</strong> of 6 &middot; {stepLabels[wizardStep - 1]}</span>
-            <span>{Math.round(((wizardStep - 1) / 5) * 100)}%</span>
+        {/* The centre of the bar counts steps until the last one, where it reports the
+            push instead \u2014 state, counts and fill in the place the eye is already on,
+            beside the button that starts it. */}
+        <div className={`wiz-meter${pushMeter ? ' is-push' : ''}`}>
+          <div className={`wiz-meter-text${pushMeter ? ` is-${pushMeter.tone}` : ''}`}
+            role={pushMeter ? 'status' : undefined}>
+            <span className="wiz-meter-label">
+              {pushMeter?.busy && <span className="wiz-run-spin" aria-hidden="true" />}
+              {pushMeter
+                ? pushMeter.label
+                : <>Step <strong>{wizardStep}</strong> of 6 &middot; {stepLabels[wizardStep - 1]}</>}
+            </span>
+            <span>{pushMeter ? pushMeter.right : `${Math.round(((wizardStep - 1) / 5) * 100)}%`}</span>
           </div>
-          <div className="wiz-meter-track" role="progressbar" aria-valuenow={wizardStep} aria-valuemin={1}
-            aria-valuemax={6} aria-label={`Step ${wizardStep} of 6`}>
-            <div className="wiz-meter-fill" style={{ width: `${((wizardStep - 1) / 5) * 100}%` }} />
-          </div>
+          {pushMeter ? (
+            <div className="wiz-meter-track" role="progressbar" aria-valuenow={pushMeter.pct}
+              aria-valuemin={0} aria-valuemax={100} aria-label="Push progress">
+              <div className={`wiz-meter-fill is-${pushMeter.tone}`} style={{ width: `${pushMeter.pct}%` }} />
+            </div>
+          ) : (
+            <div className="wiz-meter-track" role="progressbar" aria-valuenow={wizardStep} aria-valuemin={1}
+              aria-valuemax={6} aria-label={`Step ${wizardStep} of 6`}>
+              <div className="wiz-meter-fill" style={{ width: `${((wizardStep - 1) / 5) * 100}%` }} />
+            </div>
+          )}
         </div>
         <div className="wiz-actions-right">
-          {nextBlocked && <span className="wiz-hint">{nextBlocked}</span>}
-          <button className="btn btn-primary btn-lg" onClick={goNext} disabled={!!nextBlocked}>
-            {wizardStep === 5 && fetchStatus !== 'done' ? 'Fetch first' :
-             wizardStep === 6 ? (pushStatus === 'idle' ? `\u25B6 Push to ${selectedDest || 'destination'}` : pushStatus === 'done' ? 'Done' : 'Pushing\u2026') :
-             'Next \u2192'}
-          </button>
+          {/* While the push runs the primary IS the stop control \u2014 a disabled
+              "Pushing\u2026" button plus a "Push in progress" hint said the same thing
+              twice and offered nothing to do. */}
+          {nextBlocked && !pushing && <span className="wiz-hint">{nextBlocked}</span>}
+          {wizardStep === 6 && pushing ? (
+            <Button className="btn btn-danger-ghost" onClick={handleStopPush}
+              loading={stopping} loadingLabel="Stopping\u2026" disabled={!pushResult?.pushRunId}
+              title="Stops sending the rest. Records already sent are kept (upsert \u2014 no duplicates).">
+              <Icon name="ban" /> Stop push
+            </Button>
+          ) : (
+            <button className="btn btn-primary" onClick={goNext} disabled={!!nextBlocked}>
+              {wizardStep === 5 && fetchStatus !== 'done' ? 'Fetch first' :
+               wizardStep === 6 ? (pushStatus === 'done' ? 'Done \u2192' : pushStatus === 'error' ? 'Retry push' : <><Icon name="play" /> Push to {selectedDest || 'destination'}</>) :
+               'Next \u2192'}
+            </button>
+          )}
         </div>
       </div>
     </div>

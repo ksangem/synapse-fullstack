@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useToast } from '../../hooks/useToast';
 import { useConfirm } from '../../hooks/useConfirm';
 import { api } from '../../services/api';
+import TableFrame from '../ui/TableFrame';
 import { useToolbarAction } from '../../hooks/useToolbarAction';
 
 /* Administration (BRD §7.8) — Users & roles, Audit trail, Client applications.
@@ -146,7 +147,7 @@ export default function AdminPage() {
               </div>
             )}
 
-            <div className="table-wrap">
+            <TableFrame label="Users">
               <table>
                 <thead><tr><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Created</th><th scope="col">Actions</th></tr></thead>
                 <tbody>
@@ -170,7 +171,7 @@ export default function AdminPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableFrame>
           </div>
         )}
 
@@ -184,7 +185,7 @@ export default function AdminPage() {
               <button className="btn btn-sm" onClick={loadAudit}>Refresh</button>
               <button className="btn btn-sm" style={{ marginLeft: 'auto' }} onClick={exportAudit}>Export CSV</button>
             </div>
-            <div className="table-wrap">
+            <TableFrame label="Audit log">
               <table>
                 <thead><tr><th scope="col">When</th><th scope="col">User</th><th scope="col">Action</th><th scope="col">Entity</th><th scope="col">Details</th></tr></thead>
                 <tbody>
@@ -200,7 +201,7 @@ export default function AdminPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableFrame>
           </div>
         )}
 
@@ -210,7 +211,7 @@ export default function AdminPage() {
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
               <button className="btn btn-primary btn-sm" onClick={() => setRegOpen(true)}>+ Register App</button>
             </div>
-            <div className="table-wrap">
+            <TableFrame label="Client applications">
               <table>
                 <thead><tr><th scope="col">Application</th><th scope="col">Client ID</th><th scope="col">Tier</th><th scope="col">Status</th><th scope="col">Created</th><th scope="col">Actions</th></tr></thead>
                 <tbody>
@@ -227,7 +228,7 @@ export default function AdminPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableFrame>
           </div>
         )}
       </div>

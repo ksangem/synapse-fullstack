@@ -90,12 +90,47 @@ export function useRunProgress(runId, { interval = 2000, onFinish } = {}) {
 
 /**
  * Records that have reached a terminal state, and the run's completion fraction.
- * `recordsIn` is 0 until the source finishes reading, so guard against divide-by-zero
- * rather than rendering a NaN-width progress bar.
+ * `expectedOut` is 0 until the source finishes reading, so guard against divide-by-zero
+ * rather than rendering a NaN-width progress bar. A FINISHED run with expectedOut 0
+ * published nothing — that is 100% done, not 0%, and `pctOf` below reflects it.
  */
 export function runProgressOf(status) {
   if (!status) return { settled: 0, total: 0, pct: 0 };
   const settled = (status.delivered || 0) + (status.failed || 0) + (status.skipped || 0);
-  const total = status.recordsIn || 0;
-  return { settled, total, pct: total > 0 ? Math.min(100, Math.round((settled / total) * 100)) : 0 };
+  const total = status.expectedOut || 0;
+  const pct = total > 0 ? Math.min(100, Math.round((settled / total) * 100)) : (status.finished ? 100 : 0);
+  return { settled, total, pct };
+}
+
+/**
+ * The run's outcome as a label + one-line explanation.
+ *
+ * The card used to render `finished ? 'Finished' : 'Running'`, which said "Finished"
+ * for a run that errored, was stopped, or delivered nothing — and paired it with
+ * "reading source…", the placeholder for a run still in flight. Both surfaces now read
+ * the backend's `outcome` so a no-op re-run says so in words.
+ */
+export function runOutcomeOf(status) {
+  if (!status) return { label: 'Starting…', detail: '', tone: 'idle' };
+  const read = status.recordsRead || 0;
+  const dup = status.duplicates || 0;
+  switch (status.outcome) {
+    case 'stopped':
+      return { label: 'Stopped', detail: 'stopped by operator', tone: 'idle' };
+    case 'failed':
+      return { label: 'Failed', detail: status.failed > 0 ? `${status.failed} failed` : 'the run did not complete', tone: 'fail' };
+    case 'partial':
+      return { label: 'Finished with failures', detail: `${status.failed} of ${status.expectedOut} failed`, tone: 'fail' };
+    case 'no-source-records':
+      return { label: 'Nothing to do', detail: 'the source returned no records', tone: 'idle' };
+    case 'no-new-records':
+      return { label: 'No new records', detail: `${read} read · ${dup || read} already up to date`, tone: 'idle' };
+    case 'delivered':
+      return { label: 'Finished', detail: `${status.delivered} delivered`, tone: 'ok' };
+    default: {
+      // Still running: the readout is progress, and 'reading source…' is honest only here.
+      const { settled, total } = runProgressOf(status);
+      return { label: 'Running', detail: total > 0 ? `${settled}/${total}` : 'reading source…', tone: 'ok' };
+    }
+  }
 }
