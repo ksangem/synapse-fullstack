@@ -373,6 +373,9 @@ input[type="time"]::-webkit-calendar-picker-indicator{opacity:1;cursor:pointer}
 .page.active{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;padding:0 24px;animation:pageFadeIn var(--dur-slower) var(--ease-glide)}
 .page-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-bottom:24px}
 .wizard-content{min-height:0;padding-bottom:40px}
+/* A fit-to-screen step ends AT the footer — the 40px above is breathing room under a
+   step that scrolls, and here it was 40px the mapper could have had. */
+.wizard-content.is-fill{padding-bottom:8px}
 /* The route change is the app's biggest state change and had the smallest move in it
    (4px). It now rises far enough to read as the page arriving. */
 @keyframes pageFadeIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
@@ -532,7 +535,9 @@ tbody tr:last-child td{border-bottom:none}
 
 /* Adapter Health — single horizontal row, scrolls left/right, no visible scrollbar */
 .adapter-health-wrap{position:relative;display:flex;align-items:stretch;gap:6px}
-.adapter-health-row{display:flex;flex-wrap:nowrap;gap:12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none;scroll-behavior:smooth;flex:1;padding:2px}
+/* scroll-behavior stays OFF for the same reason as .studio-draft-scroll — this row runs on
+   the same useHorizontalScroll wheel handler, and smooth scrolling swallowed its notches. */
+.adapter-health-row{display:flex;flex-wrap:nowrap;gap:12px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none;flex:1;padding:2px}
 .adapter-health-row::-webkit-scrollbar{display:none}
 .adapter-health-row > .ucard{flex:0 0 246px;min-width:246px}
 /* Arrow buttons to page the row left/right (scrollbar is hidden) */
@@ -1117,14 +1122,19 @@ button.wiz-step.is-done:hover .wiz-step-token{filter:brightness(1.1)}
    hover shadows and focus rings from being clipped by the scroll edge. */
 /* Arrow buttons flank the shelf, matching the Dashboard's adapter row. */
 .studio-draft-shelf{display:flex;align-items:center;gap:6px;min-width:0}
+/* No scroll-snap and no CSS scroll-behavior here, on purpose. Snap (proximity) dragged a
+   single wheel notch — ~100px against a ~260px card — back onto the card it started from,
+   and `smooth` turned every notch into an animation that ate the one after it. Together the
+   shelf moved about one card and then refused to budge. The arrow buttons still glide,
+   because scrollByPage() asks for behavior:'smooth' itself. */
 .studio-draft-scroll{flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;
-  padding:3px;margin:-3px;scroll-snap-type:x proximity;scroll-behavior:smooth;
+  padding:3px;margin:-3px;
   scrollbar-width:none;-ms-overflow-style:none}
 .studio-draft-scroll::-webkit-scrollbar{display:none}
 .studio-draft-grid{display:flex;flex-wrap:nowrap;align-items:stretch;gap:12px;width:max-content}
 /* Fixed width, so the row reads as a uniform shelf and the next card is always half in
    view — the only honest signal that there is more to the right. */
-.studio-draft-grid > *{flex:0 0 clamp(228px,21vw,268px);min-width:0;scroll-snap-align:start}
+.studio-draft-grid > *{flex:0 0 clamp(228px,21vw,268px);min-width:0}
 /* A fixed min-height keeps the shelf a straight line: without it a card whose meta wrapped
    to two lines stood taller than its neighbours and the row read as broken. */
 .studio-draft-card{display:flex;flex-direction:column;gap:6px;padding:12px 14px;min-height:118px;
@@ -1737,6 +1747,94 @@ html.dark-theme .json-bool{color:#c084fc}
 .mapper-toolbar .mapper-stats{font-size:var(--fs-sm);color:var(--text-secondary)}
 .mapper-toolbar .mapper-stats strong{color:var(--primary)}
 .mapper-layout{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:0;border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;height:calc(100dvh - var(--topbar-height) - 268px);min-height:400px}
+/* Step 4 fills the wizard body rather than overflowing it. The `height:calc(…)` above
+   is a fixed viewport guess that ignores the toolbar/notes/joins stacked on top of the
+   mapper, so the step scrolled as a whole; here the mapper simply takes the leftover
+   space (flex-basis:0 wins over that height in a column flex container) and the inner
+   `.mapper-list`/`.mapping-rows` panes do all the scrolling. */
+.wizard-step--fill{display:flex;flex-direction:column;flex:1 1 0;min-height:0}
+.wizard-step--fill > *{flex-shrink:0}
+/* A floor, not a height: the moment the first mapping exists the step grows an
+   identity-key note and an encryption toggle, and the original 260px floor refused to
+   give that space back, so the step overflowed and the outer scroll returned. The mapper
+   absorbs it instead — and Expand below is where a long list is meant to be worked on. */
+.wizard-step--fill > .mapper-layout{flex:1 1 0;min-height:240px}
+
+/* Expanded mapper — all THREE panes grow to a fullscreen panel together. Expanding one
+   of them alone was the wrong unit: mapping is a two-sided act, and a fullscreen list of
+   source fields whose destination columns are hidden helps nobody. Same element
+   re-styled, not re-mounted, so scroll positions, the two searches and the open row
+   editor survive the trip both ways. Reuses the TableFrame overlay's scrim, curves and
+   z-index so expanding the mapper and expanding a table feel like one gesture.
+   `--mob-h` reserves the header strip: the panel keeps its grid (the three columns are
+   its tracks), so the strip is absolutely placed inside the padding it opens up. */
+.mapper-layout.is-overlay{--mob-h:38px;
+  position:fixed;inset:24px;z-index:var(--z-modal);height:auto;padding-top:var(--mob-h);
+  box-shadow:var(--elev-3);animation:tfIn var(--dur-slow) var(--ease-glide)}
+.mapper-layout.is-overlay.is-out{animation:tfOut var(--dur-base) var(--ease-in)}
+/* The step keeps its own `flex:1 1 0` sizing for the layout; fixed positioning has to
+   beat it, hence the height:auto above and this basis reset. */
+.wizard-step--fill > .mapper-layout.is-overlay{flex:none;min-height:0}
+/* ── Step-4 options bar ─────────────────────────────────────────────────────
+   Match-by, the identity key, encryption and cross-entity joins used to be three
+   full-width bands stacked above the mapper — ~150px of permanent step height for
+   settings that are set once. One line now: a field, a status chip and two buttons
+   that open their editors over the page. Wraps rather than clipping on narrow
+   windows, which is the only case where it costs a second line. */
+.wiz-optionbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:8px 0;
+  padding:7px 10px;background:var(--bg-card);border:1px solid var(--border);
+  border-radius:var(--radius);font-size:var(--fs-sm)}
+.wiz-optionfield{display:flex;align-items:center;gap:7px;min-width:0}
+.wiz-optionfield > label{font-weight:var(--fw-semibold);white-space:nowrap}
+.wiz-optionfield select{padding:4px 8px;font-size:var(--fs-sm);max-width:280px}
+.wiz-optionchip{display:flex;align-items:center;gap:6px;padding:4px 9px;
+  border:1px solid var(--border);border-radius:var(--radius-pill,999px);
+  color:var(--text-dim);white-space:nowrap}
+.wiz-optionchip.is-set{color:var(--text);border-color:var(--warning)}
+.wiz-optionchip code{background:var(--bg-input);padding:1px 5px;border-radius:var(--radius-sm)}
+/* Shared trigger for the panels that open over the page (encryption, joins). */
+.wiz-optionbtn{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;
+  border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-input);
+  color:var(--text-secondary);font-size:var(--fs-sm);font-weight:var(--fw-medium);
+  cursor:pointer;transition:color var(--dur-fast) var(--ease-out),border-color var(--dur-fast) var(--ease-out)}
+.wiz-optionbtn:hover{color:var(--primary-on);border-color:var(--primary)}
+.wiz-optionbtn:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.wiz-optionbtn.is-on{color:var(--success-on);border-color:var(--success)}
+.wiz-optionbtn .col-count,.wiz-optionchip .col-count{background:var(--primary-dim);
+  color:var(--primary-on);padding:0 6px;border-radius:999px;font-size:var(--fs-xs);
+  font-weight:var(--fw-semibold)}
+
+/* ── OverlayPanel ───────────────────────────────────────────────────────────
+   A titled panel that opens OVER the page. Narrower and centred rather than the
+   mapper's edge-to-edge inset: these are forms, and a form stretched across a wide
+   monitor is harder to read, not easier. */
+/* Centred with inset + margin:auto, NOT `left:50%;transform:translateX(-50%)`. A
+   transform makes the panel a containing block for `position:fixed` descendants, which
+   would silently break any InfoHint popover or dropdown opened inside it — those compute
+   viewport coordinates and would land relative to the panel instead. */
+.ovp{position:fixed;inset:24px;margin:auto;max-width:820px;z-index:var(--z-modal);
+  display:flex;flex-direction:column;background:var(--bg-card);
+  border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--elev-3);
+  overflow:hidden;animation:tfIn var(--dur-slow) var(--ease-glide)}
+.ovp-head{display:flex;align-items:center;gap:10px;flex-shrink:0;padding:10px 12px;
+  background:var(--bg-main);border-bottom:1px solid var(--border)}
+.ovp-title{font-size:var(--fs-md);font-weight:var(--fw-semibold);color:var(--text);white-space:nowrap}
+.ovp-meta{font-size:var(--fs-xs);color:var(--text-dim);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.ovp-body{flex:1 1 0;min-height:0;overflow-y:auto;padding:14px}
+
+.mapper-overlay-bar{position:absolute;top:0;left:0;right:0;height:var(--mob-h);
+  display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--bg-main);
+  border-bottom:1px solid var(--border);
+  border-radius:calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px) 0 0}
+.mob-title{font-size:var(--fs-sm);font-weight:var(--fw-semibold);color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Full screen the mapping rows have room for the editor's natural three-up form, and the
+   row headers stop ellipsising field names at 120px. */
+.mapper-layout.is-overlay .mapping-editor-grid{grid-template-columns:repeat(3,1fr)}
+.mapper-layout.is-overlay .mapping-row-header .map-src,
+.mapper-layout.is-overlay .mapping-row-header .map-dest{max-width:none}
+.add-mapping-btn .icon{opacity:.7}
 .mapper-col{display:flex;flex-direction:column;background:var(--bg-card);overflow:hidden;min-width:0}
 .mapper-col:not(:last-child){border-right:1px solid var(--border)}
 .mapping-editor-grid{min-width:0}
@@ -1822,14 +1920,8 @@ html.dark-theme .json-bool{color:#c084fc}
 .add-mapping-btn{width:100%;padding:8px;border:2px dashed var(--border);border-radius:var(--radius);background:transparent;color:var(--text-secondary);font-size:var(--fs-sm);cursor:pointer;transition:var(--t-interactive);display:flex;align-items:center;justify-content:center;gap:6px}
 .add-mapping-btn:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-dim)}
 
-/* Validation summary */
-.mapping-validation{padding:12px 16px;border-radius:var(--radius);margin-top:12px;font-size:var(--fs-sm);display:flex;align-items:flex-start;gap:10px}
-.mapping-validation.valid{background:var(--success-dim);border:1px solid rgba(34,197,94,.3);color:var(--success)}
-.mapping-validation.warning{background:var(--warning-dim);border:1px solid rgba(245,158,11,.3);color:var(--warning)}
-.mapping-validation.error{background:var(--error-dim);border:1px solid rgba(239,68,68,.3);color:var(--error)}
-.mapping-validation .val-icon{font-size:var(--fs-md);flex-shrink:0;margin-top:1px}
-.mapping-validation .val-text{flex:1}
-.mapping-validation .val-text strong{display:block;margin-bottom:2px}
+/* `.mapping-validation` lived here — the summary block under the mapper. It is a toast
+   now (WizardPage `mapValidationMsg`), so the step spends no permanent height on it. */
 
 /* Loader */
 .wizard-loader{display:flex;flex-direction:column;align-items:center;gap:12px;padding:40px 20px}
@@ -2173,6 +2265,8 @@ tr.is-new td{animation:rowArrive 1.4s var(--ease-out) backwards}
   /* Mapping/mapper layouts stack and grow with content rather than fixed heights */
   .mapping-container,.mapper-layout{flex-direction:column;display:flex;height:auto;max-height:none;min-height:0}
   .mapper-layout{grid-template-columns:1fr}
+  /* Stacked, the three panes are taller than a fixed panel — let the panel scroll. */
+  .mapper-layout.is-overlay{height:auto;overflow-y:auto}
   .mapping-panel,.mapper-col{min-height:160px}
   .mapping-center-col{width:100%;flex-direction:row;flex-wrap:wrap;justify-content:center;padding-top:8px;border-left:none;border-right:none;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
   .mapper-col:not(:last-child){border-right:none;border-bottom:1px solid var(--border)}
@@ -2188,6 +2282,10 @@ tr.is-new td{animation:rowArrive 1.4s var(--ease-out) backwards}
   .wizard-content{overflow:visible !important}
   /* Inner scroll regions take natural height (page scrolls); tables keep a sane cap */
   .fit-scroll,.fit-col,.dlq-fill,.tf-shell{overflow:visible !important;flex:none !important}
+  /* Same release for the step-4 mapper: back to block flow so the mapper falls back to
+     its own height (or the stacked ≤768px layout) and the page scrolls. */
+  .wizard-step--fill{display:block !important;flex:none !important;min-height:0 !important}
+  .wizard-step--fill > .mapper-layout{flex:none !important}
   /* Same release for the step-6 fill column: below this height there is nothing left
      to distribute, so the cards go back to their natural size and the page scrolls. */
   .wiz-step6.is-fill,.wiz-status-card.is-fill,.wiz-status-body{
@@ -2321,10 +2419,10 @@ tr.is-new td{animation:rowArrive 1.4s var(--ease-out) backwards}
 .conn-table th{position:static;background:transparent;box-shadow:none;border-radius:0}
 .conn-table td{white-space:normal}
 
-/* ── Joins panel (Wizard mapping step) ── */
-.joins-head{width:100%;display:flex;align-items:center;justify-content:space-between;
-  padding:10px 14px;background:transparent;border:none;cursor:pointer;color:var(--text)}
-.joins-head:hover{color:var(--primary)}
+/* ── Joins panel (Wizard mapping step) ──
+   `.joins-head` lived here — the full-width disclosure bar the panel used to open
+   in place. The panel opens in an OverlayPanel now and its trigger is a
+   `.wiz-optionbtn` on the options bar. */
 .joins-link-danger{color:var(--error-on)}
 /* Intent picker: a card-shaped button; the left rail colour is set inline per intent. */
 .joins-intent{text-align:left;background:var(--bg-card);border:1px solid var(--border);

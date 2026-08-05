@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import OverlayPanel from '../ui/OverlayPanel';
 
 /**
  * JoinsPanel — configure cross-entity joins (enrichment / lookup / aggregate).
@@ -18,8 +19,6 @@ const AGG_FNS = ['count', 'sum', 'avg', 'min', 'max', 'concat', 'first'];
 
 /* ── styles (inline, token-based so both themes work) ── */
 const S = {
-  panel: { margin: '0 0 16px', border: '1px solid var(--border)', borderRadius: 'var(--radius)' },
-  body: { padding: '4px 14px 16px' },
   lbl: { fontSize: 'var(--fs-xs)', color: 'var(--text-dim)', display: 'block', marginBottom: 3 },
   // `var(--bg)` is defined nowhere, so these inputs rendered with no background at
   // all while every other input in the app used --bg-input.
@@ -102,7 +101,9 @@ const DEFAULT_SIDES = [
 ];
 
 export default function JoinsPanel({ joins = [], setJoins, srcFields = [], sides = DEFAULT_SIDES, entitiesFor = () => [], loadColumns }) {
-  const [open, setOpen] = useState(joins.length > 0);
+  // Closed on arrival even when joins exist: the trigger shows the count, and opening a
+  // fullscreen panel over a step the user has not asked to configure would be a hijack.
+  const [open, setOpen] = useState(false);
   const [view, setView] = useState('list');        // 'list' | 'intent' | 'form'
   const [draft, setDraft] = useState(null);
   const [editIndex, setEditIndex] = useState(-1);
@@ -151,18 +152,25 @@ export default function JoinsPanel({ joins = [], setJoins, srcFields = [], sides
         ))
   );
 
+  /* The trigger is all this costs the page now; the configuration itself opens over it.
+     Expanded in place, three intent cards and a seven-field form pushed the Wizard's
+     mapper under the fold — see OverlayPanel. */
   return (
-    <div style={S.panel}>
-      <button className="joins-head" onClick={() => setOpen(!open)}>
-        <span style={{ fontWeight: 'var(--fw-semibold)', fontSize: 'var(--fs-md)' }}>
-          {open ? '▾' : '▸'} Cross-Entity Joins{' '}
-          <span style={{ color: 'var(--text-dim)', fontWeight: 'var(--fw-normal)' }}>— pull, look up, or summarize from another entity</span>
-        </span>
+    <>
+      <button type="button" className="wiz-optionbtn" onClick={() => setOpen(true)}
+        title="Pull, look up, or summarize values from another list or table before mapping">
+        <span aria-hidden="true">🔗</span> Cross-Entity Joins
         {joins.length > 0 && <span className="col-count">{joins.length}</span>}
       </button>
 
-      {open && (
-        <div style={S.body}>
+      <OverlayPanel
+        open={open}
+        onClose={() => { cancel(); setOpen(false); }}
+        title="Cross-Entity Joins"
+        meta={joins.length ? `${joins.length} configured` : 'pull, look up, or summarize from another entity'}
+        width={900}
+      >
+        <div>
           {/* ── LIST ── */}
           {view === 'list' && (
             <>
@@ -209,8 +217,8 @@ export default function JoinsPanel({ joins = [], setJoins, srcFields = [], sides
             />
           )}
         </div>
-      )}
-    </div>
+      </OverlayPanel>
+    </>
   );
 }
 

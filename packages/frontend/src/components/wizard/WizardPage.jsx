@@ -10,11 +10,13 @@ import Card from '../ui/Card';
 import TableFrame from '../ui/TableFrame';
 import Icon from '../ui/Icon';
 import InfoHint from '../ui/InfoHint';
+import OverlayPanel from '../ui/OverlayPanel';
 import {
   PAIR_COLORS, PRESET_GROUPS, PRESET_TRANSFORMS, PRESET_OUTPUT_TYPE,
   computeMappedValue, defaultPresetConfig, presetConfigSpec, presetIssue, sampleFor,
 } from '../mapping/mappingUtils';
 import { clickable } from '../../utils/clickable';
+import { useToast } from '../../hooks/useToast';
 
 
 /* Wizard system picker card.
@@ -588,6 +590,7 @@ export default function WizardPage() {
   const [selectedSource, setSelectedSource] = useState(null);
   const [selectedDest, setSelectedDest] = useState(null);
   const navigate = useNavigate();
+  const { showToast } = useToast();
 
   // Connector registry (replaces the old hardcoded sourceCards / destCards /
   // credentialFields / DB_DEST_CONFIG / entityDescriptions). Loaded on mount.
@@ -676,6 +679,9 @@ export default function WizardPage() {
   const [encryptFields, setEncryptFields] = useState([]);
   const [revealedKey, setRevealedKey] = useState(null);
   const [revealMsg, setRevealMsg] = useState('');
+  // The column picker + key reveal open over the step rather than inside it — several
+  // rows tall, used occasionally, and every row costs the mapper height.
+  const [encryptOpen, setEncryptOpen] = useState(false);
 
   // Step 3 — Search + PG tables
   const [entitySearch, setEntitySearch] = useState('');
@@ -693,6 +699,14 @@ export default function WizardPage() {
   // Cross-entity joins (enrichment/lookup/aggregate). Each exposes @join.<alias>.<as> fields.
   const [joins, setJoins] = useState([]);
   const [expandedMapping, setExpandedMapping] = useState(-1);
+  /* The three-pane mapper can grow to a fullscreen panel. A mapping row's editor is a
+     two-column form that does not fit the ~240px the middle pane gets inline once the
+     notes above it appear — so building mappings by hand happens in there, with the
+     source fields and destination columns still beside it.
+     'inline' → 'overlay' → 'closing' → 'inline'; the closing step exists so the panel
+     can animate OUT instead of vanishing the frame the class is dropped. */
+  const [mapView, setMapView] = useState('inline');
+  const mapExpanded = mapView !== 'inline';
   const [srcSearch, setSrcSearch] = useState('');
   const [destSearch, setDestSearch] = useState('');
   // Which destination column to dedup/upsert by. '' = default (first mapping); '__append__' = no matching (append every row).
@@ -2436,7 +2450,20 @@ export default function WizardPage() {
     };
     setMappings(prev => [...prev, newMapping]);
     setExpandedMapping(mappings.length);
+    // A blank row is useless until its source/destination/transform are filled in, and
+    // that editor needs room. Adding one always takes you to the expanded pane.
+    setMapView('overlay');
   }, [mappings.length]);
+
+  // Esc leaves the expanded Mappings pane; so does leaving the step, or the panel would
+  // be waiting fullscreen when you came back to it.
+  useEffect(() => { if (wizardStep !== 4) setMapView('inline'); }, [wizardStep]);
+  useEffect(() => {
+    if (!mapExpanded) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setMapView(v => (v === 'overlay' ? 'closing' : v)); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mapExpanded]);
 
   // Flush any new columns typed into mapping rows ("+ New column…") into the
   // destination pane so they show up on the right. The columns are physically
@@ -2586,6 +2613,33 @@ export default function WizardPage() {
     destFields.filter(f => f.required && !mappedDestNames.has(f.name)),
   [destFields, mappedDestNames]);
 
+  /* Mapping validation is a toast, not a block under the mapper. As a block it held ~70px
+     of step height permanently to say something that only changes when you map something
+     — and that was the height that pushed step 4 past the viewport. */
+  const mapValidationMsg = useMemo(() => {
+    if (wizardStep !== 4 || mappings.length === 0) return null;
+    const head = `${mappings.length} field${mappings.length !== 1 ? 's' : ''} mapped`;
+    return requiredUnmapped.length > 0
+      ? { type: 'warning', text: `${head} — required columns not mapped: ${requiredUnmapped.map(f => f.displayName || f.name).join(', ')}` }
+      : { type: 'success', text: `${head} — ${destFields.length - mappedDestNames.size} ${selectedDest} column(s) left empty, ${srcFields.length - mappedSrcNames.size} source field(s) unused` };
+  }, [wizardStep, mappings.length, requiredUnmapped, destFields.length, mappedDestNames.size,
+    srcFields.length, mappedSrcNames.size, selectedDest]);
+
+  /* Fire only when the SENTENCE changes. The memo above rebuilds whenever `mappings` does
+     — which is every keystroke inside a row editor — so comparing the rendered text is
+     what keeps this to one toast per real change (auto-map, add, remove, retarget) and
+     silent while you type. `undefined` marks the very first render, so mounting the page
+     is never an announcement; arriving on step 4 with mappings restored from a draft does
+     get one, which is the state the old always-visible block was there to report. */
+  const lastValidationRef = useRef(undefined);
+  useEffect(() => {
+    const text = mapValidationMsg?.text ?? null;
+    const prev = lastValidationRef.current;
+    lastValidationRef.current = text;
+    if (prev === undefined || text === null || text === prev) return;
+    showToast(text, mapValidationMsg.type);
+  }, [mapValidationMsg, showToast]);
+
   const statusStyle = (status) => {
     if (status === 'connected') return { color: 'var(--success-on)', borderColor: 'var(--success)' };
     if (status === 'error') return { color: 'var(--error-on)', borderColor: 'var(--error)' };
@@ -2659,7 +2713,7 @@ export default function WizardPage() {
       {/* Wizard content */}
       <div
         key={wizardStep}
-        className={`wizard-content${stepDir === 'back' ? ' is-back' : ''}`}
+        className={`wizard-content${stepDir === 'back' ? ' is-back' : ''}${wizardStep === 4 ? ' is-fill' : ''}`}
         // overflowX must be explicit: with overflow-y:auto and overflow-x left at `visible`,
         // CSS promotes the visible axis to `auto`, so ANY child a pixel too wide added a
         // page-level horizontal scrollbar under the step. Wide content (preview tables) still
@@ -3338,8 +3392,12 @@ export default function WizardPage() {
         )}
 
         {/* ── Step 4: Mapping ── */}
+        {/* `wizard-step--fill`: step 4 owns the whole wizard body instead of growing past
+            it. The toolbar/notes/joins keep their natural height, the three-pane mapper
+            takes whatever is left, and the field, mapping and column lists scroll inside
+            their own panes — the step itself never scrolls. */}
         {wizardStep === 4 && (
-          <div className="wizard-step active">
+          <div className="wizard-step wizard-step--fill active">
             {fieldsLoading ? (
               <div className="wizard-loader">
                 <div className="loader-spinner"></div>
@@ -3356,6 +3414,10 @@ export default function WizardPage() {
                       &#10003; Apply changes{pendingNewCols.length ? ` (${pendingNewCols.length})` : ''}
                     </button>
                     <button className="btn btn-outline btn-sm" onClick={openInCanvas} title="Open these fields + mappings in the full Mapping Canvas (AI auto-map, transforms)">&#10138; Edit in Mapping Canvas</button>
+                    <button className="btn btn-outline btn-sm" onClick={() => setMapView('overlay')}
+                      title="Expand all three panes to full screen — fields, mappings and columns together, with room to edit a mapping">
+                      <Icon name="expand" size={12} /> Expand
+                    </button>
                   </div>
                   {/* "SP columns" was hardcoded — it read "4 SP columns unmapped"
                       with a PostgreSQL destination. It names the real destination now. */}
@@ -3370,35 +3432,63 @@ export default function WizardPage() {
                   </div>
                 </div>
 
-                {mappings.length > 0 && (
-                  <div className="wiz-note" style={{ margin: '8px 0', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ color: 'var(--warning)', fontSize: 'var(--fs-md)' }}>★</span>
-                    {effectiveKey
-                      ? <span>Identity key: <code style={{ background: 'var(--bg-card)', padding: '1px 5px', borderRadius: 'var(--radius-sm)' }}>{effectiveKey}</code> — records are deduped &amp; upserted by this column. Click the ★ on any mapping row to change it.</span>
-                      : <span>No identity key set — every row is inserted as new. Click the ☆ on a mapping row to dedupe/upsert by that column.</span>}
-                  </div>
-                )}
-
-                {isDbDest(selectedDest) && (
-                  <div className="wiz-note" style={{ margin: '8px 0', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 'var(--fw-semibold)' }}>Match records by:</span>
-                    <select value={matchKey === '__append__' ? '__append__' : effectiveKey} onChange={(e) => setMatchKey(e.target.value)} style={{ minWidth: 220 }}>
-                      <option value="__append__">Append every row (no matching — each row is new)</option>
-                      {mappings.flatMap((m) => m.destinations || []).filter((d, i, a) => d && a.indexOf(d) === i).map((d) => (
-                        <option key={d} value={d}>Match by “{d}” (update if exists, else insert)</option>
-                      ))}
-                    </select>
-                    <span style={{ color: 'var(--text-dim)', fontSize: 'var(--fs-xs)' }}>
-                      New tables get an auto-increment <code>id</code> primary key automatically.
+                {/* One options bar instead of three stacked notes. Match-by, the identity
+                    key, encryption and joins were each a full-width band 45-60px tall that
+                    only appeared once you had mappings — together they took roughly a third
+                    of the step's height away from the mapper, permanently, to say things
+                    that are read once and then just need to stay reachable. Now they are
+                    four controls on one line, with the long explanations behind ⓘ and the
+                    two multi-row editors behind panels that open over the page. */}
+                <div className="wiz-optionbar">
+                  {/* A wrapping <label> would forward the ⓘ button's click to the select and
+                      pop it open, so the label is explicit and the group is a plain span. */}
+                  {isDbDest(selectedDest) && (
+                    <span className="wiz-optionfield">
+                      <label htmlFor="wiz-matchby">Match records by</label>
+                      <select id="wiz-matchby" value={matchKey === '__append__' ? '__append__' : effectiveKey} onChange={(e) => setMatchKey(e.target.value)}>
+                        <option value="__append__">Append every row (no matching)</option>
+                        {mappings.flatMap((m) => m.destinations || []).filter((d, i, a) => d && a.indexOf(d) === i).map((d) => (
+                          <option key={d} value={d}>Match by “{d}” (update if exists, else insert)</option>
+                        ))}
+                      </select>
+                      <InfoHint label="About record matching" text="Append inserts every row as a new record. Matching by a column updates the row that already carries that value and inserts the rest, so re-running the sync does not duplicate. New tables get an auto-increment id primary key automatically, whichever you choose." />
                     </span>
-                  </div>
-                )}
+                  )}
 
-                {mappings.length > 0 && (
-                  <div className="wiz-note" style={{ margin: '8px 0' }}>
+                  {mappings.length > 0 && (
+                    <span className={`wiz-optionchip${effectiveKey ? ' is-set' : ''}`}>
+                      <span aria-hidden="true">{effectiveKey ? '★' : '☆'}</span>
+                      {effectiveKey ? <>Identity key: <code>{effectiveKey}</code></> : 'No identity key'}
+                      <InfoHint label="About the identity key" text={effectiveKey
+                        ? `Records are deduped and upserted by ${effectiveKey}: a row whose ${effectiveKey} already exists at the destination is updated rather than inserted again. Click the ★ on any mapping row to move the key to that column.`
+                        : 'Without an identity key every row is inserted as new, so re-running the sync duplicates. Click the ☆ on a mapping row to dedupe and upsert by that column instead.'} />
+                    </span>
+                  )}
+
+                  {mappings.length > 0 && (
+                    <button type="button" className={`wiz-optionbtn${encryptionEnabled ? ' is-on' : ''}`}
+                      onClick={() => setEncryptOpen(true)}
+                      title="Write chosen destination columns as AES-256-GCM ciphertext">
+                      <span aria-hidden="true">&#128274;</span> Encryption
+                      {encryptionEnabled && <span className="col-count">{encryptFields.length}</span>}
+                    </button>
+                  )}
+
+                  <JoinsPanel joins={joins} setJoins={setJoins} srcFields={srcFields} sides={joinSides}
+                    entitiesFor={entitiesForSide} loadColumns={loadColumnsForSide} />
+                </div>
+
+                <OverlayPanel
+                  open={encryptOpen}
+                  onClose={() => setEncryptOpen(false)}
+                  title="Field-level encryption"
+                  meta={encryptionEnabled ? `${encryptFields.length} column(s) encrypted` : 'off'}
+                  width={780}
+                >
+                  <div>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 'var(--fw-semibold)', cursor: 'pointer' }}>
                       <input type="checkbox" checked={encryptionEnabled} onChange={(e) => setEncryptionEnabled(e.target.checked)} />
-                      <span>&#128274; Encrypt sensitive columns before writing to the destination (AES-256-GCM)</span>
+                      <span>Encrypt sensitive columns before writing to the destination (AES-256-GCM)</span>
                     </label>
                     {encryptionEnabled && (
                       <div style={{ marginTop: 10 }}>
@@ -3439,12 +3529,41 @@ export default function WizardPage() {
                       </div>
                     )}
                   </div>
+                </OverlayPanel>
+
+                {/* Scrim behind the expanded mapper. Clicking it shrinks back. */}
+                {mapExpanded && (
+                  <div className={`tf-backdrop${mapView === 'closing' ? ' is-out' : ''}`}
+                    onClick={() => setMapView('closing')} aria-hidden="true" />
                 )}
 
-                <JoinsPanel joins={joins} setJoins={setJoins} srcFields={srcFields} sides={joinSides}
-                  entitiesFor={entitiesForSide} loadColumns={loadColumnsForSide} />
-
-                <div className="mapper-layout">
+                {/* All three panes expand together — a fullscreen list of source fields
+                    with its destination columns hidden would not help anyone map. Same
+                    element re-styled, not re-mounted: scroll positions, searches and the
+                    open row editor survive the trip both ways. */}
+                <div
+                  className={`mapper-layout${mapExpanded ? ' is-overlay' : ''}${mapView === 'closing' ? ' is-out' : ''}`}
+                  role={mapView === 'overlay' ? 'dialog' : undefined}
+                  aria-modal={mapView === 'overlay' ? 'true' : undefined}
+                  aria-label={mapView === 'overlay' ? 'Field mapping' : undefined}
+                  /* animationend BUBBLES — a row arriving inside a pane must not be taken
+                     for the panel's own exit finishing. */
+                  onAnimationEnd={(e) => { if (e.target === e.currentTarget && mapView === 'closing') setMapView('inline'); }}
+                >
+                  {mapExpanded && (
+                    <div className="mapper-overlay-bar">
+                      <span className="mob-title">{selectedSource} &rarr; {selectedDest} mapping</span>
+                      <span className="wiz-tally"><b>{mappings.length}</b> mapped</span>
+                      {requiredUnmapped.length > 0
+                        ? <span className="wiz-tally wiz-tally--bad"><b>{requiredUnmapped.length}</b> required unmapped</span>
+                        : <span className="wiz-tally wiz-tally--ok">All required columns mapped</span>}
+                      <button type="button" className="tf-btn" style={{ marginLeft: 'auto' }}
+                        onClick={() => setMapView('closing')}
+                        title="Shrink back into the wizard (Esc)">
+                        <Icon name="collapse" /> Shrink
+                      </button>
+                    </div>
+                  )}
                   {/* Left: Source fields */}
                   <div className="mapper-col">
                     <div className="mapper-col-header">
@@ -3479,7 +3598,7 @@ export default function WizardPage() {
                       {mappings.length === 0 && (
                         <div style={{ padding: 30, textAlign: 'center', color: 'var(--text-dim)', fontSize: 'var(--fs-base)' }}>
                           <div style={{ fontSize: 'var(--fs-2xl)', marginBottom: 8 }}>&#8621;</div>
-                          Click <strong>Auto-Map</strong> to match fields automatically,<br />or add mappings manually below.
+                          Click <strong>Auto-Map</strong> to match fields automatically,<br />or add mappings manually below (expands the mapper).
                         </div>
                       )}
                       {mappings.map((m, i) => (
@@ -3501,8 +3620,9 @@ export default function WizardPage() {
                       ))}
                     </div>
                     <div className="add-mapping-area">
-                      <button className="add-mapping-btn" onClick={addNewMapping}>
-                        + Add Manual Mapping
+                      <button className="add-mapping-btn" onClick={addNewMapping}
+                        title={mapExpanded ? 'Add a blank mapping row' : 'Expands the mapper to full screen and adds a blank row'}>
+                        + Add Manual Mapping{!mapExpanded && <Icon name="expand" size={12} />}
                       </button>
                     </div>
                   </div>
@@ -3534,19 +3654,12 @@ export default function WizardPage() {
                   </div>
                 </div>
 
-                {/* Validation summary */}
-                {mappings.length > 0 && (
-                  <div className={`mapping-validation ${requiredUnmapped.length > 0 ? 'error' : 'valid'}`}>
-                    <span className="val-icon">{requiredUnmapped.length > 0 ? '\u26A0' : '\u2713'}</span>
-                    <div className="val-text">
-                      <strong>{mappings.length} field{mappings.length !== 1 ? 's' : ''} mapped</strong>
-                      {requiredUnmapped.length > 0
-                        ? `Required columns not mapped: ${requiredUnmapped.map(f => f.displayName || f.name).join(', ')}`
-                        : `${destFields.length - mappedDestNames.size} destination columns unmapped (will be left empty). ${srcFields.length - mappedSrcNames.size} source fields unused.`
-                      }
-                    </div>
-                  </div>
-                )}
+                {/* The validation summary used to live here as a block under the mapper.
+                    It cost ~70px of permanent layout for a line that only changes when
+                    you map something \u2014 and that was the height that pushed the step past
+                    the viewport and brought the outer scroll back. It is a toast now
+                    (see `mapValidationMsg` above); the running tallies in the toolbar
+                    still carry the same counts at a glance. */}
               </>
             )}
           </div>

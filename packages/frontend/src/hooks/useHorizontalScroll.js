@@ -20,15 +20,25 @@ export function useHorizontalScroll(ref, deps = []) {
     const measure = () => setOverflowing(el.scrollWidth > el.clientWidth + 1);
 
     /* Native and non-passive so the gesture can be claimed — React attaches wheel handlers
-       passively, where preventDefault is a no-op and warns. It is claimed ONLY when the row
-       actually moved: at either end the wheel goes back to scrolling the page, so the
-       pointer never feels trapped inside the shelf. */
+       passively, where preventDefault is a no-op and warns. It is claimed ONLY while the row
+       still has somewhere to go in that direction: at either end the wheel goes back to
+       scrolling the page, so the pointer never feels trapped inside the shelf. */
     const onWheel = (e) => {
-      if (el.scrollWidth <= el.clientWidth) return;
+      const max = el.scrollWidth - el.clientWidth;
+      if (max <= 0) return;
       if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;  // trackpad already horizontal
-      const before = el.scrollLeft;
-      el.scrollLeft += e.deltaY;
-      if (el.scrollLeft !== before) e.preventDefault();
+      if (e.deltaY < 0 && el.scrollLeft <= 0) return;         // at the left edge
+      if (e.deltaY > 0 && el.scrollLeft >= max - 1) return;   // at the right edge
+      e.preventDefault();
+      /* deltaY is not always pixels. Firefox reports LINES (deltaMode 1), so adding it raw
+         moved the shelf about 3px per notch; a page-scroll wheel reports PAGES (2). */
+      const px = e.deltaMode === 1 ? e.deltaY * 16
+        : e.deltaMode === 2 ? e.deltaY * el.clientWidth
+          : e.deltaY;
+      /* behavior:'auto' deliberately OVERRIDES any CSS `scroll-behavior:smooth` on the row.
+         Under smooth, each notch started an animation, the next notch read a scrollLeft that
+         had barely moved and re-aimed at the same target, and the shelf stalled. */
+      el.scrollBy({ left: px, behavior: 'auto' });
     };
     el.addEventListener('wheel', onWheel, { passive: false });
 
